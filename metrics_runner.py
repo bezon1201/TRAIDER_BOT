@@ -1,6 +1,8 @@
 
 import os, json, asyncio, random
 from datetime import datetime, timezone
+import httpx
+
 from typing import List
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
@@ -64,11 +66,52 @@ def _ensure_skeleton(symbol: str, now_iso: str, existing: dict) -> dict:
     out["last_update_utc"] = now_iso
     return out
 
+
+async def _fetch_price_and_filters(symbol: str):
+    base = "https://api.binance.com"
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        price = None
+        try:
+            r = await client.get(f"{base}/api/v3/ticker/price", params={"symbol": symbol})
+            if r.status_code == 200:
+                price = float((r.json() or {}).get("price"))
+        except Exception:
+            price = None
+        filters = {}
+        try:
+            r2 = await client.get(f"{base}/api/v3/exchangeInfo", params={"symbol": symbol})
+            if r2.status_code == 200:
+                j = r2.json() or {}
+                syms = (j.get("symbols") or [])
+                if syms:
+                    fs = syms[0].get("filters") or []
+                    for f in fs:
+                        if f.get("filterType") == "PRICE_FILTER":
+                            filters["tickSize"] = f.get("tickSize")
+                        if f.get("filterType") == "LOT_SIZE":
+                            filters["stepSize"] = f.get("stepSize")
+        except Exception:
+            pass
+        return price, filters
+
 async def _collect_one_stub(symbol: str):
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     path = _coin_file(symbol)
     existing = _read_json(path)
     data = _ensure_skeleton(symbol, now_iso, existing)
+    # fetch price & filters
+    price, filters = await _fetch_price_and_filters(symbol)
+    if price is not None:
+        data["price"] = price
+        # put close_last for all TFs (temporary until full MA/ATR calc)
+        for tf in ("12h","6h","4h","2h"):
+            try:
+                data["tf"][tf]["close_last"] = price
+                data["tf"][tf]["bar_time_utc"] = now_iso
+            except Exception:
+                pass
+    if filters:
+        data["filters"] = filters
     _write_json_atomic(path, data)
 
 async def _loop():
@@ -76,18 +119,15 @@ async def _loop():
     await asyncio.sleep(random.uniform(0.5, 1.5))
     while True:
         try:
-            pairs = load_pairs()
-            interval = int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600")
-            if interval < 60: interval = 60
-            for sym in pairs:
-                await _collect_one_stub(sym)
-                await asyncio.sleep(interval * random.uniform(0.05, 0.10))
+            await collect_all_with_jitter()
         except Exception:
             pass
         finally:
+            # main sleep to next cycle (≈ 85% of interval)
             await asyncio.sleep(int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600") * 0.85)
 
 async def start_collector():
+):
     global _task
     if _task is None or _task.done():
         _task = asyncio.create_task(_loop())
@@ -108,4 +148,24 @@ async def collect_all_now() -> int:
     for sym in pairs:
         await _collect_one_stub(sym)
         n += 1
+    return n
+
+
+async def collect_all_with_jitter(interval_sec: int | None = None) -> int:
+    \"\"\"
+    Collect all symbols from pairs.json with 5–10% jitter between coins.
+    If interval_sec is None, read COLLECT_INTERVAL_SEC (default 600) for jitter base.
+    Returns number of updated symbols.
+    \"\"\"
+    pairs = load_pairs()
+    if not pairs:
+        return 0
+    base = interval_sec if isinstance(interval_sec, int) and interval_sec > 0 else int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600")
+    if base < 60: base = 60
+    n = 0
+    for sym in pairs:
+        await _collect_one_stub(sym)
+        n += 1
+        # 5–10% jitter pause between coins
+        await asyncio.sleep(base * random.uniform(0.05, 0.10))
     return n
