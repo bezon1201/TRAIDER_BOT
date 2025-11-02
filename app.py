@@ -2,6 +2,7 @@
 import os
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, FileResponse
 import httpx
 
 from portfolio import build_portfolio_message, adjust_invested_total
@@ -215,3 +216,32 @@ async def _startup_metrics():
 @app.on_event("shutdown")
 async def _shutdown_metrics():
     await stop_collector()
+
+
+# === Admin read-only endpoints ===
+import glob
+
+ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
+
+def _auth_ok(key: str) -> bool:
+    return bool(ADMIN_KEY) and (key or "") == ADMIN_KEY
+
+@app.get("/admin/files")
+async def admin_files(key: str = ""):
+    if not _auth_ok(key):
+        return JSONResponse({"error":"forbidden"}, status_code=403)
+    files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
+    return {"files": files}
+
+@app.get("/admin/file")
+async def admin_file(name: str = "", key: str = ""):
+    if not _auth_ok(key):
+        return JSONResponse({"error":"forbidden"}, status_code=403)
+    safe = os.path.basename(name or "")
+    if not safe.endswith(".json"):
+        return JSONResponse({"error":"bad name"}, status_code=400)
+    path = os.path.join(STORAGE_DIR, safe)
+    if not os.path.exists(path):
+        return JSONResponse({"error":"not found"}, status_code=404)
+    return FileResponse(path, media_type="application/json", filename=safe)
+# === end admin ===
