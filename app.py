@@ -280,87 +280,24 @@ if text.startswith("/levels"):
 
     
     
+
 if text.startswith("/json"):
-
-
-    
-    
     parts = text.split()
-
-
-    
-    
+    files = sorted([f for f in os.listdir(STORAGE_DIR) if f.endswith(".json")])
+    # /json  -> list
     if len(parts) == 1:
-
-
-    
-    
-        # Список JSON файлов в STORAGE_DIR
-
-
-    
-    
-        files = sorted([f for f in os.listdir(STORAGE_DIR) if f.endswith(".json")])
-
-
-    
-    
-        if not files:
-
-
-    
-    
-            list_text = "
-".join(files)
+        list_text = "\n".join(files) if files else "Нет файлов"
         await tg_send(chat_id, _code(list_text))
         return {"ok": True}
-await tg_send(chat_id, _code("
-".join(files)))
-
-
-    
-    
-        return {"ok": True}
-
-
-    
-    
+    # /json <PAIR> -> send file
     sym = parts[1].strip().upper()
-
-
-    
-    
     path = os.path.join(STORAGE_DIR, f"{sym}.json")
-
-
-    
-    
     if not os.path.exists(path):
-
-
-    
-    
         await tg_send(chat_id, _code("Файл не найден"))
-
-
-    
-    
         return {"ok": True}
-
-
-    
-    
-    # Отправляем файл в чат
-
-
-    
-    
     await tg_send_document(chat_id, path, filename=f"{sym}.json")
-
-
-    
-    
     return {"ok": True}
+
 
 
 
