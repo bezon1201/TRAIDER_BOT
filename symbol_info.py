@@ -18,9 +18,7 @@ def _fmt_int(v: float) -> str:
         n = int(round(float(v)))
     except Exception:
         return "-"
-    # group with spaces
-    s = f"{n:,}".replace(",", " ")
-    return s
+    return str(n)
 
 def build_symbol_message(symbol: str) -> str:
     sym = (symbol or "").upper().strip()
