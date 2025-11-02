@@ -13,29 +13,39 @@ def utc_now_str() -> str:
     now = datetime.now(timezone.utc)
     return now.strftime("%d.%m.%Y %H:%M UTC")
 
-async def send_start_messages() -> None:
-    token = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
-    admin_chat = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()  # как задано пользователем
-    active_chat = os.getenv("TRAIDER_ACTIVE_CHAT_ID", "").strip()
-
-    if not token or not admin_chat or not active_chat:
-        # Не падаем, просто выходим
+async def send_telegram(token: str, payload: Dict[str, Any]) -> None:
+    if not token:
         return
-
-    text = f"{utc_now_str()} Бот запущен"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payloads = [
-        {"chat_id": admin_chat, "text": text},
-        {"chat_id": active_chat, "text": text},
-    ]
-
     timeout = httpx.Timeout(10.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        tasks = [client.post(url, json=p) for p in payloads]
         try:
-            await asyncio.gather(*tasks)
+            await client.post(url, json=payload)
         except Exception:
-            # Тихо игнорируем ошибки старта — каркас
+            pass  # каркас — не валимся
+
+async def send_start_message_only_admin() -> None:
+    token = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
+    admin_chat = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()  # как задано пользователем
+    if not (token and admin_chat):
+        return
+    text = f"{utc_now_str()} Бот запущен"
+    await send_telegram(token, {"chat_id": admin_chat, "text": text})
+
+async def ensure_webhook() -> None:
+    """Устанавливает webhook, если задан WEBHOOK_BASE или TRAIDER_WEBHOOK_BASE."""
+    token = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
+    base = os.getenv("WEBHOOK_BASE", "").strip() or os.getenv("TRAIDER_WEBHOOK_BASE", "").strip()
+    if not (token and base):
+        return
+    url = f"https://api.telegram.org/bot{token}/setWebhook"
+    webhook_url = base.rstrip('/') + "/telegram"
+    params = {"url": webhook_url, "drop_pending_updates": True}
+    timeout = httpx.Timeout(10.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            await client.post(url, params=params)
+        except Exception:
             pass
 
 # --- Routes ---
@@ -51,5 +61,5 @@ async def telegram_webhook(_: Request) -> Dict[str, Any]:
 # --- Startup ---
 @app.on_event("startup")
 async def on_startup() -> None:
-    # Отправляем сообщения о запуске (не блокируя приложение)
-    asyncio.create_task(send_start_messages())
+    asyncio.create_task(ensure_webhook())
+    asyncio.create_task(send_start_message_only_admin())
