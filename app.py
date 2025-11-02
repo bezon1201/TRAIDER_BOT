@@ -14,6 +14,54 @@ BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
+import json, re
+
+# === Coins config helpers ===
+def _pairs_env() -> list[str]:
+    raw = os.getenv("PAIRS", "") or ""
+    raw = raw.strip()
+    if not raw:
+        return []
+    parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
+    # dedup preserving order
+    seen=set(); out=[]
+    for s in parts:
+        if s not in seen:
+            seen.add(s); out.append(s)
+    return out
+
+def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
+    env_pairs = _pairs_env()
+    if env_pairs:
+        return env_pairs
+    path = os.path.join(storage_dir, "pairs.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            # normalize
+            res=[]; seen=set()
+            for x in data:
+                s = str(x).strip().upper()
+                if s and s not in seen:
+                    seen.add(s); res.append(s)
+            return res
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    return []
+
+def save_pairs(pairs: list[str], storage_dir: str = STORAGE_DIR) -> None:
+    os.makedirs(storage_dir, exist_ok=True)
+    path = os.path.join(storage_dir, "pairs.json")
+    tmp = path + ".tmp"
+    data = [str(x).strip().upper() for x in pairs if str(x).strip()]
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",",":"))
+    os.replace(tmp, path)
+# === end helpers ===
+
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 app = FastAPI()
 client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
@@ -76,6 +124,36 @@ async def telegram_webhook(update: Request):
             reply = "Нужна сумма: /invested 530"
         await tg_send(chat_id, reply)
         return {"ok": True}
+
+    
+    if text.startswith("/coins"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 1:
+            pairs = load_pairs()
+            reply = "Пары: " + (", ".join(pairs) if pairs else "—")
+            await tg_send(chat_id, reply)
+            return {"ok": True}
+        else:
+            rest = parts[1].strip()
+            items = [x.strip().upper() for x in rest.split() if x.strip()]
+            valids = []
+            invalids = []
+            for sym in items:
+                if re.fullmatch(r"[A-Z]+", sym) and sym.endswith("USDC"):
+                    valids.append(sym)
+                else:
+                    invalids.append(sym)
+            if invalids:
+                await tg_send(chat_id, "Некорректные тикеры: " + ", ".join(invalids))
+                return {"ok": True}
+            # dedup
+            seen=set(); filtered=[]
+            for s in valids:
+                if s not in seen:
+                    seen.add(s); filtered.append(s)
+            save_pairs(filtered)
+            await tg_send(chat_id, "Пары обновлены: " + (", ".join(filtered) if filtered else "—"))
+            return {"ok": True}
 
     if text.startswith("/portfolio"):
         try:
