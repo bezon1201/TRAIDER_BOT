@@ -158,7 +158,6 @@ async def _loop():
             await asyncio.sleep(int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600") * 0.85)
 
 async def start_collector():
-):
     global _task
     if _task is None or _task.done():
         _task = asyncio.create_task(_loop())
