@@ -1,10 +1,44 @@
-
-import time, hmac, hashlib
+import os, json, time, hmac, hashlib, tempfile
 from typing import Dict, List
 import httpx
 
 BINANCE_API = "https://api.binance.com"
 
+# ---------- Storage helpers ----------
+def _storage_path(storage_dir: str) -> str:
+    os.makedirs(storage_dir, exist_ok=True)
+    return os.path.join(storage_dir, "portfolio.json")
+
+def _load_state(storage_dir: str) -> Dict:
+    path = _storage_path(storage_dir)
+    if not os.path.exists(path):
+        return {"invested_total": 0.0, "history": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"invested_total": 0.0, "history": []}
+
+def _atomic_write(path: str, data: Dict) -> None:
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=d, delete=False, encoding="utf-8") as tf:
+        json.dump(data, tf, ensure_ascii=False, separators=(",", ":"))
+        tmp = tf.name
+    os.replace(tmp, path)
+
+def adjust_invested_total(storage_dir: str, delta: float) -> float:
+    state = _load_state(storage_dir)
+    state["invested_total"] = round(float(state.get("invested_total", 0.0)) + float(delta), 8)
+    state.setdefault("history", []).append({
+        "ts": int(time.time() * 1000),
+        "delta": float(delta),
+        "total": float(state["invested_total"]),
+    })
+    _atomic_write(_storage_path(storage_dir), state)
+    return float(state["invested_total"])
+
+# ---------- Binance helpers ----------
 def _sign(query: str, secret: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
@@ -88,7 +122,8 @@ async def _get_usd_prices(client: httpx.AsyncClient, assets: List[str]) -> Dict[
                     pass
     return prices
 
-async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: str) -> str:
+# ---------- Public API ----------
+async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: str, storage_dir: str) -> str:
     if not key or not secret:
         return "BINANCE_API_KEY/SECRET не заданы."
 
@@ -100,10 +135,10 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
 
     def fmt_line(asset: str, amt: float, usd: float) -> str:
         if asset in {"USDT","USDC"}:
-            left = f"{amt:.6f} {asset:<5}"
+            left = f"{amt:.6f} {asset}"
         else:
-            left = f"{amt:.7f} {asset:<5}"
-        return f"{left} | {usd:7.2f} USD"
+            left = f"{amt:.7f} {asset}"
+        return f"{left} - {usd:.2f}$"
 
     lines = ["HOLDINGS:"]
 
@@ -119,7 +154,7 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         lines.append("Spot")
         lines.extend(spot_lines)
     else:
-        lines.append("Spot — пусто (>1 USD не найдено)")
+        lines.append("Spot — пусто (>1$ не найдено)")
 
     earn_lines, earn_total = [], 0.0
     if earn:
@@ -134,10 +169,19 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         lines.append("\nEarn")
         lines.extend(earn_lines)
     elif earn:
-        lines.append("\nEarn — <1 USD или не поддерживается форматом")
+        lines.append("\nEarn — <1$ или не поддерживается форматом")
     else:
         lines.append("\nEarn — нет данных (нужно разрешение Simple Earn или позиции отсутствуют)")
 
     total = spot_total + earn_total
-    lines.append(f"\nTOTAL: {total:.2f} USD")
+
+    # invested from storage
+    state = _load_state(storage_dir)
+    invested = float(state.get("invested_total", 0.0))
+    profit = total - invested
+
+    lines.append(f"\nTotal: {total:.2f}$")
+    lines.append(f"Invested: {invested:.2f}$")
+    lines.append(f"Profit: {profit:.2f}$")
+
     return "\n".join(lines)

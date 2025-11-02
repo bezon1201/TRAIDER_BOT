@@ -1,4 +1,8 @@
+# TRAIDER_BOT — v6
 
-# TRAIDER_BOT
+Добавлено:
+- `/invested <sum>` (синоним `/invest <sum>`): меняет накопленную сумму инвестиций (можно отрицательно). Хранение в `/data/portfolio.json`.
+- `/portfolio`: теперь выводит Total / Invested / Profit. Файл создаётся автоматически, если отсутствует.
 
-Версия 5 — команда `/portfolio` + итоговая строка `TOTAL: xx.xx USD`.
+Переменные:
+- `STORAGE_DIR=/data` (по умолчанию `/data`).
