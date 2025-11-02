@@ -1,65 +1,64 @@
 
 import os
-import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict
+from fastapi import FastAPI, Request
 import httpx
-from fastapi import FastAPI, Response, Request
+
+# --- Environment ---
+BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
+ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()  # (typo preserved per spec)
+WEBHOOK_BASE = os.getenv("TRAIDER_WEBHOOK_BASE") or os.getenv("WEBHOOK_BASE") or ""
+METRIC_CHAT_ID = os.getenv("TRAIDER_METRIC_CHAT_ID", "").strip()
+
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 
 app = FastAPI()
 
-# --- Utils ---
-def utc_now_str() -> str:
-    now = datetime.now(timezone.utc)
-    return now.strftime("%d.%m.%Y %H:%M UTC")
+# Shared HTTP client (respects HTTP(S)_PROXY envs set on Render)
+client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
 
-async def send_telegram(token: str, payload: Dict[str, Any]) -> None:
-    if not token:
+async def _send_admin(text: str) -> None:
+    if not (TELEGRAM_API and ADMIN_CHAT_ID):
         return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    timeout = httpx.Timeout(10.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            await client.post(url, json=payload)
-        except Exception:
-            pass  # каркас — не валимся
+    try:
+        await client.post(f"{TELEGRAM_API}/sendMessage", json={
+            "chat_id": ADMIN_CHAT_ID,
+            "text": text
+        })
+    except Exception:
+        # avoid crashing on startup if Telegram not reachable
+        pass
 
-async def send_start_message_only_admin() -> None:
-    token = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
-    admin_chat = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()  # как задано пользователем
-    if not (token and admin_chat):
-        return
-    text = f"{utc_now_str()} Бот запущен"
-    await send_telegram(token, {"chat_id": admin_chat, "text": text})
+async def _binance_ping() -> str:
+    url = "https://api.binance.com/api/v3/ping"
+    try:
+        r = await client.get(url)
+        ok = (r.status_code == 200)
+        if ok:
+            return "✅"
+        else:
+            return f"❌ {r.status_code}"
+    except Exception as e:
+        return f"❌ {e.__class__.__name__}: {e}"
 
-async def ensure_webhook() -> None:
-    """Устанавливает webhook, если задан WEBHOOK_BASE или TRAIDER_WEBHOOK_BASE."""
-    token = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
-    base = os.getenv("WEBHOOK_BASE", "").strip() or os.getenv("TRAIDER_WEBHOOK_BASE", "").strip()
-    if not (token and base):
-        return
-    url = f"https://api.telegram.org/bot{token}/setWebhook"
-    webhook_url = base.rstrip('/') + "/telegram"
-    params = {"url": webhook_url, "drop_pending_updates": True}
-    timeout = httpx.Timeout(10.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            await client.post(url, params=params)
-        except Exception:
-            pass
+@app.on_event("startup")
+async def on_startup():
+    # Binance connectivity check
+    ping = await _binance_ping()
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    msg = f"{now_utc} Бот запущен\nBinance connection: {ping}"
+    await _send_admin(msg)
 
-# --- Routes ---
-@app.api_route("/health", methods=["HEAD"])
-async def health_head() -> Response:
-    return Response(status_code=200)
-
-@app.post("/telegram")
-async def telegram_webhook(_: Request) -> Dict[str, Any]:
-    # Каркас: просто 200 OK
+@app.get("/health")
+async def health():
+    # GET will also satisfy HEAD checks in FastAPI
     return {"ok": True}
 
-# --- Startup ---
-@app.on_event("startup")
-async def on_startup() -> None:
-    asyncio.create_task(ensure_webhook())
-    asyncio.create_task(send_start_message_only_admin())
+@app.post("/telegram")
+async def telegram_webhook(update: Request):
+    # Minimal stub to keep endpoint; do not change logic unless requested
+    try:
+        _ = await update.json()
+    except Exception:
+        _ = {}
+    return {"ok": True}
