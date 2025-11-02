@@ -212,3 +212,15 @@ def _get_lock():
     if _async_lock is None:
         _async_lock = asyncio.Lock()
     return _async_lock
+
+
+async def collect_all_no_jitter() -> int:
+    """Collect all pairs immediately without per-coin jitter/sleeps."""
+    pairs = load_pairs()
+    if not pairs:
+        return 0
+    n = 0
+    for sym in pairs:
+        await _collect_one_stub(sym)
+        n += 1
+    return n
