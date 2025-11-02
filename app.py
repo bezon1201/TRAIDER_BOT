@@ -265,9 +265,9 @@ if text.startswith("/levels"):
 
     
     
-    msg = "TP Limit {tp:.8f}
-SL Trigger {trig:.8f}
-SL Limit {lim:.8f}".format(tp=oco["TP Limit"], trig=oco["SL Trigger"], lim=oco["SL Limit"])
+    msg = ("TP Limit {tp:.8f}\n"
+            "SL Trigger {trig:.8f}\n"
+            "SL Limit {lim:.8f}").format(tp=oco["TP Limit"], trig=oco["SL Trigger"], lim=oco["SL Limit"])
 
     
     
