@@ -169,12 +169,8 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     lines: List[str] = [f"*HOLDINGS:*"]
     if spot_rows:
         lines += _format_block("Spot", spot_rows)
-    else:
-        lines += [f"*Spot*", "```", "— нет позиций > 1$", "```"]
     if earn_rows:
         lines += _format_block("Earn", earn_rows)
-    else:
-        lines += [f"*Earn*", "```", "— нет данных", "```"]
 
-    lines += [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}"]
-    return "\n".join(lines)
+    summary = ["```", f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}", "```"]
+    return "\n".join(lines + summary)
