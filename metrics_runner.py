@@ -5,6 +5,52 @@ import httpx
 
 from typing import List
 
+import math
+
+_INTERVALS = {"12h":"12h","6h":"6h","4h":"4h","2h":"2h"}
+
+async def _fetch_klines(symbol: str, interval: str, limit: int = 200):
+    base = "https://api.binance.com"
+    import httpx
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base}/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": limit})
+        r.raise_for_status()
+        data = r.json() or []
+        # each item: [open_time, open, high, low, close, volume, close_time, ...]
+        out = []
+        for it in data:
+            try:
+                o = float(it[1]); h = float(it[2]); l = float(it[3]); c = float(it[4]); ct = int(it[6])
+                out.append((o,h,l,c,ct))
+            except Exception:
+                continue
+        return out
+
+def _sma(vals, n):
+    if len(vals) < n:
+        return None
+    return sum(vals[-n:]) / n
+
+def _tail_sma(vals, n):
+    # returns [prev, last] SMA if possible
+    if len(vals) < n+1:
+        return []
+    prev = sum(vals[-(n+1):-1]) / n
+    last = sum(vals[-n:]) / n
+    return [prev, last]
+
+def _atr14(highs, lows, closes):
+    if len(closes) < 15:
+        return None
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+        trs.append(tr)
+    if len(trs) < 14:
+        return None
+    return sum(trs[-14:]) / 14.0
+
+
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 _task = None
@@ -143,6 +189,47 @@ async def _collect_one_stub(symbol: str):
             data.pop("last_error", None)
         except Exception as e:
             data["last_error"] = f"{e.__class__.__name__}"
+        
+    # compute TA per TF
+    try:
+        from market_mode import compute_market_mode
+        tf = data.get("tf") or {}
+        for tf_name, interval in _INTERVALS.items():
+            try:
+                kl = await _fetch_klines(symbol, interval, limit=120)
+                if not kl:
+                    continue
+                closes = [k[3] for k in kl]
+                highs  = [k[1] for k in kl]
+                lows   = [k[2] for k in kl]
+                bar_ct = kl[-1][4]
+                ma30 = _sma(closes, 30)
+                ma90 = _sma(closes, 90)
+                ma30_arr = _tail_sma(closes, 30)
+                ma90_arr = _tail_sma(closes, 90)
+                atr14 = _atr14(highs, lows, closes)
+                block = tf.setdefault(tf_name, {})
+                if ma30 is not None: block["MA30"] = ma30
+                if ma90 is not None: block["MA90"] = ma90
+                block["MA30_arr"] = ma30_arr
+                block["MA90_arr"] = ma90_arr
+                if atr14 is not None:
+                    block["ATR14"] = atr14
+                    last_close = closes[-1]
+                    if last_close > 0:
+                        block["ATR14_pct"] = atr14 / last_close
+                block["bar_time_utc"] = __import__("datetime").datetime.utcfromtimestamp(bar_ct/1000).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                continue
+        data["tf"] = tf
+        # compute market mode
+        trade_mode = str(data.get("trade_mode") or "SHORT").upper()
+        overall, signals = compute_market_mode(tf, trade_mode)
+        data["market_mode"] = overall
+        data["signals"] = signals
+    except Exception:
+        pass
+
         _write_json_atomic(path, data)
 
 async def _loop():
