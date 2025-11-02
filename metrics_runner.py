@@ -182,11 +182,11 @@ async def collect_all_now() -> int:
 
 
 async def collect_all_with_jitter(interval_sec: int | None = None) -> int:
-    \"\"\"
+    """
     Collect all symbols from pairs.json with 5–10% jitter between coins.
     If interval_sec is None, read COLLECT_INTERVAL_SEC (default 600) for jitter base.
     Returns number of updated symbols.
-    \"\"\"
+    """
     pairs = load_pairs()
     if not pairs:
         return 0
