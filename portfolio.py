@@ -166,7 +166,7 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     arrow = "⬆️" if profit > 0.01 else ("⬇️" if profit < -0.01 else "➖")
     profit_text = f"+{profit:.2f}$" if profit > 0 else f"{profit:.2f}$"
 
-    lines: List[str] = [f"*HOLDINGS:*"]
+    lines: List[str] = []
     if spot_rows:
         lines += _format_block("Spot", spot_rows)
     if earn_rows:

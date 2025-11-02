@@ -91,3 +91,13 @@ async def telegram_webhook(update: Request):
 @app.get("/")
 async def root():
     return {"ok": True, "service": "traider-bot"}
+
+
+@app.head("/")
+async def root_head():
+    return {"ok": True}
+
+
+@app.head("/health")
+async def health_head():
+    return {"ok": True}
