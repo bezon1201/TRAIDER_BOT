@@ -182,30 +182,104 @@ async def telegram_webhook(update: Request):
     
     
 if text.startswith("/levels"):
+
+    
+    
     parts = text.split()
+
+    
+    
     if len(parts) == 1:
+
+    
+    
         await tg_send(chat_id, _code("Использование: /levels <PAIR>"))
+
+    
+    
         return {"ok": True}
+
+    
+    
     sym = parts[1].strip().upper()
+
+    
+    
     path = os.path.join(STORAGE_DIR, f"{sym}.json")
+
+    
+    
     if not os.path.exists(path):
+
+    
+    
         await tg_send(chat_id, _code("Файл не найден"))
+
+    
+    
         return {"ok": True}
+
+    
+    
     import json
+
+    
+    
     snap = json.load(open(path, "r", encoding="utf-8"))
+
+    
+    
     try:
+
+    
+    
         from oco_calc import compute_oco_buy
+
+    
+    
         from oco_params import adaptive_params as _adaptive_params
+
+    
+    
         oco = compute_oco_buy(snap, _adaptive_params)
+
+    
+    
     except Exception:
+
+    
+    
         oco = {}
+
+    
+    
     if not oco:
+
+    
+    
         await tg_send(chat_id, _code("Нет уровней (только для LONG или нет данных)"))
+
+    
+    
         return {"ok": True}
-    msg = f"TP Limit {oco['TP Limit']:.2f}\nSL Trigger {oco['SL Trigger']:.2f}\nSL Limit {oco['SL Limit']:.2f}"
+
+    
+    
+    msg = f"TP Limit {oco['TP Limit']:.2f}
+SL Trigger {oco['SL Trigger']:.2f}
+SL Limit {oco['SL Limit']:.2f}"
+
+    
+    
     await tg_send(chat_id, _code(msg))
+
+    
+    
     return {"ok": True}
 
+
+    
+    
 if text.startswith("/market"):
         parts = text.split()
         # list all
