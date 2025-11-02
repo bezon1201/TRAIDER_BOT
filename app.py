@@ -161,14 +161,7 @@ async def telegram_webhook(update: Request):
             summary = list_modes()
             await tg_send(chat_id, _code(f"Режимы: {summary}"))
             return {"ok": True}
-    # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
-    if text.startswith("/") and len(text) > 2:
-        sym = text[1:].split()[0].upper()
-        # ignore known command prefixes
-        if sym not in ("NOW","MODE","PORTFOLIO","COINS","JSON","INVESTED","INVEST"):
-            msg = build_symbol_message(sym)
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
+    
 
         # /mode <SYMBOL>
         if len(parts) == 2:
@@ -190,6 +183,15 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     
+    # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
+    if text.startswith("/") and len(text) > 2:
+        sym = text[1:].split()[0].upper()
+        # ignore known command prefixes
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","JSON","INVESTED","INVEST","MARKET"):
+            msg = build_symbol_message(sym)
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+
     if text.startswith("/market"):
         parts = text.split()
         # list all
