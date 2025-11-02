@@ -269,10 +269,8 @@ async def _collect_one_stub(symbol: str):
                 data["grid"] = grid
         except Exception:
             data.pop("grid", None)
-            else:
-                data.pop("oco", None)
-        else:
-            data.pop("oco", None)
+    else:
+        data.pop("oco", None)
     except Exception as e:
         data["last_error"] = f"OCO:{e.__class__.__name__}"
     else:
