@@ -13,34 +13,34 @@ def _read_json(path: str) -> dict:
     except Exception:
         return {}
 
-def _fmt_int(v) -> str:
+def _i(x):
     try:
-        return str(int(round(float(v))))
+        return str(int(round(float(x))))
     except Exception:
         return "-"
 
 def build_symbol_message(symbol: str) -> str:
     sym = (symbol or "").upper().strip()
-    if not sym:
-        return "Некорректный символ"
-    data = _read_json(_coin_path(sym))
-    if not data:
-        return f"{sym}\nНет данных"
+    d = _read_json(_coin_path(sym))
+    price = (d.get("price") or (d.get("tf") or {}).get("12h", {}).get("close_last"))
+    trade_mode = (d.get("trade_mode") or "").upper()
 
-    price = data.get("price") or (data.get("tf") or {}).get("12h", {}).get("close_last")
-    trade_mode = (data.get("trade_mode") or "").upper()
-
-    lines = [sym, f"Price {_fmt_int(price)}$"]
+    lines = [sym, f"Price {_i(price)}$"]
 
     if trade_mode == "LONG":
         lines.append("OCO Buy")
-        oco = data.get("oco") or {}
+        oco = d.get("oco") or {}
+        flags = d.get("flags") or {}
         if all(k in oco for k in ("tp_limit","sl_trigger","sl_limit")):
-            lines.append(f"TP {_fmt_int(oco['tp_limit'])}$ SLt {_fmt_int(oco['sl_trigger'])}$ SL {_fmt_int(oco['sl_limit'])}$")
-        grid = data.get("grid") or {}
-        for key in ("L0","L1","L2","L3"):
-            if key in grid and grid[key] is not None:
-                lines.append(f"{key} {_fmt_int(grid[key])}$")
+            pf = flags.get("OCO","")
+            prefix = f"{pf}" if pf else ""
+            lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
+        grid = d.get("grid") or {}
+        for k in ("L0","L1","L2","L3"):
+            if k in grid and grid[k] is not None:
+                pf = (flags or {}).get(k,"")
+                prefix = f"{pf}" if pf else ""
+                lines.append(f"{prefix}{k} {_i(grid[k])}$")
     else:
         lines.append("Mode SHORT")
 

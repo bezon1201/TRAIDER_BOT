@@ -3,6 +3,7 @@ import os, json, asyncio, random, time
 from datetime import datetime, timezone
 from typing import List, Tuple, Dict
 from grid_limits import compute_grid_levels
+from auto_flags import compute_all_flags
 
 import httpx
 
@@ -269,6 +270,11 @@ async def _collect_one_stub(symbol: str):
                     data["grid"] = grid
             except Exception:
                 data.pop("grid", None)
+            # auto flags (OCO and L0-L3)
+            try:
+                data["flags"] = compute_all_flags(data)
+            except Exception:
+                data.pop("flags", None)
         else:
             data.pop("oco", None)
     except Exception as e:
