@@ -280,6 +280,98 @@ if text.startswith("/levels"):
 
     
     
+if text.startswith("/json"):
+
+
+    
+    
+    parts = text.split()
+
+
+    
+    
+    if len(parts) == 1:
+
+
+    
+    
+        # Список JSON файлов в STORAGE_DIR
+
+
+    
+    
+        files = sorted([f for f in os.listdir(STORAGE_DIR) if f.endswith(".json")])
+
+
+    
+    
+        if not files:
+
+
+    
+    
+            await tg_send(chat_id, _code("Нет JSON файлов"))
+
+
+    
+    
+            return {"ok": True}
+
+
+    
+    
+        await tg_send(chat_id, _code("
+".join(files)))
+
+
+    
+    
+        return {"ok": True}
+
+
+    
+    
+    sym = parts[1].strip().upper()
+
+
+    
+    
+    path = os.path.join(STORAGE_DIR, f"{sym}.json")
+
+
+    
+    
+    if not os.path.exists(path):
+
+
+    
+    
+        await tg_send(chat_id, _code("Файл не найден"))
+
+
+    
+    
+        return {"ok": True}
+
+
+    
+    
+    # Отправляем файл в чат
+
+
+    
+    
+    await tg_send_document(chat_id, path, filename=f"{sym}.json")
+
+
+    
+    
+    return {"ok": True}
+
+
+
+    
+    
 if text.startswith("/market"):
         parts = text.split()
         # list all
@@ -297,24 +389,6 @@ if text.startswith("/market"):
         return {"ok": True}
 
     
-    if text.startswith("/json"):
-        parts = text.split()
-        # /json -> list all json files in STORAGE_DIR
-        if len(parts) == 1:
-            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
-            msg = "Файлы: " + (", ".join(files) if files else "—")
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-        # /json <PAIR> -> send /data/<PAIR>.json as document
-        sym = parts[1].strip().upper()
-        safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
-        path = os.path.join(STORAGE_DIR, safe)
-        if not os.path.exists(path):
-            await tg_send(chat_id, _code("Файл не найден"))
-            return {"ok": True}
-        await tg_send_file(chat_id, path, filename=safe, caption=safe)
-        return {"ok": True}
-
     if text.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
