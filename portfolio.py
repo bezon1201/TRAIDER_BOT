@@ -1,10 +1,10 @@
+
 import os, json, time, hmac, hashlib, tempfile
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import httpx
 
 BINANCE_API = "https://api.binance.com"
 
-# ---------- Storage helpers ----------
 def _storage_path(storage_dir: str) -> str:
     os.makedirs(storage_dir, exist_ok=True)
     return os.path.join(storage_dir, "portfolio.json")
@@ -38,7 +38,6 @@ def adjust_invested_total(storage_dir: str, delta: float) -> float:
     _atomic_write(_storage_path(storage_dir), state)
     return float(state["invested_total"])
 
-# ---------- Binance helpers ----------
 def _sign(query: str, secret: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
@@ -74,7 +73,6 @@ async def _load_spot_balances(client: httpx.AsyncClient, key: str, secret: str) 
 
 async def _load_earn_positions(client: httpx.AsyncClient, key: str, secret: str) -> Dict[str, float]:
     out = {}
-    # Flexible
     try:
         flex = await _signed_get(client, "/sapi/v1/simple-earn/flexible/position", key, secret, params={"size": 100})
         rows = flex.get("rows", flex if isinstance(flex, list) else [])
@@ -85,7 +83,6 @@ async def _load_earn_positions(client: httpx.AsyncClient, key: str, secret: str)
                 out[asset] = out.get(asset, 0.0) + total
     except Exception:
         pass
-    # Locked
     try:
         locked = await _signed_get(client, "/sapi/v1/simple-earn/locked/position", key, secret, params={"size": 100})
         rows = locked.get("rows", locked if isinstance(locked, list) else [])
@@ -122,66 +119,62 @@ async def _get_usd_prices(client: httpx.AsyncClient, assets: List[str]) -> Dict[
                     pass
     return prices
 
-# ---------- Public API ----------
+def _format_block(title: str, rows: List[Tuple[str, float]]) -> List[str]:
+    if not rows:
+        return []
+    lefts = [name for name, _ in rows]
+    maxw = max(len(x) for x in lefts)
+    lines = [f"{name.ljust(maxw)}  / {usd:.2f}$" for name, usd in rows]
+    return [f"*{title}*"] + ["```"] + lines + ["```"]
+
 async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: str, storage_dir: str) -> str:
     if not key or not secret:
         return "BINANCE_API_KEY/SECRET не заданы."
 
     spot = await _load_spot_balances(client, key, secret)
     earn = await _load_earn_positions(client, key, secret)
-
     assets = sorted(set(list(spot.keys()) + list(earn.keys())))
     prices = await _get_usd_prices(client, assets)
 
-    def fmt_line(asset: str, amt: float, usd: float) -> str:
-        if asset in {"USDT","USDC"}:
-            left = f"{amt:.6f} {asset}"
+    def left_label(asset: str, amt: float) -> str:
+        if asset in {"USDT", "USDC"}:
+            qty = f"{amt:.6f}"
         else:
-            left = f"{amt:.7f} {asset}"
-        return f"{left} - {usd:.2f}$"
+            qty = f"{amt:.7f}"
+        return f"{qty} {asset}"
 
-    lines = ["HOLDINGS:"]
-
-    spot_lines, spot_total = [], 0.0
+    spot_rows, spot_total = [], 0.0
     for a, amt in sorted(spot.items()):
         price = prices.get(a, 0.0)
         usd = amt * price if price > 0 else (amt if a in {"USDT","USDC","BUSD","FDUSD"} else 0.0)
         if usd >= 1.0:
-            spot_lines.append(fmt_line(a, amt, usd))
+            spot_rows.append((left_label(a, amt), usd))
             spot_total += usd
 
-    if spot_lines:
-        lines.append("Spot")
-        lines.extend(spot_lines)
-    else:
-        lines.append("Spot — пусто (>1$ не найдено)")
-
-    earn_lines, earn_total = [], 0.0
-    if earn:
-        for a, amt in sorted(earn.items()):
-            price = prices.get(a, 0.0)
-            usd = amt * price if price > 0 else (amt if a in {"USDT","USDC","BUSD","FDUSD"} else 0.0)
-            if usd >= 1.0:
-                earn_lines.append(fmt_line(a, amt, usd))
-                earn_total += usd
-
-    if earn_lines:
-        lines.append("\nEarn")
-        lines.extend(earn_lines)
-    elif earn:
-        lines.append("\nEarn — <1$ или не поддерживается форматом")
-    else:
-        lines.append("\nEarn — нет данных (нужно разрешение Simple Earn или позиции отсутствуют)")
+    earn_rows, earn_total = [], 0.0
+    for a, amt in sorted(earn.items()):
+        price = prices.get(a, 0.0)
+        usd = amt * price if price > 0 else (amt if a in {"USDT","USDC","BUSD","FDUSD"} else 0.0)
+        if usd >= 1.0:
+            earn_rows.append((left_label(a, amt), usd))
+            earn_total += usd
 
     total = spot_total + earn_total
-
-    # invested from storage
     state = _load_state(storage_dir)
     invested = float(state.get("invested_total", 0.0))
     profit = total - invested
+    arrow = "⬆️" if profit > 0.01 else ("⬇️" if profit < -0.01 else "➖")
+    profit_text = f"+{profit:.2f}$" if profit > 0 else f"{profit:.2f}$"
 
-    lines.append(f"\nTotal: {total:.2f}$")
-    lines.append(f"Invested: {invested:.2f}$")
-    lines.append(f"Profit: {profit:.2f}$")
+    lines: List[str] = [f"*HOLDINGS:*"]
+    if spot_rows:
+        lines += _format_block("Spot", spot_rows)
+    else:
+        lines += [f"*Spot*", "```", "— нет позиций > 1$", "```"]
+    if earn_rows:
+        lines += _format_block("Earn", earn_rows)
+    else:
+        lines += [f"*Earn*", "```", "— нет данных", "```"]
 
+    lines += [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}"]
     return "\n".join(lines)

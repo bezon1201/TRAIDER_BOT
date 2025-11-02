@@ -1,12 +1,10 @@
+
 import os
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 import httpx
 
-from portfolio import (
-    build_portfolio_message,
-    adjust_invested_total,
-)
+from portfolio import build_portfolio_message, adjust_invested_total
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -24,7 +22,10 @@ async def tg_send(chat_id: str, text: str) -> None:
     if not TELEGRAM_API:
         return
     try:
-        await client.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text})
+        await client.post(
+            f"{TELEGRAM_API}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
+        )
     except Exception:
         pass
 
@@ -60,7 +61,6 @@ async def telegram_webhook(update: Request):
     if not chat_id:
         return {"ok": True}
 
-    # /invested or /invest
     if text.startswith("/invested") or text.startswith("/invest "):
         parts = text.split(maxsplit=1)
         if len(parts) == 2:
