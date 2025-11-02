@@ -2,6 +2,7 @@
 import os
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
+import json
 import httpx
 
 from portfolio import build_portfolio_message, adjust_invested_total
@@ -113,7 +114,7 @@ async def telegram_webhook(update: Request):
                 reply = "Нужна сумма: /invested 530 или /invest -10"
         else:
             reply = "Нужна сумма: /invested 530"
-        await tg_send(chat_id, reply)
+        await tg_send(chat_id, _code(reply))
         return {"ok": True}
 
     
@@ -122,7 +123,7 @@ async def telegram_webhook(update: Request):
         if len(parts) == 1:
             pairs = load_pairs()
             reply = "Пары: " + (", ".join(pairs) if pairs else "—")
-            await tg_send(chat_id, reply)
+            await tg_send(chat_id, _code(reply))
             return {"ok": True}
         else:
             rest = parts[1].strip()
@@ -135,7 +136,7 @@ async def telegram_webhook(update: Request):
                 else:
                     invalids.append(sym)
             if invalids:
-                await tg_send(chat_id, "Некорректные тикеры: " + ", ".join(invalids))
+                await tg_send(chat_id, _code("Некорректные тикеры: " + ", ".join(invalids)))
                 return {"ok": True}
             # dedup
             seen=set(); filtered=[]
@@ -143,12 +144,12 @@ async def telegram_webhook(update: Request):
                 if s not in seen:
                     seen.add(s); filtered.append(s)
             save_pairs(filtered)
-            await tg_send(chat_id, "Пары обновлены: " + (", ".join(filtered) if filtered else "—"))
+            await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
             return {"ok": True}
 
     if text.startswith("/now"):
         _, msg = await run_now()
-        await tg_send(chat_id, msg)
+        await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
     
@@ -157,15 +158,15 @@ async def telegram_webhook(update: Request):
         # /mode
         if len(parts) == 1:
             summary = list_modes()
-            await tg_send(chat_id, f"Режимы: {summary}")
+            await tg_send(chat_id, _code(f"Режимы: {summary}"))
             return {"ok": True}
         # /mode <SYMBOL>
         if len(parts) == 2:
             sym, md = get_mode(parts[1])
             if not sym:
-                await tg_send(chat_id, "Некорректная команда")
+                await tg_send(chat_id, _code("Некорректная команда"))
                 return {"ok": True}
-            await tg_send(chat_id, f"{sym}: {md}")
+            await tg_send(chat_id, _code(f"{sym}: {md}"))
             return {"ok": True}
         # /mode <SYMBOL> <LONG|SHORT>
         if len(parts) >= 3:
@@ -173,10 +174,27 @@ async def telegram_webhook(update: Request):
             md  = parts[2]
             try:
                 sym, md = set_mode(sym, md)
-                await tg_send(chat_id, f"{sym} → {md}")
+                await tg_send(chat_id, _code(f"{sym} → {md}"))
             except ValueError:
-                await tg_send(chat_id, "Некорректный режим")
+                await tg_send(chat_id, _code("Некорректный режим"))
             return {"ok": True}
+
+    
+    if text.startswith("/market"):
+        parts = text.split()
+        # list all
+        if len(parts) == 1:
+            pairs = load_pairs()
+            if not pairs:
+                await tg_send(chat_id, _code("Пары: —"))
+                return {"ok": True}
+            lines = [_market_line_for(sym) for sym in pairs]
+            await tg_send(chat_id, _code("\n".join(lines)))
+            return {"ok": True}
+        # specific symbol
+        sym = parts[1].strip().upper()
+        await tg_send(chat_id, _code(_market_line_for(sym)))
+        return {"ok": True}
 
     if text.startswith("/portfolio"):
         try:
@@ -215,3 +233,27 @@ async def _startup_metrics():
 @app.on_event("shutdown")
 async def _shutdown_metrics():
     await stop_collector()
+
+
+def _load_json_safe(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _market_line_for(symbol: str) -> str:
+    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
+    data = _load_json_safe(path)
+    trade_mode = str((data.get("trade_mode") or "SHORT")).upper()
+    market_mode = str((data.get("market_mode") or "RANGE")).upper()
+    # emojis
+    mm_emoji = {"UP":"⬆️","DOWN":"⬇️","RANGE":"🔄"}.get(market_mode, "🔄")
+    tm_emoji = {"LONG":"📈","SHORT":"📉"}.get(trade_mode, "")
+    return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
+
+
+def _code(msg: str) -> str:
+    return f"""```
+{msg}
+```"""
