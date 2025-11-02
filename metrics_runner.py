@@ -1,13 +1,60 @@
 
-import os, json, asyncio, random, time
+import os, json, asyncio, random
 from datetime import datetime, timezone
-from typing import List, Tuple, Dict
-
 import httpx
+
+from typing import List
+
+import math
+
+_INTERVALS = {"12h":"12h","6h":"6h","4h":"4h","2h":"2h"}
+
+async def _fetch_klines(symbol: str, interval: str, limit: int = 200):
+    base = "https://api.binance.com"
+    import httpx
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base}/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": limit})
+        r.raise_for_status()
+        data = r.json() or []
+        # each item: [open_time, open, high, low, close, volume, close_time, ...]
+        out = []
+        for it in data:
+            try:
+                o = float(it[1]); h = float(it[2]); l = float(it[3]); c = float(it[4]); ct = int(it[6])
+                out.append((o,h,l,c,ct))
+            except Exception:
+                continue
+        return out
+
+def _sma(vals, n):
+    if len(vals) < n:
+        return None
+    return sum(vals[-n:]) / n
+
+def _tail_sma(vals, n):
+    # returns [prev, last] SMA if possible
+    if len(vals) < n+1:
+        return []
+    prev = sum(vals[-(n+1):-1]) / n
+    last = sum(vals[-n:]) / n
+    return [prev, last]
+
+def _atr14(highs, lows, closes):
+    if len(closes) < 15:
+        return None
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+        trs.append(tr)
+    if len(trs) < 14:
+        return None
+    return sum(trs[-14:]) / 14.0
+
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
-# ---------- basic io ----------
+_task = None
+
 def load_pairs(storage_dir: str = STORAGE_DIR) -> List[str]:
     path = os.path.join(storage_dir, "pairs.json")
     try:
@@ -65,200 +112,197 @@ def _ensure_skeleton(symbol: str, now_iso: str, existing: dict) -> dict:
     out["last_update_utc"] = now_iso
     return out
 
-# ---------- binance fetch ----------
-BASE = "https://api.binance.com"
-_exchange_cache: Dict[str, Tuple[dict, float]] = {}
 
-async def _fetch_price_and_filters(symbol: str) -> Tuple[float|None, dict]:
-    async with httpx.AsyncClient(timeout=12.0) as client:
+async def _fetch_price_and_filters(symbol: str):
+    base = "https://api.binance.com"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # price with retries
         price = None
-        # price (with small retry)
         for attempt in range(3):
             try:
-                r = await client.get(f"{BASE}/api/v3/ticker/price", params={"symbol": symbol})
+                r = await client.get(f"{base}/api/v3/ticker/price", params={"symbol": symbol})
                 if r.status_code == 200:
                     price = float((r.json() or {}).get("price"))
                     break
+                retry_after = r.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        await asyncio.sleep(float(retry_after))
+                    except Exception:
+                        await asyncio.sleep(1.0 * (attempt+1))
+                else:
+                    await asyncio.sleep(1.0 * (attempt+1))
             except Exception:
-                pass
-            await asyncio.sleep(0.4*(attempt+1))
+                await asyncio.sleep(1.0 * (attempt+1))
 
-        # filters (cache 6h)
+        # filters from cache or network
         filters = {}
         now = time.time()
         cached = _exchange_cache.get(symbol)
         if cached and cached[1] > now:
             filters = dict(cached[0])
         else:
-            try:
-                r2 = await client.get(f"{BASE}/api/v3/exchangeInfo", params={"symbol": symbol})
-                if r2.status_code == 200:
-                    j = r2.json() or {}
-                    syms = (j.get("symbols") or [])
-                    if syms:
-                        fs = syms[0].get("filters") or []
-                        for f in fs:
-                            if f.get("filterType") == "PRICE_FILTER":
-                                filters["tickSize"] = f.get("tickSize")
-                            if f.get("filterType") == "LOT_SIZE":
-                                filters["stepSize"] = f.get("stepSize")
-                        _exchange_cache[symbol] = (dict(filters), now + 6*3600)
-            except Exception:
-                pass
+            for attempt in range(2):
+                try:
+                    r2 = await client.get(f"{base}/api/v3/exchangeInfo", params={"symbol": symbol})
+                    if r2.status_code == 200:
+                        j = r2.json() or {}
+                        syms = (j.get("symbols") or [])
+                        if syms:
+                            fs = syms[0].get("filters") or []
+                            for f in fs:
+                                if f.get("filterType") == "PRICE_FILTER":
+                                    filters["tickSize"] = f.get("tickSize")
+                                if f.get("filterType") == "LOT_SIZE":
+                                    filters["stepSize"] = f.get("stepSize")
+                            # cache for 6h
+                            _exchange_cache[symbol] = (dict(filters), now + 6*3600)
+                        break
+                    await asyncio.sleep(1.0 * (attempt+1))
+                except Exception:
+                    await asyncio.sleep(1.0 * (attempt+1))
         return price, filters
 
-# klines + TA
-_INTERVALS = {"12h":"12h","6h":"6h","4h":"4h","2h":"2h"}
-
-async def _fetch_klines(symbol: str, interval: str, limit: int = 200):
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.get(f"{BASE}/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": limit})
-        if r.status_code != 200:
-            return []
-        data = r.json() or []
-        out = []
-        for it in data:
+async def _collect_one_stub(symbol: str):
+    lock = _get_lock()
+    async with lock:
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        path = _coin_file(symbol)
+        existing = _read_json(path)
+        data = _ensure_skeleton(symbol, now_iso, existing)
+        try:
+            price, filters = await _fetch_price_and_filters(symbol)
+            if price is not None:
+                data["price"] = price
+                for tf in ("12h","6h","4h","2h"):
+                    try:
+                        data["tf"][tf]["close_last"] = price
+                        data["tf"][tf]["bar_time_utc"] = now_iso
+                    except Exception:
+                        pass
+            if filters:
+                # merge filters without dropping other keys
+                dst = data.get("filters") or {}
+                dst.update(filters)
+                data["filters"] = dst
+            data["last_success_utc"] = now_iso
+            data.pop("last_error", None)
+        except Exception as e:
+            data["last_error"] = f"{e.__class__.__name__}"
+        
+    # compute TA per TF
+    try:
+        from market_mode import compute_market_mode
+        tf = data.get("tf") or {}
+        for tf_name, interval in _INTERVALS.items():
             try:
-                o = float(it[1]); h = float(it[2]); l = float(it[3]); c = float(it[4]); ct = int(it[6])
-                out.append((o,h,l,c,ct))
+                kl = await _fetch_klines(symbol, interval, limit=120)
+                if not kl:
+                    continue
+                closes = [k[3] for k in kl]
+                highs  = [k[1] for k in kl]
+                lows   = [k[2] for k in kl]
+                bar_ct = kl[-1][4]
+                ma30 = _sma(closes, 30)
+                ma90 = _sma(closes, 90)
+                ma30_arr = _tail_sma(closes, 30)
+                ma90_arr = _tail_sma(closes, 90)
+                atr14 = _atr14(highs, lows, closes)
+                block = tf.setdefault(tf_name, {})
+                if ma30 is not None: block["MA30"] = ma30
+                if ma90 is not None: block["MA90"] = ma90
+                block["MA30_arr"] = ma30_arr
+                block["MA90_arr"] = ma90_arr
+                if atr14 is not None:
+                    block["ATR14"] = atr14
+                    last_close = closes[-1]
+                    if last_close > 0:
+                        block["ATR14_pct"] = atr14 / last_close
+                block["bar_time_utc"] = __import__("datetime").datetime.utcfromtimestamp(bar_ct/1000).strftime("%Y-%m-%dT%H:%M:%SZ")
             except Exception:
                 continue
-        return out
-
-def _sma_tail(values, n):
-    if len(values) < n:
-        return None, []
-    last = sum(values[-n:]) / n
-    tail = []
-    if len(values) >= n+1:
-        prev = sum(values[-(n+1):-1]) / n
-        tail = [prev, last]
-    return last, tail
-
-def _atr14(highs, lows, closes):
-    if len(closes) < 15:
-        return None
-    trs = []
-    for i in range(1, len(closes)):
-        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
-        trs.append(tr)
-    if len(trs) < 14:
-        return None
-    return sum(trs[-14:]) / 14.0
-
-# ---------- market mode ----------
-def _signal_for_tf(block: dict) -> str:
-    try:
-        ma30 = float(block.get("MA30") or 0)
-        ma90 = float(block.get("MA90") or 0)
-        atr  = float(block.get("ATR14") or 0)
-        ma30_arr = list(block.get("MA30_arr") or [])
-        ma90_arr = list(block.get("MA90_arr") or [])
-    except Exception:
-        return "RANGE"
-    if atr <= 0:
-        return "RANGE"
-    d_now = ma30 - ma90
-    if len(ma30_arr) >= 2 and len(ma90_arr) >= 2:
-        d_prev = float(ma30_arr[-2]) - float(ma90_arr[-2])
-    else:
-        d_prev = 0.0
-    H = 0.4 * atr
-    S = 0.1 * atr
-    if d_now > +H and (d_now - d_prev) >= +S:
-        return "UP"
-    if d_now < -H and (d_now - d_prev) <= -S:
-        return "DOWN"
-    return "RANGE"
-
-def _compute_market_mode(tf_dict: dict, trade_mode: str) -> Tuple[str, Dict[str,str]]:
-    signals = {}
-    for tf in ("12h","6h","4h","2h"):
-        signals[tf] = _signal_for_tf(tf_dict.get(tf) or {})
-    md = (trade_mode or "SHORT").upper()
-    overall = "RANGE"
-    if md == "LONG":
-        if signals.get("12h") == "UP" and signals.get("6h") == "UP":
-            overall = "UP"
-        elif signals.get("12h") == "DOWN" or signals.get("6h") == "DOWN":
-            overall = "DOWN"
-        else:
-            overall = "RANGE"
-    else:
-        if signals.get("4h") == "DOWN" or signals.get("2h") == "DOWN":
-            overall = "DOWN"
-        elif signals.get("4h") == "UP" and signals.get("2h") == "UP":
-            overall = "UP"
-        else:
-            overall = "RANGE"
-    return overall, signals
-
-# ---------- main collect ----------
-async def _collect_one_stub(symbol: str):
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path = _coin_file(symbol)
-    existing = _read_json(path)
-    data = _ensure_skeleton(symbol, now_iso, existing)
-
-    # price + filters
-    try:
-        price, filters = await _fetch_price_and_filters(symbol)
-        if price is not None:
-            data["price"] = price
-            for tf in ("12h","6h","4h","2h"):
-                data["tf"][tf]["close_last"] = price
-                data["tf"][tf]["bar_time_utc"] = now_iso
-        if filters:
-            dst = data.get("filters") or {}
-            dst.update(filters)
-            data["filters"] = dst
-    except Exception as e:
-        data["last_error"] = f"PRICE:{e.__class__.__name__}"
-
-    # TA per TF
-    tf = data.get("tf") or {}
-    for tf_name, interval in _INTERVALS.items():
-        try:
-            kl = await _fetch_klines(symbol, interval, limit=200)
-            if not kl:
-                continue
-            closes = [k[3] for k in kl]
-            highs  = [k[1] for k in kl]
-            lows   = [k[2] for k in kl]
-            bar_ct = kl[-1][4]
-            ma30, ma30_arr = _sma_tail(closes, 30)
-            ma90, ma90_arr = _sma_tail(closes, 90)
-            atr14 = _atr14(highs, lows, closes)
-            block = tf.setdefault(tf_name, {})
-            if ma30 is not None: block["MA30"] = ma30
-            if ma90 is not None: block["MA90"] = ma90
-            block["MA30_arr"] = ma30_arr
-            block["MA90_arr"] = ma90_arr
-            if atr14 is not None:
-                block["ATR14"] = atr14
-                last_close = closes[-1]
-                if last_close > 0:
-                    block["ATR14_pct"] = atr14 / last_close
-            block["bar_time_utc"] = datetime.utcfromtimestamp(bar_ct/1000).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception as e:
-            # keep going for other TFs
-            pass
-    data["tf"] = tf
-
-    # market mode
-    try:
-        overall, signals = _compute_market_mode(tf, str(data.get("trade_mode") or "SHORT"))
+        data["tf"] = tf
+        # compute market mode
+        trade_mode = str(data.get("trade_mode") or "SHORT").upper()
+        overall, signals = compute_market_mode(tf, trade_mode)
         data["market_mode"] = overall
         data["signals"] = signals
-    except Exception as e:
-        data["last_error"] = f"MM:{e.__class__.__name__}"
+    except Exception:
+        pass
 
-    data["last_success_utc"] = now_iso
-    data.pop("last_error", None)
-    _write_json_atomic(path, data)
+        _write_json_atomic(path, data)
 
-# public entry for /now (no jitter)
+async def _loop():
+    # staggered start
+    await asyncio.sleep(random.uniform(0.5, 1.5))
+    while True:
+        try:
+            await collect_all_with_jitter()
+        except Exception:
+            pass
+        finally:
+            # main sleep to next cycle (≈ 85% of interval)
+            await asyncio.sleep(int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600") * 0.85)
+
+async def start_collector():
+    global _task
+    if _task is None or _task.done():
+        _task = asyncio.create_task(_loop())
+
+async def stop_collector():
+    global _task
+    if _task:
+        _task.cancel()
+        _task = None
+
+
+async def collect_one_now(symbol: str) -> None:
+    await _collect_one_stub(symbol)
+
+async def collect_all_now() -> int:
+    pairs = load_pairs()
+    n = 0
+    for sym in pairs:
+        await _collect_one_stub(sym)
+        n += 1
+    return n
+
+
+async def collect_all_with_jitter(interval_sec: int | None = None) -> int:
+    """
+    Collect all symbols from pairs.json with 5–10% jitter between coins.
+    If interval_sec is None, read COLLECT_INTERVAL_SEC (default 600) for jitter base.
+    Returns number of updated symbols.
+    """
+    pairs = load_pairs()
+    if not pairs:
+        return 0
+    base = interval_sec if isinstance(interval_sec, int) and interval_sec > 0 else int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600")
+    if base < 60: base = 60
+    n = 0
+    for sym in pairs:
+        await _collect_one_stub(sym)
+        n += 1
+        # 5–10% jitter pause between coins
+        await asyncio.sleep(base * random.uniform(0.05, 0.10))
+    return n
+
+
+# --- cache & lock ---
+_exchange_cache = {}  # symbol -> (filters_dict, expires_epoch)
+_async_lock = None  # asyncio.Lock created at runtime
+
+import asyncio, time
+
+def _get_lock():
+    global _async_lock
+    if _async_lock is None:
+        _async_lock = asyncio.Lock()
+    return _async_lock
+
+
 async def collect_all_no_jitter() -> int:
+    """Collect all pairs immediately without per-coin jitter/sleeps."""
     pairs = load_pairs()
     if not pairs:
         return 0
@@ -267,11 +311,3 @@ async def collect_all_no_jitter() -> int:
         await _collect_one_stub(sym)
         n += 1
     return n
-
-
-# --- compatibility stubs (no background collector) ---
-async def start_collector():
-    return None
-
-async def stop_collector():
-    return None
