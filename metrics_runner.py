@@ -267,12 +267,13 @@ async def _collect_one_stub(symbol: str):
             data.pop("oco", None)
     except Exception as e:
         data["last_error"] = f"OCO:{e.__class__.__name__}"
-data["last_success_utc"] = now_iso
-    data.pop("last_error", None)
+    else:
+        data["last_success_utc"] = now_iso
+        data.pop("last_error", None)
     _write_json_atomic(path, data)
 
 # public entry for /now (no jitter)
-async async def collect_all_no_jitter() -> int:
+async def collect_all_no_jitter() -> int:
     pairs = load_pairs()
     if not pairs:
         return 0
