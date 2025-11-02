@@ -1,184 +1,298 @@
 
-    import os, json, asyncio
-    from typing import Dict, Any, List
-    from fastapi import FastAPI, Request
-    import httpx
-    from .utils import STORAGE_DIR, load_pairs, read_json, write_json, get_modes
-    from .range_mode import get_all_modes, set_pair_mode
-    from .market_mode import market_mode_from_snap
-    from .oco_calc import compute_oco_buy
-    from .oco_params import adaptive_params as _adaptive_params
+import os
+from datetime import datetime, timezone
+from fastapi import FastAPI, Request
+import json
+import httpx
 
-    app = FastAPI(title="Trade Bot v31")
+from portfolio import build_portfolio_message, adjust_invested_total
+from metrics_runner import start_collector, stop_collector
+from now_command import run_now
+from range_mode import get_mode, set_mode, list_modes
 
-    TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
+ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
+WEBHOOK_BASE = os.getenv("TRAIDER_WEBHOOK_BASE") or os.getenv("WEBHOOK_BASE") or ""
+METRIC_CHAT_ID = os.getenv("TRAIDER_METRIC_CHAT_ID", "").strip()
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
-    async def tg_send(chat_id: int, text: str):
-        if not TG_BOT_TOKEN:
-            return
-        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+import json, re
 
-    async def tg_send_document(chat_id: int, filename: str, content: bytes):
-        if not TG_BOT_TOKEN:
-            return
-        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendDocument"
-        files = {"document": (os.path.basename(filename), content)}
-        data = {"chat_id": str(chat_id)}
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            await client.post(url, data=data, files=files)
+# === Coins config helpers ===
+def _pairs_env() -> list[str]:
+    raw = os.getenv("PAIRS", "") or ""
+    raw = raw.strip()
+    if not raw:
+        return []
+    parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
+    # dedup preserving order
+    seen=set(); out=[]
+    for s in parts:
+        if s not in seen:
+            seen.add(s); out.append(s)
+    return out
 
-    def _code(s: str) -> str:
-        return f"""```
-{s}
-```"""
+def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
+    path = os.path.join(storage_dir, "pairs.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            res=[]; seen=set()
+            for x in data:
+                s = str(x).strip().upper()
+                if s and s not in seen:
+                    seen.add(s); res.append(s)
+            return res
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    return []
+# === end helpers ===
 
-    @app.get("/health")
-    def health():
-        return {"ok": True, "version": 31}
 
-    @app.post("/tg")
-    async def telegram_webhook(req: Request):
-        payload = await req.json()
-        msg = (payload.get("message") or payload.get("edited_message") or {})
-        chat_id = (((msg.get("chat") or {}) ).get("id")) or 0
-        text = (msg.get("text") or "").strip()
-        if not chat_id or not text:
-            return {"ok": True}
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+app = FastAPI()
+client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
 
-        # /now — recompute levels for LONG pairs (no external fetch; compute from existing snaps)
-        if text.startswith("/now"):
-            pairs = load_pairs()
-            modes = get_modes()
-            updated = []
-            for sym in pairs:
-                path = os.path.join(STORAGE_DIR, f"{sym}.json")
-                snap = read_json(path)
-                # attach trade_mode from modes (default SHORT, per your earlier rule)
-                trade_mode = (modes.get(sym) or "SHORT").upper()
-                snap["symbol"] = snap.get("symbol", {"name": sym, "tickSize": snap.get("tickSize", 0.01)})
-                snap["trade_mode"] = trade_mode
-                # compute market mode label (non-blocking heuristic)
-                mm = market_mode_from_snap(snap)
-                snap.setdefault("market", {})["mode_12h"] = mm
-                # compute OCO only if LONG
-                oco = {}
-                if trade_mode == "LONG":
-                    try:
-                        oco = compute_oco_buy(snap, _adaptive_params)
-                    except Exception:
-                        oco = {}
-                if oco:
-                    levels = snap.setdefault("levels", {}).setdefault("buy", {})
-                    h = levels.setdefault("12h", {})
-                    h["TP Limit"] = oco["TP Limit"]
-                    h["SL Trigger"] = oco["SL Trigger"]
-                    h["SL Limit"] = oco["SL Limit"]
-                    # params snapshot
-                    p = snap.setdefault("levels", {}).setdefault("params", {}).setdefault("12h", {})
-                    ap = _adaptive_params(snap)
-                    p["band_low"] = ap.get("band_low", 0.0)
-                    p["band_high"] = ap.get("band_high", 0.0)
-                    p["tickSize"] = oco.get("tickSize", 0.01)
-                snap["updated_at"] = __import__("datetime").datetime.utcnow().isoformat() + "Z"
-                write_json(path, snap)
-                updated.append(sym)
-            await tg_send(chat_id, _code("OK /now — обновлено: " + ", ".join(updated)))
-            return {"ok": True}
+async def tg_send(chat_id: str, text: str) -> None:
+    if not TELEGRAM_API:
+        return
+    try:
+        await client.post(
+            f"{TELEGRAM_API}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
+        )
+    except Exception:
+        pass
 
-        # /market — list modes with trade mode
-        if text.startswith("/market"):
-            parts = text.split()
-            pairs = load_pairs()
-            modes = get_modes()
-            def line(sym: str) -> str:
-                snap = read_json(os.path.join(STORAGE_DIR, f"{sym}.json"))
-                mm = market_mode_from_snap(snap)
-                icon = {"UP":"⬆️","DOWN":"⬇️","RANGE":"🔄"}.get(mm, "🔄")
-                tmode = (modes.get(sym) or "AUTO").upper()
-                ticon = {"LONG":"📈","SHORT":"📉","AUTO":"🤖"}.get(tmode, "🤖")
-                return f"{sym} {mm}{icon} Mode {tmode}{ticon}"
-            if len(parts) == 1:
-                lines = [line(sym) for sym in pairs]
-                await tg_send(chat_id, _code("\n".join(lines)))
-                return {"ok": True}
-            else:
-                sym = parts[1].upper()
-                await tg_send(chat_id, _code(line(sym)))
-                return {"ok": True}
+async def _binance_ping() -> str:
+    url = "https://api.binance.com/api/v3/ping"
+    try:
+        r = await client.get(url)
+        return "✅" if r.status_code == 200 else f"❌ {r.status_code}"
+    except Exception as e:
+        return f"❌ {e.__class__.__name__}: {e}"
 
-        # /mode commands
-        if text.startswith("/mode"):
-            parts = text.split()
-            if len(parts) == 1:
-                # silent per your spec: /mode does not answer
-                return {"ok": True}
-            if len(parts) == 2:
-                # show single
-                sym = parts[1].upper()
-                state = get_all_modes().get(sym, "AUTO")
-                await tg_send(chat_id, _code(f"{sym}: {state}"))
-                return {"ok": True}
-            # set
-            sym = parts[1].upper()
-            mode = parts[2].upper()
-            new_state = set_pair_mode(sym, mode)
-            await tg_send(chat_id, _code(f"{sym}: {new_state}"))
-            return {"ok": True}
+@app.on_event("startup")
+async def on_startup():
+    ping = await _binance_ping()
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    msg = f"{now_utc} Бот запущен\nBinance connection: {ping}"
+    if ADMIN_CHAT_ID:
+        await tg_send(ADMIN_CHAT_ID, msg)
 
-        # /json — list or send file
-        if text.startswith("/json"):
-            parts = text.split()
-            if len(parts) == 1:
-                files = []
-                for p in load_pairs():
-                    fp = os.path.join(STORAGE_DIR, f"{p}.json")
-                    if os.path.exists(fp):
-                        files.append(os.path.basename(fp))
-                if not files:
-                    await tg_send(chat_id, _code("Нет файлов"))
-                else:
-                    await tg_send(chat_id, _code("\n".join(sorted(files))))
-                return {"ok": True}
-            else:
-                sym = parts[1].upper()
-                fp = os.path.join(STORAGE_DIR, f"{sym}.json")
-                if not os.path.exists(fp):
-                    await tg_send(chat_id, _code("Файл не найден"))
-                    return {"ok": True}
-                content = open(fp, "rb").read()
-                await tg_send_document(chat_id, os.path.basename(fp), content)
-                return {"ok": True}
+@app.get("/health")
+async def health():
+    return {"ok": True}
 
-        # /levels <PAIR> — on-demand compute and show
-        if text.startswith("/levels"):
-            parts = text.split()
-            if len(parts) == 1:
-                await tg_send(chat_id, _code("Использование: /levels <PAIR>"))
-                return {"ok": True}
-            sym = parts[1].upper()
-            path = os.path.join(STORAGE_DIR, f"{sym}.json")
-            if not os.path.exists(path):
-                await tg_send(chat_id, _code("Файл не найден"))
-                return {"ok": True}
-            snap = read_json(path)
+@app.post("/telegram")
+async def telegram_webhook(update: Request):
+    try:
+        data = await update.json()
+    except Exception:
+        data = {}
+    message = data.get("message") or data.get("edited_message") or {}
+    text = (message.get("text") or "").strip()
+    chat_id = str((message.get("chat") or {}).get("id") or "")
+    if not chat_id:
+        return {"ok": True}
+
+    if text.startswith("/invested") or text.startswith("/invest "):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            raw = parts[1].replace(",", ".")
             try:
-                oco = compute_oco_buy(snap, _adaptive_params)
-            except Exception:
-                oco = {}
-            if not oco:
-                await tg_send(chat_id, _code("Нет уровней (только для LONG или нет данных)"))
+                delta = float(raw)
+                new_total = adjust_invested_total(STORAGE_DIR, delta)
+                sign = "+" if delta >= 0 else ""
+                reply = f"OK. Added: {sign}{delta:.2f}$ | Invested total: {new_total:.2f}$"
+            except ValueError:
+                reply = "Нужна сумма: /invested 530 или /invest -10"
+        else:
+            reply = "Нужна сумма: /invested 530"
+        await tg_send(chat_id, _code(reply))
+        return {"ok": True}
+
+    
+    if text.startswith("/coins"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 1:
+            pairs = load_pairs()
+            reply = "Пары: " + (", ".join(pairs) if pairs else "—")
+            await tg_send(chat_id, _code(reply))
+            return {"ok": True}
+        else:
+            rest = parts[1].strip()
+            items = [x.strip().upper() for x in rest.split() if x.strip()]
+            valids = []
+            invalids = []
+            for sym in items:
+                if re.fullmatch(r"[A-Z]+", sym) and sym.endswith("USDC"):
+                    valids.append(sym)
+                else:
+                    invalids.append(sym)
+            if invalids:
+                await tg_send(chat_id, _code("Некорректные тикеры: " + ", ".join(invalids)))
                 return {"ok": True}
-            msg = f"TP Limit {oco['TP Limit']:.8f}\nSL Trigger {oco['SL Trigger']:.8f}\nSL Limit {oco['SL Limit']:.8f}"
+            # dedup
+            seen=set(); filtered=[]
+            for s in valids:
+                if s not in seen:
+                    seen.add(s); filtered.append(s)
+            save_pairs(filtered)
+            await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
+            return {"ok": True}
+
+    if text.startswith("/now"):
+        _, msg = await run_now()
+        await tg_send(chat_id, _code(msg))
+        return {"ok": True}
+
+    
+    if text.startswith("/mode"):
+        parts = text.split()
+        # /mode
+        if len(parts) == 1:
+            summary = list_modes()
+            await tg_send(chat_id, _code(f"Режимы: {summary}"))
+            return {"ok": True}
+        # /mode <SYMBOL>
+        if len(parts) == 2:
+            sym, md = get_mode(parts[1])
+            if not sym:
+                await tg_send(chat_id, _code("Некорректная команда"))
+                return {"ok": True}
+            await tg_send(chat_id, _code(f"{sym}: {md}"))
+            return {"ok": True}
+        # /mode <SYMBOL> <LONG|SHORT>
+        if len(parts) >= 3:
+            sym = parts[1]
+            md  = parts[2]
+            try:
+                sym, md = set_mode(sym, md)
+                await tg_send(chat_id, _code(f"{sym} → {md}"))
+            except ValueError:
+                await tg_send(chat_id, _code("Некорректный режим"))
+            return {"ok": True}
+
+    
+    if text.startswith("/market"):
+        parts = text.split()
+        # list all
+        if len(parts) == 1:
+            pairs = load_pairs()
+            if not pairs:
+                await tg_send(chat_id, _code("Пары: —"))
+                return {"ok": True}
+            lines = [_market_line_for(sym) for sym in pairs]
+            await tg_send(chat_id, _code("\n".join(lines)))
+            return {"ok": True}
+        # specific symbol
+        sym = parts[1].strip().upper()
+        await tg_send(chat_id, _code(_market_line_for(sym)))
+        return {"ok": True}
+
+    
+    if text.startswith("/json"):
+        parts = text.split()
+        # /json -> list all json files in STORAGE_DIR
+        if len(parts) == 1:
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
+            msg = "Файлы: " + (", ".join(files) if files else "—")
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
-
-        # /portfolio — placeholder echo
-        if text.startswith("/portfolio"):
-            await tg_send(chat_id, _code("Портфель пока не настроен в v31"))
+        # /json <PAIR> -> send /data/<PAIR>.json as document
+        sym = parts[1].strip().upper()
+        safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
+        path = os.path.join(STORAGE_DIR, safe)
+        if not os.path.exists(path):
+            await tg_send(chat_id, _code("Файл не найден"))
             return {"ok": True}
-
-        # default
-        await tg_send(chat_id, _code("Неизвестная команда"))
+        await tg_send_file(chat_id, path, filename=safe, caption=safe)
         return {"ok": True}
+
+    if text.startswith("/portfolio"):
+        try:
+            reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
+        except Exception as e:
+            reply = f"Ошибка портфеля: {e}"
+        await tg_send(chat_id, reply or "Нет данных.")
+        return {"ok": True}
+
+    return {"ok": True}
+
+
+@app.get("/")
+async def root():
+    return {"ok": True, "service": "traider-bot"}
+
+
+@app.head("/")
+async def root_head():
+    return {"ok": True}
+
+
+@app.head("/health")
+async def health_head():
+    return {"ok": True}
+
+
+# metrics collector moved to metrics_runner.py
+
+
+@app.on_event("startup")
+async def _startup_metrics():
+    # start metrics collector in background (jittered)
+    await start_collector()
+
+@app.on_event("shutdown")
+async def _shutdown_metrics():
+    await stop_collector()
+
+
+def _load_json_safe(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _market_line_for(symbol: str) -> str:
+    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
+    data = _load_json_safe(path)
+    trade_mode = str((data.get("trade_mode") or "SHORT")).upper()
+    market_mode = str((data.get("market_mode") or "RANGE")).upper()
+    # emojis
+    mm_emoji = {"UP":"⬆️","DOWN":"⬇️","RANGE":"🔄"}.get(market_mode, "🔄")
+    tm_emoji = {"LONG":"📈","SHORT":"📉"}.get(trade_mode, "")
+    return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
+
+
+def _code(msg: str) -> str:
+    return f"""```
+{msg}
+```"""
+
+
+import glob
+
+async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None, caption: str | None = None):
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    fn = filename or os.path.basename(filepath)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            with open(filepath, "rb") as f:
+                form = {"chat_id": str(chat_id)}
+                files = {"document": (fn, f, "application/json")}
+                if caption:
+                    form["caption"] = caption
+                r = await client.post(api_url, data=form, files=files)
+                r.raise_for_status()
+    except Exception:
+        # silently ignore to avoid breaking webhook
+        pass
