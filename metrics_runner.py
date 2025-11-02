@@ -69,50 +69,81 @@ def _ensure_skeleton(symbol: str, now_iso: str, existing: dict) -> dict:
 
 async def _fetch_price_and_filters(symbol: str):
     base = "https://api.binance.com"
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # price with retries
         price = None
-        try:
-            r = await client.get(f"{base}/api/v3/ticker/price", params={"symbol": symbol})
-            if r.status_code == 200:
-                price = float((r.json() or {}).get("price"))
-        except Exception:
-            price = None
+        for attempt in range(3):
+            try:
+                r = await client.get(f"{base}/api/v3/ticker/price", params={"symbol": symbol})
+                if r.status_code == 200:
+                    price = float((r.json() or {}).get("price"))
+                    break
+                retry_after = r.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        await asyncio.sleep(float(retry_after))
+                    except Exception:
+                        await asyncio.sleep(1.0 * (attempt+1))
+                else:
+                    await asyncio.sleep(1.0 * (attempt+1))
+            except Exception:
+                await asyncio.sleep(1.0 * (attempt+1))
+
+        # filters from cache or network
         filters = {}
-        try:
-            r2 = await client.get(f"{base}/api/v3/exchangeInfo", params={"symbol": symbol})
-            if r2.status_code == 200:
-                j = r2.json() or {}
-                syms = (j.get("symbols") or [])
-                if syms:
-                    fs = syms[0].get("filters") or []
-                    for f in fs:
-                        if f.get("filterType") == "PRICE_FILTER":
-                            filters["tickSize"] = f.get("tickSize")
-                        if f.get("filterType") == "LOT_SIZE":
-                            filters["stepSize"] = f.get("stepSize")
-        except Exception:
-            pass
+        now = time.time()
+        cached = _exchange_cache.get(symbol)
+        if cached and cached[1] > now:
+            filters = dict(cached[0])
+        else:
+            for attempt in range(2):
+                try:
+                    r2 = await client.get(f"{base}/api/v3/exchangeInfo", params={"symbol": symbol})
+                    if r2.status_code == 200:
+                        j = r2.json() or {}
+                        syms = (j.get("symbols") or [])
+                        if syms:
+                            fs = syms[0].get("filters") or []
+                            for f in fs:
+                                if f.get("filterType") == "PRICE_FILTER":
+                                    filters["tickSize"] = f.get("tickSize")
+                                if f.get("filterType") == "LOT_SIZE":
+                                    filters["stepSize"] = f.get("stepSize")
+                            # cache for 6h
+                            _exchange_cache[symbol] = (dict(filters), now + 6*3600)
+                        break
+                    await asyncio.sleep(1.0 * (attempt+1))
+                except Exception:
+                    await asyncio.sleep(1.0 * (attempt+1))
         return price, filters
 
 async def _collect_one_stub(symbol: str):
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path = _coin_file(symbol)
-    existing = _read_json(path)
-    data = _ensure_skeleton(symbol, now_iso, existing)
-    # fetch price & filters
-    price, filters = await _fetch_price_and_filters(symbol)
-    if price is not None:
-        data["price"] = price
-        # put close_last for all TFs (temporary until full MA/ATR calc)
-        for tf in ("12h","6h","4h","2h"):
-            try:
-                data["tf"][tf]["close_last"] = price
-                data["tf"][tf]["bar_time_utc"] = now_iso
-            except Exception:
-                pass
-    if filters:
-        data["filters"] = filters
-    _write_json_atomic(path, data)
+    lock = _get_lock()
+    async with lock:
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        path = _coin_file(symbol)
+        existing = _read_json(path)
+        data = _ensure_skeleton(symbol, now_iso, existing)
+        try:
+            price, filters = await _fetch_price_and_filters(symbol)
+            if price is not None:
+                data["price"] = price
+                for tf in ("12h","6h","4h","2h"):
+                    try:
+                        data["tf"][tf]["close_last"] = price
+                        data["tf"][tf]["bar_time_utc"] = now_iso
+                    except Exception:
+                        pass
+            if filters:
+                # merge filters without dropping other keys
+                dst = data.get("filters") or {}
+                dst.update(filters)
+                data["filters"] = dst
+            data["last_success_utc"] = now_iso
+            data.pop("last_error", None)
+        except Exception as e:
+            data["last_error"] = f"{e.__class__.__name__}"
+        _write_json_atomic(path, data)
 
 async def _loop():
     # staggered start
@@ -169,3 +200,16 @@ async def collect_all_with_jitter(interval_sec: int | None = None) -> int:
         # 5–10% jitter pause between coins
         await asyncio.sleep(base * random.uniform(0.05, 0.10))
     return n
+
+
+# --- cache & lock ---
+_exchange_cache = {}  # symbol -> (filters_dict, expires_epoch)
+_async_lock = None  # asyncio.Lock created at runtime
+
+import asyncio, time
+
+def _get_lock():
+    global _async_lock
+    if _async_lock is None:
+        _async_lock = asyncio.Lock()
+    return _async_lock
