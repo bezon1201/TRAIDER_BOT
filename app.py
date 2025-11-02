@@ -180,130 +180,7 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     
-    
-if text.startswith("/levels"):
-
-    
-    
-    parts = text.split()
-
-    
-    
-    if len(parts) == 1:
-
-    
-    
-        await tg_send(chat_id, _code("Использование: /levels <PAIR>"))
-
-    
-    
-        return {"ok": True}
-
-    
-    
-    sym = parts[1].strip().upper()
-
-    
-    
-    path = os.path.join(STORAGE_DIR, f"{sym}.json")
-
-    
-    
-    if not os.path.exists(path):
-
-    
-    
-        await tg_send(chat_id, _code("Файл не найден"))
-
-    
-    
-        return {"ok": True}
-
-    
-    
-    import json
-
-    
-    
-    snap = json.load(open(path, "r", encoding="utf-8"))
-
-    
-    
-    try:
-
-    
-    
-        from oco_calc import compute_oco_buy
-
-    
-    
-        from oco_params import adaptive_params as _adaptive_params
-
-    
-    
-        oco = compute_oco_buy(snap, _adaptive_params)
-
-    
-    
-    except Exception:
-
-    
-    
-        oco = {}
-
-    
-    
-    if not oco:
-
-    
-    
-        await tg_send(chat_id, _code("Нет уровней (только для LONG или нет данных)"))
-
-    
-    
-        return {"ok": True}
-
-    
-    
-    msg = ("TP Limit {tp:.8f}\n"
-            "SL Trigger {trig:.8f}\n"
-            "SL Limit {lim:.8f}").format(tp=oco["TP Limit"], trig=oco["SL Trigger"], lim=oco["SL Limit"])
-
-    
-    
-    await tg_send(chat_id, _code(msg))
-
-    
-    
-    return {"ok": True}
-
-
-    
-    
-
-if text.startswith("/json"):
-    parts = text.split()
-    files = sorted([f for f in os.listdir(STORAGE_DIR) if f.endswith(".json")])
-    # /json  -> list
-    if len(parts) == 1:
-        list_text = "\n".join(files) if files else "Нет файлов"
-        await tg_send(chat_id, _code(list_text))
-        return {"ok": True}
-    # /json <PAIR> -> send file
-    sym = parts[1].strip().upper()
-    path = os.path.join(STORAGE_DIR, f"{sym}.json")
-    if not os.path.exists(path):
-        await tg_send(chat_id, _code("Файл не найден"))
-        return {"ok": True}
-    await tg_send_document(chat_id, path, filename=f"{sym}.json")
-    return {"ok": True}
-
-
-
-
-    
-    
-if text.startswith("/market"):
+    if text.startswith("/market"):
         parts = text.split()
         # list all
         if len(parts) == 1:
@@ -320,6 +197,24 @@ if text.startswith("/market"):
         return {"ok": True}
 
     
+    if text.startswith("/json"):
+        parts = text.split()
+        # /json -> list all json files in STORAGE_DIR
+        if len(parts) == 1:
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
+            msg = "Файлы: " + (", ".join(files) if files else "—")
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+        # /json <PAIR> -> send /data/<PAIR>.json as document
+        sym = parts[1].strip().upper()
+        safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
+        path = os.path.join(STORAGE_DIR, safe)
+        if not os.path.exists(path):
+            await tg_send(chat_id, _code("Файл не найден"))
+            return {"ok": True}
+        await tg_send_file(chat_id, path, filename=safe, caption=safe)
+        return {"ok": True}
+
     if text.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
