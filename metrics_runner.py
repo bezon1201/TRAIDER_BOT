@@ -2,6 +2,7 @@
 import os, json, asyncio, random, time
 from datetime import datetime, timezone
 from typing import List, Tuple, Dict
+from grid_limits import compute_grid_levels
 
 import httpx
 
@@ -261,6 +262,13 @@ async def _collect_one_stub(symbol: str):
             oco = compute_oco_sell(data)
             if oco:
                 data["oco"] = oco
+        # grid levels for LONG
+        try:
+            grid = compute_grid_levels(data)
+            if grid:
+                data["grid"] = grid
+        except Exception:
+            data.pop("grid", None)
             else:
                 data.pop("oco", None)
         else:
