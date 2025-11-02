@@ -267,3 +267,11 @@ async def collect_all_no_jitter() -> int:
         await _collect_one_stub(sym)
         n += 1
     return n
+
+
+# --- compatibility stubs (no background collector) ---
+async def start_collector():
+    return None
+
+async def stop_collector():
+    return None
