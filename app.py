@@ -9,6 +9,7 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
+from symbol_info import build_symbol_message
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -160,6 +161,15 @@ async def telegram_webhook(update: Request):
             summary = list_modes()
             await tg_send(chat_id, _code(f"Режимы: {summary}"))
             return {"ok": True}
+    # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
+    if text.startswith("/") and len(text) > 2:
+        sym = text[1:].split()[0].upper()
+        # ignore known command prefixes
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","JSON","INVESTED","INVEST"):
+            msg = build_symbol_message(sym)
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+
         # /mode <SYMBOL>
         if len(parts) == 2:
             sym, md = get_mode(parts[1])
