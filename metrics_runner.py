@@ -186,7 +186,7 @@ async def _collect_one_stub(symbol: str):
                 dst.update(filters)
                 data["filters"] = dst
             data["last_success_utc"] = now_iso
-            data.pop("last_error", None)
+            data.pop("last_error", None)\n# --- OCO BUY for LONG coins (adaptive) ---\ntry:\n    if str(data.get("trade_mode") or "SHORT").upper() == "LONG":\n        from oco_calc import compute_oco_buy\n        from oco_params import adaptive_params as _adaptive_params\n        oco = compute_oco_buy(data, _adaptive_params)\n        if oco:\n            levels = data.get("levels") or {}\n            buy = (levels.get("buy") or {})\n            buy["12h"] = {"TP Limit": oco["TP Limit"], "SL Trigger": oco["SL Trigger"], "SL Limit": oco["SL Limit"]}\n            params = buy.get("params") or {}\n            params["12h"] = oco.get("params") or {}\n            buy["params"] = params\n            levels["buy"] = buy\n            data["levels"] = levels\nexcept Exception as e:\n    data["levels_error"] = f"OCO:{e.__class__.__name__}"\n
         except Exception as e:
             data["last_error"] = f"{e.__class__.__name__}"
         
