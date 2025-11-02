@@ -34,7 +34,8 @@ def compute_grid_levels(sym: dict) -> dict:
     except Exception:
         tick = 0.01
     # market mode (берем 12h)
-    mm12 = (sym.get("market_mode") or {}).get("12h") or ""
+    mm = sym.get("market_mode")
+    mm12 = (mm.get("12h") if isinstance(mm, dict) else (str(mm or "")))
     mlow = str(mm12).lower()
     is_up = ("up" in mlow) or ("⬆" in str(mm12))
     is_down = ("down" in mlow) or ("⬇" in str(mm12))
