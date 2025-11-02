@@ -310,17 +310,11 @@ if text.startswith("/json"):
 
     
     
-            await tg_send(chat_id, _code("Нет JSON файлов"))
-
-
-    
-    
-            return {"ok": True}
-
-
-    
-    
-        await tg_send(chat_id, _code("
+            list_text = "
+".join(files)
+        await tg_send(chat_id, _code(list_text))
+        return {"ok": True}
+await tg_send(chat_id, _code("
 ".join(files)))
 
 
