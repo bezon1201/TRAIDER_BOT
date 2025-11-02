@@ -97,3 +97,15 @@ async def stop_collector():
     if _task:
         _task.cancel()
         _task = None
+
+
+async def collect_one_now(symbol: str) -> None:
+    await _collect_one_stub(symbol)
+
+async def collect_all_now() -> int:
+    pairs = load_pairs()
+    n = 0
+    for sym in pairs:
+        await _collect_one_stub(sym)
+        n += 1
+    return n

@@ -6,6 +6,8 @@ import httpx
 
 from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
+from now_command import run_now
+from range_mode import get_mode, set_mode, list_modes
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -142,6 +144,38 @@ async def telegram_webhook(update: Request):
                     seen.add(s); filtered.append(s)
             save_pairs(filtered)
             await tg_send(chat_id, "Пары обновлены: " + (", ".join(filtered) if filtered else "—"))
+            return {"ok": True}
+
+    if text.startswith("/now"):
+        _, msg = await run_now()
+        await tg_send(chat_id, msg)
+        return {"ok": True}
+
+    
+    if text.startswith("/mode"):
+        parts = text.split()
+        # /mode
+        if len(parts) == 1:
+            summary = list_modes()
+            await tg_send(chat_id, f"Режимы: {summary}")
+            return {"ok": True}
+        # /mode <SYMBOL>
+        if len(parts) == 2:
+            sym, md = get_mode(parts[1])
+            if not sym:
+                await tg_send(chat_id, "Некорректная команда")
+                return {"ok": True}
+            await tg_send(chat_id, f"{sym}: {md}")
+            return {"ok": True}
+        # /mode <SYMBOL> <LONG|SHORT>
+        if len(parts) >= 3:
+            sym = parts[1]
+            md  = parts[2]
+            try:
+                sym, md = set_mode(sym, md)
+                await tg_send(chat_id, f"{sym} → {md}")
+            except ValueError:
+                await tg_send(chat_id, "Некорректный режим")
             return {"ok": True}
 
     if text.startswith("/portfolio"):
