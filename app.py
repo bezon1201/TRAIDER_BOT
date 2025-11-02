@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 import httpx
 
 from portfolio import build_portfolio_message, adjust_invested_total
+from metrics_runner import start_collector, stop_collector
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -169,88 +170,14 @@ async def health_head():
     return {"ok": True}
 
 
-# === background metrics collector ===
-import asyncio, random
-from datetime import datetime, timezone
+# metrics collector moved to metrics_runner.py
 
-_collector_task = None
-
-def _coin_file(symbol: str, storage_dir: str = STORAGE_DIR) -> str:
-    os.makedirs(storage_dir, exist_ok=True)
-    return os.path.join(storage_dir, f"{symbol}.json")
-
-def _read_json(path: str) -> dict:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
-
-def _write_json_atomic(path: str, data: dict) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, separators=(",", ":" ))
-    os.replace(tmp, path)
-
-def _ensure_skeleton(symbol: str, now_iso: str, existing: dict) -> dict:
-    out = dict(existing) if isinstance(existing, dict) else {}
-    out.setdefault("symbol", symbol)
-    out.setdefault("trade_mode", out.get("trade_mode") or "SHORT")
-    out.setdefault("price", out.get("price"))
-    out.setdefault("filters", out.get("filters") or {})
-    tf = out.setdefault("tf", {})
-    for key in ("12h","6h","4h","2h"):
-        block = tf.setdefault(key, {})
-        block.setdefault("close_last", block.get("close_last"))
-        block.setdefault("MA30", block.get("MA30"))
-        block.setdefault("MA90", block.get("MA90"))
-        block.setdefault("MA30_arr", block.get("MA30_arr") or [])
-        block.setdefault("MA90_arr", block.get("MA90_arr") or [])
-        block.setdefault("ATR14", block.get("ATR14"))
-        block.setdefault("ATR14_pct", block.get("ATR14_pct"))
-        block["collected_at_utc"] = now_iso
-    out["last_update_utc"] = now_iso
-    return out
-
-async def _collect_one_stub(symbol: str):
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path = _coin_file(symbol)
-    existing = _read_json(path)
-    data = _ensure_skeleton(symbol, now_iso, existing)
-    _write_json_atomic(path, data)
-
-async def _collector_loop():
-    global _collector_task
-    # jittered stagger start
-    await asyncio.sleep(random.uniform(0.5, 1.5))
-    while True:
-        try:
-            pairs = load_pairs()
-            interval = int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600")
-            if interval < 60: interval = 60
-            # Process each pair with small per-coin jitter (5–10% of interval)
-            for sym in pairs:
-                await _collect_one_stub(sym)
-                await asyncio.sleep(interval * random.uniform(0.05, 0.10))
-        except Exception:
-            # never crash the loop
-            pass
-        finally:
-            # main sleep to next cycle (remaining ~80–90% of interval)
-            await asyncio.sleep(int(os.getenv("COLLECT_INTERVAL_SEC", "600") or "600") * 0.85)
 
 @app.on_event("startup")
-async def _start_collector():
-    global _collector_task
-    if _collector_task is None:
-        _collector_task = asyncio.create_task(_collector_loop())
+async def _startup_metrics():
+    # start metrics collector in background (jittered)
+    await start_collector()
 
 @app.on_event("shutdown")
-async def _stop_collector():
-    global _collector_task
-    if _collector_task:
-        _collector_task.cancel()
-        _collector_task = None
-# === end background metrics collector ===
+async def _shutdown_metrics():
+    await stop_collector()
