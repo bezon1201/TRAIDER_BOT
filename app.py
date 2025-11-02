@@ -196,6 +196,25 @@ async def telegram_webhook(update: Request):
         await tg_send(chat_id, _code(_market_line_for(sym)))
         return {"ok": True}
 
+    
+    if text.startswith("/json"):
+        parts = text.split()
+        # /json -> list all json files in STORAGE_DIR
+        if len(parts) == 1:
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
+            msg = "Файлы: " + (", ".join(files) if files else "—")
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+        # /json <PAIR> -> send /data/<PAIR>.json as document
+        sym = parts[1].strip().upper()
+        safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
+        path = os.path.join(STORAGE_DIR, safe)
+        if not os.path.exists(path):
+            await tg_send(chat_id, _code("Файл не найден"))
+            return {"ok": True}
+        await tg_send_file(chat_id, path, filename=safe, caption=safe)
+        return {"ok": True}
+
     if text.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
@@ -257,3 +276,23 @@ def _code(msg: str) -> str:
     return f"""```
 {msg}
 ```"""
+
+
+import glob
+
+async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None, caption: str | None = None):
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    fn = filename or os.path.basename(filepath)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            with open(filepath, "rb") as f:
+                form = {"chat_id": str(chat_id)}
+                files = {"document": (fn, f, "application/json")}
+                if caption:
+                    form["caption"] = caption
+                r = await client.post(api_url, data=form, files=files)
+                r.raise_for_status()
+    except Exception:
+        # silently ignore to avoid breaking webhook
+        pass
