@@ -406,7 +406,6 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     fn = filename or os.path.basename(filepath)
     try:
         import httpx
-import re
         async with httpx.AsyncClient(timeout=20.0) as client:
             with open(filepath, "rb") as f:
                 form = {"chat_id": str(chat_id)}
