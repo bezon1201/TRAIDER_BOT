@@ -11,7 +11,7 @@ from metrics_runner import start_collector, stop_collector
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
-from budget_long import budget_summary, set_weekly, add_weekly, set_timezone, init_if_needed, weekly_tick, month_end_tick
+from budget_long import budget_summary, set_weekly, add_weekly, set_timezone, init_if_needed, weekly_tick, month_end_tick, manual_reset
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -246,6 +246,13 @@ async def telegram_webhook(update: Request):
         try:
             init_if_needed(STORAGE_DIR)
             parts = text_norm.split()
+            # manual reset
+            if len(parts) > 1 and parts[1].strip().lower() == 'reset':
+                modes = _snapshot_market_modes(STORAGE_DIR)
+                manual_reset(STORAGE_DIR, modes)
+                msg, _ = budget_summary(STORAGE_DIR)
+                await tg_send(chat_id, msg)
+                return {"ok": True}
             if len(parts) == 1:
                 msg, _ = budget_summary(STORAGE_DIR)
                 await tg_send(chat_id, msg)
