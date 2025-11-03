@@ -146,8 +146,8 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         return f"{qty} {asset}"
 
     
-    # Build Spot rows and compute percent allocation among coins from pairs.json (exclude stables like USDC)
-        spot_items = []  # (asset, amount, usd)
+        # Build Spot rows and compute percent allocation among all spot assets > $1 (excluding USDC)
+    spot_items = []  # (asset, amount, usd)
     stables = {"USDT","USDC","BUSD","FDUSD"}
     spot_rows, spot_total = [], 0.0
     for a, amt in sorted(spot.items()):
@@ -157,10 +157,10 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
             spot_items.append((a, amt, usd))
             spot_total += usd
 
-    # Calculate denominator from ALL spot assets > $1 excluding only USDC
+    # Denominator excludes USDC
     denom = sum(usd for (a, _, usd) in spot_items if a != "USDC")
 
-    # Rebuild spot_rows with percentage for non-USDC assets
+    # Build spot_rows with percentage for non-USDC assets
     spot_rows = []
     for a, amt, usd in spot_items:
         left = left_label(a, amt)
@@ -169,7 +169,8 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
             left = f"{left} {pct:.0f}%"
         spot_rows.append((left, usd))
 
-    # Continue with Earn computation
+# Continue with Earn computation
+
     earn_rows, earn_total = [], 0.0
 
     for a, amt in sorted(earn.items()):
