@@ -1,3 +1,6 @@
+import os
+from budget_long import budget_numbers_for_symbol
+
 
 def _i(x):
     try:
@@ -26,13 +29,17 @@ def build_long_card(data: dict) -> str:
     if all(k in oco for k in ("tp_limit","sl_trigger","sl_limit")):
         pf = flags.get("OCO","")
         prefix = f"{pf}" if pf else ""
-        lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
+        bp = str(int(b.get('oco_left',0)))
+        pad = bp.rjust(2)
+        lines.append(f"{pad}{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
     grid = data.get("grid") or {}
     for k in ("L0","L1","L2","L3"):
         if k in grid and grid[k] is not None:
             pf = (flags or {}).get(k,"")
             prefix = f"{pf}" if pf else ""
-            lines.append(f"{prefix}{k} {_i(grid[k])}$")
+            bp_k = str(int(b.get(k,0))) if k in ('L1','L2','L3') else (str(int(b.get('l0_left',0))) if k=='L0' else '0')
+            padk = bp_k.rjust(2)
+            lines.append(f"{padk}{prefix}{k} {_i(grid[k])}$")
 
     return "\n".join(lines)
