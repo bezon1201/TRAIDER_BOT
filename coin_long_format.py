@@ -1,5 +1,6 @@
 import os
 from budget_long import budget_numbers_for_symbol
+DEFAULT_SD = os.getenv('STORAGE_DIR') or '.'
 
 
 def _i(x):
@@ -29,7 +30,7 @@ def build_long_card(data: dict) -> str:
     if all(k in oco for k in ("tp_limit","sl_trigger","sl_limit")):
         pf = flags.get("OCO","")
         prefix = f"{pf}" if pf else ""
-        bp = str(int(b.get('oco_left',0)))
+        bp = str(int((b.get('oco_left') or 0)))
         pad = bp.rjust(2)
         lines.append(f"{pad}{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
@@ -38,7 +39,7 @@ def build_long_card(data: dict) -> str:
         if k in grid and grid[k] is not None:
             pf = (flags or {}).get(k,"")
             prefix = f"{pf}" if pf else ""
-            bp_k = str(int(b.get(k,0))) if k in ('L1','L2','L3') else (str(int(b.get('l0_left',0))) if k=='L0' else '0')
+            bp_k = str(int((b.get(k) or 0))) if k in ('L1','L2','L3') else (str(int((b.get('l0_left') or 0))) if k=='L0' else '0')
             padk = bp_k.rjust(2)
             lines.append(f"{padk}{prefix}{k} {_i(grid[k])}$")
 
