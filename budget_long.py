@@ -191,15 +191,14 @@ def month_end_tick(sd: str) -> dict:
 
 def manual_reset(sd: str, market_modes: Dict[str,str]) -> dict:
     """
-    Сбрасывает ролловеры и траты; пересчитывает всё как будто
-    сейчас 1-е число и первая неделя. Распределяет L1/L2/L3 на весь
-    месяц по текущему режиму рынка, а OCO/L0 — недельные квоты.
+    Сбрасывает ролловеры/траты и пересчитывает так, будто сейчас
+    1-е число и первая неделя. Распределяет L1/L2/L3 на месяц,
+    OCO/L0 — недельные квоты.
     """
     init_if_needed(sd)
     st = load_state(sd); cfg = load_settings(sd)
     tz = int(cfg.get("tz_offset_hours", 0) or 0)
     now_utc = time.time()
-    # якоря недели и месяца от "сейчас"
     ws_utc, nxt_utc = _weekly_anchor(now_utc, tz)
     ms_utc, me_utc  = _month_anchors(now_utc, tz)
     st["week_index"] = 1
@@ -209,7 +208,6 @@ def manual_reset(sd: str, market_modes: Dict[str,str]) -> dict:
     st["month_start_utc"] = _iso(ms_utc)
     st["month_end_utc"] = _iso(me_utc)
     st["last_month_roll_utc"] = _iso(now_utc)
-    # по всем core-парам
     core = _core_set(sd)
     for sym in core:
         mode = (market_modes.get(sym) or "RANGE").upper()
@@ -225,7 +223,7 @@ def manual_reset(sd: str, market_modes: Dict[str,str]) -> dict:
         ps["l0"]["weekly_quota"]  = round(week_quota_l0, 2)
         ps["oco"]["rollover"] = 0.0; ps["l0"]["rollover"] = 0.0
         ps["oco"]["spent"] = 0.0; ps["l0"]["spent"] = 0.0
-        # monthly L1/L2/L3 (left/spent)
+        # monthly L1/L2/L3
         for k in ("L1","L2","L3"):
             alloc = round(M * tbl[k], 2)
             ps["l_month"][k] = {"left": alloc, "spent": 0.0}
@@ -247,3 +245,30 @@ def budget_summary(sd: str):
     body = "\n".join(lines) if lines else "(no core pairs)"
     footer = f"TOTAL weekly {tot_weekly:.2f}\nWeek: {st.get('week_start_utc','?')} → {st.get('next_week_start_utc','?')}\nMonth: {st.get('month_start_utc','?')} → {st.get('month_end_utc','?')}\nTZ: UTC{cfg.get('tz_offset_hours',0):+d}"
     msg = "```\n" + header + "\n" + body + "\n" + footer + "\n```"; return msg, {"lines": lines}
+
+def budget_per_symbol_texts(sd: str):
+    """Возвращает список форматированных сообщений по каждой core-LONG паре."""
+    cfg = load_settings(sd); st = load_state(sd); core = _core_set(sd)
+    out = []
+    for sym in sorted(core):
+        w = float(((cfg.get("pairs") or {}).get(sym, {}) or {}).get("weekly", 0.0) or 0.0)
+        M = 4.0 * w
+        ps = (st.get("pairs") or {}).get(sym, {})
+        _ensure_pair_state(ps)
+        oco_avail = (ps["oco"].get("weekly_quota") or 0.0) + (ps["oco"].get("rollover") or 0.0)
+        l0_avail  = (ps["l0"].get("weekly_quota")  or 0.0) + (ps["l0"].get("rollover")  or 0.0)
+        l1 = ps["l_month"]["L1"]; l2 = ps["l_month"]["L2"]; l3 = ps["l_month"]["L3"]
+        text = f"{sym}  W {w:.2f}  M {M:.2f}\\n" \
+               f"OCO_w {oco_avail:.2f}  L0_w {l0_avail:.2f}\\n" \
+               f"L1 {l1['left']:.2f}/{l1['spent']:.2f}  L2 {l2['left']:.2f}/{l2['spent']:.2f}  L3 {l3['left']:.2f}/{l3['spent']:.2f}"
+        out.append(text)
+    return out
+
+def budget_schedule_text(sd: str):
+    cfg = load_settings(sd); st = load_state(sd)
+    tz = int(cfg.get("tz_offset_hours",0) or 0)
+    return "Week: {ws} → {wn}\\nMonth: {ms} → {me}\\nTZ: UTC{tz:+d}".format(
+        ws=st.get("week_start_utc","?"), wn=st.get("next_week_start_utc","?"),
+        ms=st.get("month_start_utc","?"), me=st.get("month_end_utc","?"),
+        tz=tz
+    )
