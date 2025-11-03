@@ -126,7 +126,8 @@ def _format_block(title: str, rows: List[Tuple[str, float]]) -> List[str]:
     lefts = [name for name, _ in rows]
     maxw = max(len(x) for x in lefts)
     lines = [f"{name.ljust(maxw)}  / {usd:.2f}$" for name, usd in rows]
-    return [f"*{title}*"] + ["```"] + lines + ["```"]
+    return [title] + lines
+
 
 async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: str, storage_dir: str) -> str:
     if not key or not secret:
@@ -193,5 +194,5 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
 
     profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
     pct_part = f" - {profit_pct:.1f}%" if invested > 0 else ""
-    summary = ["```", f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}", "```"]
-    return "\n".join(lines + summary)
+    summary = [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}"]
+    return "```\n" + "\n".join(lines + [""] + summary) + "\n```"
