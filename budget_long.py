@@ -1,3 +1,9 @@
+def _ri(x):
+    try:
+        return int(round(float(x or 0)))
+    except Exception:
+        return 0
+
 
 import os, json, time, datetime
 from typing import Dict, Tuple
@@ -164,7 +170,7 @@ def weekly_tick(sd: str, market_modes: Dict[str,str]) -> dict:
         M = _current_M_for_pair(sd, sym)
         oco_month = M * tbl["OCO"]; l0_month = M * tbl["L0"]
         week_quota_oco = oco_month / int(cfg.get("cycle_weeks",4) or 4); week_quota_l0 = l0_month / int(cfg.get("cycle_weeks",4) or 4)
-        ps["oco"]["weekly_quota"]=round(week_quota_oco,2); ps["l0"]["weekly_quota"]=round(week_quota_l0,2)
+        ps["oco"]["weekly_quota"] = _ri(week_quota_oco); ps["l0"]["weekly_quota"]  = _ri(week_quota_l0)
         out[sym] = {"mode":mode,"M":round(M,2),"OCO_week":round(week_quota_oco + (ps['oco']['rollover'] or 0.0),2),"L0_week":round(week_quota_l0 + (ps['l0']['rollover'] or 0.0),2)}
         for k in ("L1","L2","L3"): ps["l_month"].setdefault(k, {"left":0.0,"spent":0.0})
     save_state(sd, st); return out
@@ -179,7 +185,7 @@ def month_end_tick(sd: str) -> dict:
         _ensure_pair_state(ps)
         oco_left = max(0.0, (ps["oco"].get("weekly_quota") or 0.0) + (ps["oco"].get("rollover") or 0.0) - (ps["oco"].get("spent") or 0.0))
         l0_left  = max(0.0, (ps["l0"].get("weekly_quota") or 0.0)  + (ps["l0"].get("rollover")  or 0.0) - (ps["l0"].get("spent")  or 0.0))
-        ps["oco"]["rollover"]=0.0; ps["l0"]["rollover"]=0.0
+        ps["oco"]["rollover"] = 0; ps["l0"]["rollover"] = 0
         actions[sym] = {"market_buy": round(oco_left + l0_left,2), "carry": {}}
         carry = {}
         for k in ("L1","L2","L3"):
@@ -219,14 +225,14 @@ def manual_reset(sd: str, market_modes: Dict[str,str]) -> dict:
         oco_month = M * tbl["OCO"]; l0_month = M * tbl["L0"]
         week_quota_oco = oco_month / int(cfg.get("cycle_weeks",4) or 4)
         week_quota_l0  = l0_month  / int(cfg.get("cycle_weeks",4) or 4)
-        ps["oco"]["weekly_quota"] = round(week_quota_oco, 2)
-        ps["l0"]["weekly_quota"]  = round(week_quota_l0, 2)
-        ps["oco"]["rollover"] = 0.0; ps["l0"]["rollover"] = 0.0
-        ps["oco"]["spent"] = 0.0; ps["l0"]["spent"] = 0.0
+        ps["oco"]["weekly_quota"] = _ri(week_quota_oco)
+        ps["l0"]["weekly_quota"]  = _ri(week_quota_l0)
+        ps["oco"]["rollover"] = 0; ps["l0"]["rollover"] = 0
+        ps["oco"]["spent"] = 0; ps["l0"]["spent"] = 0
         # monthly L1/L2/L3
         for k in ("L1","L2","L3"):
-            alloc = round(M * tbl[k], 2)
-            ps["l_month"][k] = {"left": alloc, "spent": 0.0}
+            alloc = _ri(M * tbl[k])
+            ps["l_month"][k] = {"left": int(alloc), "spent": 0}
         ps.setdefault("l_month_meta", {})["alloc_month"] = st["month_start_utc"]
     save_state(sd, st)
     return st
@@ -247,21 +253,32 @@ def budget_summary(sd: str):
     msg = "```\n" + header + "\n" + body + "\n" + footer + "\n```"; return msg, {"lines": lines}
 
 def budget_per_symbol_texts(sd: str):
-    """Возвращает список форматированных сообщений по каждой core-LONG паре."""
+    """Возвращает список сообщений по каждой core-LONG паре. Значения — целые."""
     cfg = load_settings(sd); st = load_state(sd); core = _core_set(sd)
     out = []
     for sym in sorted(core):
         w = float(((cfg.get("pairs") or {}).get(sym, {}) or {}).get("weekly", 0.0) or 0.0)
-        M = 4.0 * w
+        w_i = _ri(w)
+        M_i = _ri(4.0 * w)
         ps = (st.get("pairs") or {}).get(sym, {})
         _ensure_pair_state(ps)
-        oco_avail = (ps["oco"].get("weekly_quota") or 0.0) + (ps["oco"].get("rollover") or 0.0)
-        l0_avail  = (ps["l0"].get("weekly_quota")  or 0.0) + (ps["l0"].get("rollover")  or 0.0)
+        oco_quota = _ri(ps["oco"].get("weekly_quota"))
+        oco_roll  = _ri(ps["oco"].get("rollover"))
+        oco_spent = _ri(ps["oco"].get("spent"))
+        oco_left  = max(0, oco_quota + oco_roll - oco_spent)
+
+        l0_quota = _ri(ps["l0"].get("weekly_quota"))
+        l0_roll  = _ri(ps["l0"].get("rollover"))
+        l0_spent = _ri(ps["l0"].get("spent"))
+        l0_left  = max(0, l0_quota + l0_roll - l0_spent)
+
         l1 = ps["l_month"]["L1"]; l2 = ps["l_month"]["L2"]; l3 = ps["l_month"]["L3"]
-        text = f"{sym}  W {w:.2f}  M {M:.2f}\\n" \
-               f"OCO_w {oco_avail:.2f}  L0_w {l0_avail:.2f}\\n" \
-               f"L1 {l1['left']:.2f}/{l1['spent']:.2f}  L2 {l2['left']:.2f}/{l2['spent']:.2f}  L3 {l3['left']:.2f}/{l3['spent']:.2f}"
-        out.append(text)
+        line = f"{sym}  W {w_i}  M {M_i}
+" \
+               f"OCO_w {oco_left}/{oco_spent}  L0_w {l0_left}/{l0_spent}
+" \
+               f"L1 { _ri(l1['left']) }/{ _ri(l1['spent']) }  L2 { _ri(l2['left']) }/{ _ri(l2['spent']) }  L3 { _ri(l3['left']) }/{ _ri(l3['spent']) }"
+        out.append(line)
     return out
 
 def budget_schedule_text(sd: str):
