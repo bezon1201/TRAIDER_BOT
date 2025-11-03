@@ -277,7 +277,7 @@ async def telegram_webhook(update: Request):
     if text_lower.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
-        _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
+            _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
         except Exception as e:
             reply = f"Ошибка портфеля: {e}"
         await tg_send(chat_id, reply or "Нет данных.")
