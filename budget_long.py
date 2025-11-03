@@ -262,6 +262,7 @@ def budget_per_symbol_texts(sd: str):
         M_i = _ri(4.0 * w)
         ps = (st.get("pairs") or {}).get(sym, {})
         _ensure_pair_state(ps)
+
         oco_quota = _ri(ps["oco"].get("weekly_quota"))
         oco_roll  = _ri(ps["oco"].get("rollover"))
         oco_spent = _ri(ps["oco"].get("spent"))
@@ -273,13 +274,14 @@ def budget_per_symbol_texts(sd: str):
         l0_left  = max(0, l0_quota + l0_roll - l0_spent)
 
         l1 = ps["l_month"]["L1"]; l2 = ps["l_month"]["L2"]; l3 = ps["l_month"]["L3"]
-        line = f"{sym}  W {w_i}  M {M_i}
-" \
-               f"OCO_w {oco_left}/{oco_spent}  L0_w {l0_left}/{l0_spent}
-" \
-               f"L1 { _ri(l1['left']) }/{ _ri(l1['spent']) }  L2 { _ri(l2['left']) }/{ _ri(l2['spent']) }  L3 { _ri(l3['left']) }/{ _ri(l3['spent']) }"
-        out.append(line)
+
+        line1 = f"{sym}  W {w_i}  M {M_i}"
+        line2 = f"OCO_w {oco_left}/{oco_spent}  L0_w {l0_left}/{l0_spent}"
+        line3 = f"L1 { _ri(l1['left']) }/{ _ri(l1['spent']) }  L2 { _ri(l2['left']) }/{ _ri(l2['spent']) }  L3 { _ri(l3['left']) }/{ _ri(l3['spent']) }"
+        text_block = line1 + "\n" + line2 + "\n" + line3
+        out.append(text_block)
     return out
+
 
 def budget_schedule_text(sd: str):
     cfg = load_settings(sd); st = load_state(sd)
