@@ -2,6 +2,7 @@
 import os, json, time, hmac, hashlib, tempfile
 from typing import Dict, List, Tuple
 import httpx
+from metrics_runner import load_pairs
 
 BINANCE_API = "https://api.binance.com"
 
@@ -143,15 +144,34 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
             qty = f"{amt:.7f}"
         return f"{qty} {asset}"
 
+    
+    # Build Spot rows and compute percent allocation among coins from pairs.json (exclude stables like USDC)
+        spot_items = []  # (asset, amount, usd)
+    stables = {"USDT","USDC","BUSD","FDUSD"}
     spot_rows, spot_total = [], 0.0
     for a, amt in sorted(spot.items()):
         price = prices.get(a, 0.0)
-        usd = amt * price if price > 0 else (amt if a in {"USDT","USDC","BUSD","FDUSD"} else 0.0)
+        usd = amt * price if price > 0 else (amt if a in stables else 0.0)
         if usd >= 1.0:
-            spot_rows.append((left_label(a, amt), usd))
+            spot_items.append((a, amt, usd))
             spot_total += usd
 
+    # Calculate denominator from ALL spot assets > $1 excluding only USDC
+    denom = sum(usd for (a, _, usd) in spot_items if a != "USDC")
+
+    # Rebuild spot_rows with percentage for non-USDC assets
+    spot_rows = []
+    for a, amt, usd in spot_items:
+        left = left_label(a, amt)
+        if denom > 0 and a != "USDC":
+            pct = (usd / denom) * 100.0
+            left = f"{left} {pct:.0f}%"
+        spot_rows.append((left, usd))
+
+    # Continue with Earn computation
+# Continue with Earn computation
     earn_rows, earn_total = [], 0.0
+
     for a, amt in sorted(earn.items()):
         price = prices.get(a, 0.0)
         usd = amt * price if price > 0 else (amt if a in {"USDT","USDC","BUSD","FDUSD"} else 0.0)
@@ -172,5 +192,7 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     if earn_rows:
         lines += _format_block("Earn", earn_rows)
 
-    summary = ["```", f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}", "```"]
+    profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
+pct_part = f" - {profit_pct:.1f}%" if invested > 0 else ""
+summary = ["```", f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}", "```"]
     return "\n".join(lines + summary)
