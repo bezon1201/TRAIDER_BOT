@@ -10,6 +10,7 @@ from metrics_runner import start_collector, stop_collector
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
+from budget import handle_budget_command
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -151,7 +152,12 @@ async def telegram_webhook(update: Request):
             await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
             return {"ok": True}
 
-    if text_lower.startswith("/now"):
+    
+    if text_lower.startswith("/budget"):
+        reply = handle_budget_command(text_norm)
+        await tg_send(chat_id, _code(reply))
+        return {"ok": True}
+if text_lower.startswith("/now"):
         _, msg = await run_now()
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
