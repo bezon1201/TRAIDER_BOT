@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 import json
 import httpx
-import re
+
 
 from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
@@ -259,7 +259,7 @@ async def telegram_webhook(update: Request):
                 msg = await sched_run_once()
                 await tg_send(chat_id, msg); return {"ok": True}
             if sub == "set":
-                import re as _re  # local import to avoid top-level churn
+                import re as _re  # local-only
                 txt = text
                 m_int = _re.search(r"interval\s*=\s*(\d+)", txt, _re.I)
                 m_jit = _re.search(r"jitter\s*=\s*(\d+)", txt, _re.I)
@@ -274,6 +274,7 @@ async def telegram_webhook(update: Request):
             await tg_send(chat_id, f"```\n/sched error: {e}\n```")
             return {"ok": True}
 
+    
     if text_lower.startswith("/budget"):
         try:
             init_if_needed(STORAGE_DIR)
@@ -438,7 +439,7 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     fn = filename or os.path.basename(filepath)
     try:
         import httpx
-import re
+
         async with httpx.AsyncClient(timeout=20.0) as client:
             with open(filepath, "rb") as f:
                 form = {"chat_id": str(chat_id)}
