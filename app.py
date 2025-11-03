@@ -166,10 +166,9 @@ async def telegram_webhook(update: Request):
     if text_lower.startswith("/coins"):
         parts = text.split(maxsplit=1)
         if len(parts) == 1:
-            dirp = os.path.join(STORAGE_DIR, "data")
-            files = sorted([f for f in os.listdir(dirp) if f.lower().endswith(".json")]) if os.path.isdir(dirp) else []
-            msg = "Файлы: " + (", ".join(files) if files else "—")
-            await tg_send(chat_id, _code(msg))
+            pairs = load_pairs()
+            reply = "Пары: " + (", ".join(pairs) if pairs else "—")
+            await tg_send(chat_id, _code(reply))
             return {"ok": True}
         else:
             rest = parts[1].strip()
@@ -217,10 +216,8 @@ async def telegram_webhook(update: Request):
         parts = text.split()
         # /mode
         if len(parts) == 1:
-            dirp = os.path.join(STORAGE_DIR, "data")
-            files = sorted([f for f in os.listdir(dirp) if f.lower().endswith(".json")]) if os.path.isdir(dirp) else []
-            msg = "Файлы: " + (", ".join(files) if files else "—")
-            await tg_send(chat_id, _code(msg))
+            summary = list_modes()
+            await tg_send(chat_id, _code(f"Режимы: {summary}"))
             return {"ok": True}
     
 
@@ -234,25 +231,107 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
         # /mode <SYMBOL> <LONG|SHORT>
         if len(parts) >= 3:
-            arg = parts[1].strip()
-        safe = os.path.basename(arg)
-        if not safe.lower().endswith(".json"):
-            safe = f"{safe}.json"
-        candidates = [
-            os.path.join(STORAGE_DIR, "data", safe),
-            os.path.join(STORAGE_DIR, safe),
-        ]
-        if not any(os.path.exists(p) for p in candidates):
-            up = safe.upper()
-            candidates += [
-                os.path.join(STORAGE_DIR, "data", up),
-                os.path.join(STORAGE_DIR, up),
-            ]
-        path = next((p for p in candidates if os.path.exists(p)), None)
-        if not path:
+            sym = parts[1]
+            md  = parts[2]
+            try:
+                sym, md = set_mode(sym, md)
+                await tg_send(chat_id, _code(f"{sym} → {md}"))
+            except ValueError:
+                await tg_send(chat_id, _code("Некорректный режим"))
+            return {"ok": True}
+
+    
+    
+    if text_lower.startswith("/budget"):
+        try:
+            init_if_needed(STORAGE_DIR)
+            parts = text_norm.split()
+            if len(parts) == 1:
+                msg, _ = budget_summary(STORAGE_DIR)
+                await tg_send(chat_id, msg)
+                return {"ok": True}
+            arg = parts[1].upper()
+            m_set = re.match(r"^([A-Z0-9]{3,}USDT|[A-Z0-9]{3,}USDC|[A-Z0-9]{3,}BUSD|[A-Z0-9]{3,}FDUSD)=(\d+(\.\d+)?)$", arg)
+            m_add = re.match(r"^([A-Z0-9]{3,}USDT|[A-Z0-9]{3,}USDC|[A-Z0-9]{3,}BUSD|[A-Z0-9]{3,}FDUSD)([+\-])(\d+(\.\d+)?)$", arg)
+            if m_set:
+                sym = m_set.group(1)
+                val = float(m_set.group(2))
+                old, new = set_weekly(STORAGE_DIR, sym, val)
+                await tg_send(chat_id, f"```\n{sym} weekly budget set: {old:.2f} → {new:.2f}\n```")
+                return {"ok": True}
+            if m_add:
+                sym = m_add.group(1)
+                sign = 1.0 if m_add.group(2) == "+" else -1.0
+                val = float(m_add.group(3)) * sign
+                old, new = add_weekly(STORAGE_DIR, sym, val)
+                await tg_send(chat_id, f"```\n{sym} weekly budget updated: {old:.2f} → {new:.2f}\n```")
+                return {"ok": True}
+            await tg_send(chat_id, "```\nUsage:\n/budget\n/budget BTCUSDC=100\n/budget BTCUSDC+50\n/budget BTCUSDC-50\n```")
+            return {"ok": True}
+        except Exception as e:
+            await tg_send(chat_id, f"```\n/budget error: {e}\n```")
+            return {"ok": True}
+
+    if text_lower.startswith("/tz"):
+        try:
+            init_if_needed(STORAGE_DIR)
+            m = re.match(r"^/tz\s*([+\-]?\d{1,2})$", text_lower)
+            if not m:
+                await tg_send(chat_id, "```\nUsage: /tz+10  or  /tz-2\n```")
+                return {"ok": True}
+            tz = int(m.group(1))
+            if tz < -14 or tz > 14:
+                await tg_send(chat_id, "```\nTZ must be between -14 and +14\n```")
+                return {"ok": True}
+            set_timezone(STORAGE_DIR, tz)
+            await tg_send(chat_id, f"```\nTZ updated to UTC{tz:+d}\n```")
+            return {"ok": True}
+        except Exception as e:
+            await tg_send(chat_id, f"```\n/tz error: {e}\n```")
+            return {"ok": True}
+
+    # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
+    if text_lower.startswith("/") and len(text_norm) > 2:
+        sym = text_upper[1:].split()[0].upper()
+        # ignore known command prefixes
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","JSON","INVESTED","INVEST","MARKET"):
+            msg = build_symbol_message(sym)
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+
+    if text_lower.startswith("/market"):
+        parts = text.split()
+        # list all
+        if len(parts) == 1:
+            pairs = load_pairs()
+            if not pairs:
+                await tg_send(chat_id, _code("Пары: —"))
+                return {"ok": True}
+            lines = [_market_line_for(sym) for sym in pairs]
+            await tg_send(chat_id, _code("\n".join(lines)))
+            return {"ok": True}
+        # specific symbol
+        sym = parts[1].strip().upper()
+        await tg_send(chat_id, _code(_market_line_for(sym)))
+        return {"ok": True}
+
+    
+    if text_lower.startswith("/json"):
+        parts = text.split()
+        # /json -> list all json files in STORAGE_DIR
+        if len(parts) == 1:
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
+            msg = "Файлы: " + (", ".join(files) if files else "—")
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+        # /json <PAIR> -> send /data/<PAIR>.json as document
+        sym = parts[1].strip().upper()
+        safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
+        path = os.path.join(STORAGE_DIR, safe)
+        if not os.path.exists(path):
             await tg_send(chat_id, _code("Файл не найден"))
             return {"ok": True}
-        await tg_send_file(chat_id, path, filename=os.path.basename(path), caption=os.path.basename(path))
+        await tg_send_file(chat_id, path, filename=safe, caption=safe)
         return {"ok": True}
 
     if text_lower.startswith("/portfolio"):
@@ -343,19 +422,13 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
 def _snapshot_market_modes(storage_dir: str) -> dict:
     modes = {}
     try:
-        pairs = json.load(open(os.path.join(storage_dir, "data", "pairs.json"), "r", encoding="utf-8"))
+        pairs = json.load(open(os.path.join(storage_dir, "data/pairs.json"), "r", encoding="utf-8"))
     except Exception:
-        try:
-            pairs = json.load(open(os.path.join(storage_dir, "pairs.json"), "r", encoding="utf-8"))
-        except Exception:
-            pairs = []
+        pairs = []
     for sym in pairs or []:
         try:
-            p = os.path.join(storage_dir, "data", f"{sym.upper()}.json")
-            if not os.path.exists(p):
-                p = os.path.join(storage_dir, f"{sym.upper()}.json")
-            j = json.load(open(p, "r", encoding="utf-8"))
-            modes[sym.upper()] = (j.get("market_mode") or j.get("mode") or "RANGE").upper()
+            j = json.load(open(os.path.join(storage_dir, f"data/{sym}.json"), "r", encoding="utf-8"))
+            modes[sym.upper()] = (j.get("market_mode") or "RANGE").upper()
         except Exception:
             modes[sym.upper()] = "RANGE"
     return modes
