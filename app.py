@@ -5,53 +5,58 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import FastAPI, Request
 
-# ===== Optional helpers (soft imports). If module is missing, we fallback gracefully.
-def _soft_import(attr_path: str):
+# ======================
+#  Soft-import utilities
+# ======================
+
+def _soft_import(path: str):
     """
-    Try to import "module:function_or_name". Return callable or object, or None.
+    Import "module:name" and return attribute or None if missing.
     """
     try:
-        mod_name, name = attr_path.split(":")
+        mod_name, name = path.split(":")
         mod = __import__(mod_name, fromlist=[name])
         return getattr(mod, name, None)
     except Exception:
         return None
 
-# symbol card builder (required in our flows)
-_build_symbol_message = _soft_import("symbol_info:build_symbol_message")
+# Required/optional project hooks
+_build_symbol_message   = _soft_import("symbol_info:build_symbol_message")     # REQUIRED for /SYMBOL
+_handle_budget_command  = _soft_import("budget:handle_budget_command")        # for /budget
 
-# budget command handler (new)
-_handle_budget_command = _soft_import("budget:handle_budget_command")
-
-# metrics runner (optional hooks)
-_start_collector = _soft_import("metrics_runner:start_collector")
-_stop_collector  = _soft_import("metrics_runner:stop_collector")
-
-# Optional domain-specific formatters if you have them in your project
+# Optional (если нет — вернём понятное сообщение)
 _build_market_message    = _soft_import("market_info:build_market_message")
 _build_mode_message      = _soft_import("mode_info:build_mode_message")
 _build_portfolio_message = _soft_import("portfolio_info:build_portfolio_message")
-_build_coins_message     = _soft_import("pairs:build_coins_message")  # or any module you use
+_build_coins_message     = _soft_import("pairs:build_coins_message")
+_start_collector         = _soft_import("metrics_runner:start_collector")
+_stop_collector          = _soft_import("metrics_runner:stop_collector")
 
-# ===== Telegram basics
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+# ======================
+#  Telegram wiring
+# ======================
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_API   = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 def _code(s: str) -> str:
-    # Все сообщения в активном чате — через тройные одинарные кавычки, как вы просили.
+    # Все сообщения в активном чате — только в ''' ... '''
     return f"'''\n{s}\n'''"
 
 async def tg_send(chat_id: int, text: str) -> None:
+    # Если токен не задан — тихо выходим (иначе будет 401)
     if not TELEGRAM_TOKEN:
         return
     async with httpx.AsyncClient(timeout=10) as client:
-        # We do not use parse_mode to avoid formatting surprises with quotes
         await client.post(f"{TELEGRAM_API}/sendMessage", json={
             "chat_id": chat_id,
             "text": text
         })
 
-# ===== Storage helpers
+# ======================
+#  Storage helpers
+# ======================
+
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 def _coin_path(symbol: str) -> str:
@@ -64,17 +69,21 @@ def _read_json(path: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-# ===== FastAPI app
+# ======================
+#  FastAPI app
+# ======================
+
 app = FastAPI()
 
 @app.get("/")
 async def root():
+    # HEAD / даёт 405 — это ок. GET / — 200 OK.
     return {"ok": True}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    message = data.get("message") or data.get("edited_message") or {}
+    payload = await request.json()
+    message = payload.get("message") or payload.get("edited_message") or {}
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
     if chat_id is None:
@@ -84,12 +93,12 @@ async def telegram_webhook(request: Request):
     if not text:
         return {"ok": True}
 
-    # ---- Normalization (case-insensitive commands and tickers)
+    # ---------- Регистронезависимость ----------
     text_norm  = text
     text_lower = text_norm.lower()
     text_upper = text_norm.upper()
 
-    # ---- /budget (case-insensitive)
+    # ---------- /budget ----------
     if text_lower.startswith("/budget"):
         if _handle_budget_command is None:
             await tg_send(chat_id, _code("Budget module missing"))
@@ -98,15 +107,14 @@ async def telegram_webhook(request: Request):
         await tg_send(chat_id, _code(reply))
         return {"ok": True}
 
-    # ---- /now (case-insensitive) – optional: trigger your collector if present
+    # ---------- /now ----------
     if text_lower.startswith("/now"):
-        # We only acknowledge; real collection is handled by your collector
-        # If you want to trigger manually, uncomment:
+        # Если хочешь — тут можно триггерить сбор метрик
         # if _start_collector: _start_collector()
         await tg_send(chat_id, _code("ok"))
         return {"ok": True}
 
-    # ---- /market
+    # ---------- /market ----------
     if text_lower.startswith("/market"):
         if _build_market_message:
             try:
@@ -118,7 +126,7 @@ async def telegram_webhook(request: Request):
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
-    # ---- /mode
+    # ---------- /mode ----------
     if text_lower.startswith("/mode"):
         if _build_mode_message:
             try:
@@ -130,7 +138,7 @@ async def telegram_webhook(request: Request):
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
-    # ---- /portfolio
+    # ---------- /portfolio ----------
     if text_lower.startswith("/portfolio"):
         if _build_portfolio_message:
             try:
@@ -142,7 +150,7 @@ async def telegram_webhook(request: Request):
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
-    # ---- /coins
+    # ---------- /coins ----------
     if text_lower.startswith("/coins"):
         if _build_coins_message:
             try:
@@ -150,7 +158,7 @@ async def telegram_webhook(request: Request):
             except Exception as e:
                 msg = f"coins: error {e}"
         else:
-            # Fallback: read /data/pairs.json and list
+            # Фоллбек: прочитаем pairs.json и перечислим пары
             pairs_path = os.path.join(STORAGE_DIR, "pairs.json")
             pairs = _read_json(pairs_path) or {}
             arr = pairs if isinstance(pairs, list) else pairs.get("pairs") or pairs.get("symbols") or []
@@ -161,27 +169,24 @@ async def telegram_webhook(request: Request):
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
-    # ---- /json <SYMBOL> – dumps stored JSON
+    # ---------- /json <SYMBOL> ----------
     if text_lower.startswith("/json"):
         parts = text_norm.split(maxsplit=1)
         if len(parts) == 1:
             await tg_send(chat_id, _code("Usage: /json SYMBOL"))
             return {"ok": True}
         sym = parts[1].strip().upper()
-        path = _coin_path(sym)
-        obj = _read_json(path)
-        if obj is None:
+        data = _read_json(_coin_path(sym))
+        if data is None:
             await tg_send(chat_id, _code(f"{sym}\nNo data"))
         else:
-            # compact-ish, but readable
-            await tg_send(chat_id, _code(f"{sym}\n" + json.dumps(obj, ensure_ascii=False, indent=2)))
+            await tg_send(chat_id, _code(f"{sym}\n" + json.dumps(data, ensure_ascii=False, indent=2)))
         return {"ok": True}
 
-    # ---- Symbol shortcut: /BTCUSDC, /ethusdc, etc (case-insensitive)
+    # ---------- Шорткат: /BTCUSDC, /ethusdc и т.п. ----------
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
-
-        # Known service commands to ignore in this branch
+        # Сервисные команды пропускаем:
         if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "JSON", "INVESTED", "INVEST", "MARKET", "BUDGET"):
             if _build_symbol_message is None:
                 await tg_send(chat_id, _code("symbol_info missing"))
@@ -193,6 +198,6 @@ async def telegram_webhook(request: Request):
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
 
-    # Default: echo plain text in code block for safety
+    # ---------- По умолчанию: эхо ----------
     await tg_send(chat_id, _code(text))
     return {"ok": True}
