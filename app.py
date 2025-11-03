@@ -327,7 +327,10 @@ async def telegram_webhook(update: Request):
         # /json <PAIR> -> send /data/<PAIR>.json as document
         sym = parts[1].strip().upper()
         safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
-        path = os.path.join(STORAGE_DIR, safe)
+        path = os.path.join(STORAGE_DIR, "data", safe)
+        if not os.path.exists(path):
+            # fallback to root for legacy
+            path = os.path.join(STORAGE_DIR, safe)
         if not os.path.exists(path):
             await tg_send(chat_id, _code("Файл не найден"))
             return {"ok": True}
