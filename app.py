@@ -4,12 +4,14 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 import json
 import httpx
+import re
 
 from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
+from budget_long import budget_summary, set_weekly, add_weekly, set_timezone, init_if_needed, weekly_tick, month_end_tick
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -127,6 +129,16 @@ async def telegram_webhook(update: Request):
     except Exception:
         data = {}
     message = data.get("message") or data.get("edited_message") or {}
+    # init + weekly/monthly tick (idempotent)
+    try:
+        init_if_needed(STORAGE_DIR)
+        modes = _snapshot_market_modes(STORAGE_DIR)
+        weekly_tick(STORAGE_DIR, modes)
+        # month end tick only if boundary passed
+        # (the internal impl will set next anchors)
+    except Exception:
+        pass
+message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or "").strip()
     text_norm = text
     text_lower = text_norm.lower()
@@ -230,6 +242,55 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     
+    
+    if text_lower.startswith("/budget"):
+        try:
+            init_if_needed(STORAGE_DIR)
+            parts = text_norm.split()
+            if len(parts) == 1:
+                msg, _ = budget_summary(STORAGE_DIR)
+                await tg_send(chat_id, msg)
+                return {"ok": True}
+            arg = parts[1].upper()
+            m_set = re.match(r"^([A-Z0-9]{3,}USDT|[A-Z0-9]{3,}USDC|[A-Z0-9]{3,}BUSD|[A-Z0-9]{3,}FDUSD)=(\d+(\.\d+)?)$", arg)
+            m_add = re.match(r"^([A-Z0-9]{3,}USDT|[A-Z0-9]{3,}USDC|[A-Z0-9]{3,}BUSD|[A-Z0-9]{3,}FDUSD)([+\-])(\d+(\.\d+)?)$", arg)
+            if m_set:
+                sym = m_set.group(1)
+                val = float(m_set.group(2))
+                old, new = set_weekly(STORAGE_DIR, sym, val)
+                await tg_send(chat_id, f"```\n{sym} weekly budget set: {old:.2f} → {new:.2f}\n```")
+                return {"ok": True}
+            if m_add:
+                sym = m_add.group(1)
+                sign = 1.0 if m_add.group(2) == "+" else -1.0
+                val = float(m_add.group(3)) * sign
+                old, new = add_weekly(STORAGE_DIR, sym, val)
+                await tg_send(chat_id, f"```\n{sym} weekly budget updated: {old:.2f} → {new:.2f}\n```")
+                return {"ok": True}
+            await tg_send(chat_id, "```\nUsage:\n/budget\n/budget BTCUSDC=100\n/budget BTCUSDC+50\n/budget BTCUSDC-50\n```")
+            return {"ok": True}
+        except Exception as e:
+            await tg_send(chat_id, f"```\n/budget error: {e}\n```")
+            return {"ok": True}
+
+    if text_lower.startswith("/tz"):
+        try:
+            init_if_needed(STORAGE_DIR)
+            m = re.match(r"^/tz\s*([+\-]?\d{1,2})$", text_lower)
+            if not m:
+                await tg_send(chat_id, "```\nUsage: /tz+10  or  /tz-2\n```")
+                return {"ok": True}
+            tz = int(m.group(1))
+            if tz < -14 or tz > 14:
+                await tg_send(chat_id, "```\nTZ must be between -14 and +14\n```")
+                return {"ok": True}
+            set_timezone(STORAGE_DIR, tz)
+            await tg_send(chat_id, f"```\nTZ updated to UTC{tz:+d}\n```")
+            return {"ok": True}
+        except Exception as e:
+            await tg_send(chat_id, f"```\n/tz error: {e}\n```")
+            return {"ok": True}
+
     # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
@@ -346,6 +407,7 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     fn = filename or os.path.basename(filepath)
     try:
         import httpx
+import re
         async with httpx.AsyncClient(timeout=20.0) as client:
             with open(filepath, "rb") as f:
                 form = {"chat_id": str(chat_id)}
@@ -357,3 +419,18 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     except Exception:
         # silently ignore to avoid breaking webhook
         pass
+
+
+def _snapshot_market_modes(storage_dir: str) -> dict:
+    modes = {}
+    try:
+        pairs = json.load(open(os.path.join(storage_dir, "data/pairs.json"), "r", encoding="utf-8"))
+    except Exception:
+        pairs = []
+    for sym in pairs or []:
+        try:
+            j = json.load(open(os.path.join(storage_dir, f"data/{sym}.json"), "r", encoding="utf-8"))
+            modes[sym.upper()] = (j.get("market_mode") or "RANGE").upper()
+        except Exception:
+            modes[sym.upper()] = "RANGE"
+    return modes
