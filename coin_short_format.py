@@ -18,5 +18,5 @@ def build_short_card(data: dict) -> str:
         mtext = "DOWN⬇️"
     else:
         mtext = "RANGE🔄"
-    lines = [f"{sym}", f"Price {_i(price)}$ {mtext} Mode {mode}"]
+    lines = [f"{sym}", f"Price {_i(price)}$ {mtext} {mode}"]
     return "\n".join(lines)
