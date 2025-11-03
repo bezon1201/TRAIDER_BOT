@@ -2,8 +2,8 @@
 import os, json, time, datetime
 from typing import Dict, Tuple
 
-SETTINGS = "data/budget_long.json"
-STATE    = "data/budget_long_state.json"
+SETTINGS = "budget_long.json"
+STATE = "budget_long_state.json"
 
 DEFAULT_SETTINGS = {"version":1,"tz_offset_hours":0,"cycle_weeks":4,"pairs":{}}
 DEFAULT_STATE    = {"tz_offset_hours":0,"week_index":1,"week_start_utc":None,"next_week_start_utc":None,"month_start_utc":None,"month_end_utc":None,"last_week_roll_utc":None,"last_month_roll_utc":None,"pairs":{}}
@@ -30,10 +30,29 @@ def _read_json(path: str, default: dict) -> dict:
     except Exception:
         return json.loads(json.dumps(default))
 
-def load_settings(sd: str) -> dict: return _read_json(os.path.join(sd, SETTINGS), DEFAULT_SETTINGS)
+def load_settings(sd: str) -> dict:
+    # prefer root; fallback to legacy data/
+    root_path = os.path.join(sd, SETTINGS)
+    data_path = os.path.join(sd, "data", os.path.basename(SETTINGS))
+    cfg = _read_json(root_path, DEFAULT_SETTINGS)
+    if cfg == DEFAULT_SETTINGS:
+        legacy = _read_json(data_path, DEFAULT_SETTINGS)
+        if legacy != DEFAULT_SETTINGS:
+            # migrate legacy to root for visibility in /json
+            _atomic_write(root_path, legacy)
+            cfg = legacy
+    return cfg
 def save_settings(sd: str, cfg: dict): _atomic_write(os.path.join(sd, SETTINGS), cfg)
 def load_state(sd: str) -> dict:
-    st = _read_json(os.path.join(sd, STATE), DEFAULT_STATE)
+    # prefer root; fallback to legacy data/
+    root_state = os.path.join(sd, STATE)
+    data_state = os.path.join(sd, "data", os.path.basename(STATE))
+    st = _read_json(root_state, DEFAULT_STATE)
+    if st == DEFAULT_STATE:
+        legacy = _read_json(data_state, DEFAULT_STATE)
+        if legacy != DEFAULT_STATE:
+            _atomic_write(root_state, legacy)
+            st = legacy
     st["tz_offset_hours"] = int(load_settings(sd).get("tz_offset_hours",0) or 0)
     return st
 def save_state(sd: str, st: dict): _atomic_write(os.path.join(sd, STATE), st)
@@ -50,14 +69,23 @@ def _parse_pair(pair: str):
     return p, ""
 
 def _core_set(sd: str) -> set:
-    try: pairs = _read_json(os.path.join(sd, "data/pairs.json"), [])
-    except Exception: pairs = []
+    try:
+        pairs = _read_json(os.path.join(sd, "pairs.json"), [])
+        if pairs == []:
+            # fallback legacy path
+            pairs = _read_json(os.path.join(sd, "data", "pairs.json"), [])
+    except Exception:
+        pairs = []
     out = set()
     for sym in pairs or []:
         base, suf = _parse_pair(sym)
         if not base or suf not in STABLES: continue
         try:
-            j = _read_json(os.path.join(sd, f"data/{sym.upper()}.json"), {})
+            # root first
+            j = _read_json(os.path.join(sd, f"{sym.upper()}.json"), {})
+            if j == {}:
+                # fallback legacy data/<pair>.json
+                j = _read_json(os.path.join(sd, "data", f"{sym.upper()}.json"), {})
             if (j.get("trade_mode") or "").upper() == "LONG":
                 out.add(sym.upper())
         except Exception: pass
