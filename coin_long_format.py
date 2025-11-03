@@ -1,6 +1,6 @@
 import os
 from budget_long import budget_numbers_for_symbol
-DEFAULT_SD = os.getenv('STORAGE_DIR') or '.'
+DEFAULT_SD = os.getenv('STORAGE_DIR', '/data') or '/data'
 
 
 def _i(x):
@@ -11,6 +11,11 @@ def _i(x):
 
 def build_long_card(data: dict) -> str:
     sym = data.get("symbol", "")
+    SD = DEFAULT_SD
+    try:
+        b = budget_numbers_for_symbol(SD, sym)
+    except Exception:
+        b = {'W':0,'M':0,'oco_left':0,'l0_left':0,'L1':0,'L2':0,'L3':0}
     price = data.get("price") or (data.get("tf") or {}).get("12h", {}).get("close_last")
     market_mode = data.get("market_mode")
     mode = "LONG📈"
@@ -23,7 +28,8 @@ def build_long_card(data: dict) -> str:
     else:
         mtext = "RANGE🔄"
 
-    lines = [f"{sym}", f"Price {_i(price)}$ {mtext} {mode}"]
+    head = f"{sym}  W {int(b.get('W',0))}  M {int(b.get('M',0))}"
+    lines = [head, f"Price {_i(price)}$ {mtext} {mode}"]
 
     oco = data.get("oco") or {}
     flags = data.get("flags") or {}
