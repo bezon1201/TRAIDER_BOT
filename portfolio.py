@@ -169,7 +169,6 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         spot_rows.append((left, usd))
 
     # Continue with Earn computation
-# Continue with Earn computation
     earn_rows, earn_total = [], 0.0
 
     for a, amt in sorted(earn.items()):
@@ -193,6 +192,6 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         lines += _format_block("Earn", earn_rows)
 
     profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
-pct_part = f" - {profit_pct:.1f}%" if invested > 0 else ""
-summary = ["```", f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}", "```"]
+    pct_part = f" - {profit_pct:.1f}%" if invested > 0 else ""
+    summary = ["```", f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}", "```"]
     return "\n".join(lines + summary)
