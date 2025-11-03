@@ -244,7 +244,6 @@ async def telegram_webhook(update: Request):
 
     
     
-    
     if text_lower.startswith("/sched"):
         # /sched, /sched on|off|run|status, /sched set interval=60 jitter=3
         parts = text.split()
@@ -260,10 +259,10 @@ async def telegram_webhook(update: Request):
                 msg = await sched_run_once()
                 await tg_send(chat_id, msg); return {"ok": True}
             if sub == "set":
-                # parse key=val pairs from the original text (not lowered numbers)
+                import re as _re  # local import to avoid top-level churn
                 txt = text
-                m_int = re.search(r"interval\s*=\s*(\d+)", txt, re.I)
-                m_jit = re.search(r"jitter\s*=\s*(\d+)", txt, re.I)
+                m_int = _re.search(r"interval\s*=\s*(\d+)", txt, _re.I)
+                m_jit = _re.search(r"jitter\s*=\s*(\d+)", txt, _re.I)
                 iv = int(m_int.group(1)) if m_int else None
                 jv = int(m_jit.group(1)) if m_jit else None
                 msg = await sched_set(interval=iv, jitter=jv)
