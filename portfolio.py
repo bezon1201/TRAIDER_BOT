@@ -192,8 +192,15 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     denom = sum(usd for (a, _, usd) in spot_items if a in core)
 
     # Append % only for BTC/ETH; BNB & USDC shown without %
+    def _cat(sym: str) -> int:
+        if sym in core:
+            return 0
+        if sym in stables:
+            return 2
+        return 1
+    ordered = sorted(spot_items, key=lambda x: (_cat(x[0]), -x[2], x[0]))
     spot_rows = []
-    for a, amt, usd in spot_items:
+    for a, amt, usd in ordered:
         left = left_label(a, amt)
         if denom > 0 and a in core:
             pct = (usd / denom) * 100.0
