@@ -1,9 +1,9 @@
 
-import os, json, asyncio, time
+import os, json, asyncio, time, inspect
 from datetime import datetime, timezone
 from typing import Optional
 
-from budget_long import init_if_needed, load_state as _load_budget_state, weekly_tick, month_end_tick, load_settings as _load_budget_settings
+from budget_long import init_if_needed, load_state as _load_budget_state, weekly_tick, month_end_tick
 from metrics_runner import collect_all_with_micro_jitter
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
@@ -15,11 +15,10 @@ _lock = asyncio.Lock()
 DEFAULT_STATE = {
     "enabled": False,
     "interval_sec": 60,
+    "jitter_max_sec": 3,
     "last_run_utc": None,
     "last_ok_utc": None,
     "last_error": None,
-    "last_week_anchor": None,
-    "last_month_anchor": None,
     "updated_last": 0,
 }
 
@@ -37,64 +36,65 @@ def _write_json(path: str, data: dict):
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
-def _iso(dt: float) -> str:
-    return datetime.fromtimestamp(dt, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def _parse_iso(s: str) -> float:
     try:
-        # naive ISO Z
         return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
     except Exception:
         return 0.0
 
 def _log(*args):
     try:
-        msg = " ".join(str(a) for a in args)
-        print(f"[sched] {msg}", flush=True)
+        print("[sched]", *args, flush=True)
     except Exception:
         pass
 
 def _load_state() -> dict:
     st = _read_json(STATE_PATH, DEFAULT_STATE)
-    # guard types
     st.setdefault("enabled", False)
     st.setdefault("interval_sec", 60)
+    st.setdefault("jitter_max_sec", 3)
     return st
 
 def _save_state(st: dict):
     _write_json(STATE_PATH, st)
 
 async def _tick() -> int:
-    # weekly/monthly anchors
     init_if_needed(STORAGE_DIR)
     bstate = _load_budget_state(STORAGE_DIR)
     now = time.time()
 
-    # Weekly roll
+    # Weekly
     try:
         nxt_week = bstate.get("next_week_start_utc")
         if nxt_week:
-            nxt_week_ts = _parse_iso(nxt_week)
-            if now >= nxt_week_ts - 1:  # small guard
+            if now >= _parse_iso(nxt_week) - 1:
                 _log("weekly_tick due → running")
                 weekly_tick(STORAGE_DIR)
     except Exception as e:
         _log("weekly_tick error:", e)
 
-    # Monthly roll
+    # Monthly
     try:
         month_end = bstate.get("month_end_utc")
         if month_end:
-            me_ts = _parse_iso(month_end)
-            if now >= me_ts - 1:
+            if now >= _parse_iso(month_end) - 1:
                 _log("month_end_tick due → running")
                 month_end_tick(STORAGE_DIR)
     except Exception as e:
         _log("month_end_tick error:", e)
 
-    # Prices/flags refresh (no posts)
+    # Refresh pairs (no posts)
+    st = _load_state()
+    jitter = int(st.get("jitter_max_sec", 3) or 0)
     try:
-        n = await collect_all_with_micro_jitter()
+        sig = inspect.signature(collect_all_with_micro_jitter)
+        if "jitter_max_sec" in sig.parameters:
+            n = await collect_all_with_micro_jitter(jitter_max_sec=jitter)
+        else:
+            n = await collect_all_with_micro_jitter()
         return int(n or 0)
     except Exception as e:
         _log("collect error:", e)
@@ -117,12 +117,10 @@ async def _loop():
         await asyncio.sleep(interval)
 
 async def ensure_scheduler_started():
-    """Start background task if enabled and not running."""
     global _task
     async with _lock:
         if _task and not _task.done():
             return
-        # Always create the task; it will idle while disabled
         _task = asyncio.create_task(_loop())
         _log("background task started")
 
@@ -146,9 +144,19 @@ async def sched_status():
     st = _load_state()
     lines = [
         f"enabled: {st.get('enabled', False)}",
-        f"interval: {st.get('interval_sec', 60)}s",
+        f"interval: {int(st.get('interval_sec', 60) or 60)}s",
+        f"jitter:   {int(st.get('jitter_max_sec', 3) or 0)}s",
         f"last_run: {st.get('last_run_utc') or '—'}",
         f"last_ok:  {st.get('last_ok_utc') or '—'}",
-        f"updated_last: {st.get('updated_last', 0)}",
+        f"updated_last: {int(st.get('updated_last', 0) or 0)}",
     ]
     return "```\n" + "\n".join(lines) + "\n```"
+
+async def sched_set(interval: int = None, jitter: int = None):
+    st = _load_state()
+    if interval is not None:
+        st["interval_sec"] = max(10, int(interval))
+    if jitter is not None:
+        st["jitter_max_sec"] = max(0, int(jitter))
+    _save_state(st)
+    return await sched_status()

@@ -9,7 +9,7 @@ import re
 from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
 from now_command import run_now
-from scheduler import sched_on, sched_off, sched_run_once, sched_status, ensure_scheduler_started
+from scheduler import sched_on, sched_off, sched_run_once, sched_status, sched_set, ensure_scheduler_started
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
 from budget_long import budget_summary, set_weekly, add_weekly, set_timezone, init_if_needed, weekly_tick, month_end_tick
@@ -246,17 +246,27 @@ async def telegram_webhook(update: Request):
     
     
     if text_lower.startswith("/sched"):
-        parts = text_lower.split()
-        cmd = parts[1] if len(parts) > 1 else "status"
+        # /sched, /sched on|off|run|status, /sched set interval=60 jitter=3
+        parts = text.split()
+        sub = parts[1].lower() if len(parts) > 1 else "status"
         try:
-            if cmd == "on":
+            if sub == "on":
                 msg = await sched_on()
                 await tg_send(chat_id, msg); return {"ok": True}
-            if cmd == "off":
+            if sub == "off":
                 msg = await sched_off()
                 await tg_send(chat_id, msg); return {"ok": True}
-            if cmd == "run":
+            if sub == "run":
                 msg = await sched_run_once()
+                await tg_send(chat_id, msg); return {"ok": True}
+            if sub == "set":
+                # parse key=val pairs from the original text (not lowered numbers)
+                txt = text
+                m_int = re.search(r"interval\s*=\s*(\d+)", txt, re.I)
+                m_jit = re.search(r"jitter\s*=\s*(\d+)", txt, re.I)
+                iv = int(m_int.group(1)) if m_int else None
+                jv = int(m_jit.group(1)) if m_jit else None
+                msg = await sched_set(interval=iv, jitter=jv)
                 await tg_send(chat_id, msg); return {"ok": True}
             # default: status
             msg = await sched_status()

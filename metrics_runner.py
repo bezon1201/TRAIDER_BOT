@@ -11,13 +11,12 @@ STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 # ---------- basic io ----------
 def load_pairs(storage_dir: str = STORAGE_DIR) -> List[str]:
-    # try both "<sd>/pairs.json" and "<sd>/data/pairs.json"
-    candidates = [os.path.join(storage_dir, "pairs.json"), os.path.join(storage_dir, "data", "pairs.json")]
-    path = None
-    for p in candidates:
-        if os.path.exists(p):
-            path = p; break
-    if not path:
+    # prefer "<sd>/pairs.json", fallback "<sd>/data/pairs.json"
+    for candidate in (os.path.join(storage_dir, "pairs.json"), os.path.join(storage_dir, "data", "pairs.json")):
+        if os.path.exists(candidate):
+            path = candidate
+            break
+    else:
         return []
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -28,7 +27,7 @@ def load_pairs(storage_dir: str = STORAGE_DIR) -> List[str]:
     for x in data:
         s = str(x).strip().upper()
         if not s or s in seen: continue
-        if s.endswith("USDC") or s.endswith("USDT") or s.endswith("BUSD") or s.endswith("FDUSD"):
+        if s.endswith(("USDC","USDT","BUSD","FDUSD")):
             seen.add(s); out.append(s)
     return out
     except Exception:
@@ -321,18 +320,9 @@ async def collect_all_no_jitter() -> int:
     return n
 
 
-# --- scheduler integration ---
-_scheduler_task = None
-
+# --- compatibility stubs (no background collector) ---
 async def start_collector():
-    # Start background scheduler task (it idles if disabled)
-    try:
-        from scheduler import ensure_scheduler_started
-        await ensure_scheduler_started()
-    except Exception:
-        pass
     return None
 
 async def stop_collector():
-    # Nothing to do: background task is detached and will exit with process
     return None
