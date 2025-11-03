@@ -152,8 +152,20 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     if text_lower.startswith("/now"):
-        _, msg = await run_now()
+        count, msg = await run_now()
         await tg_send(chat_id, _code(msg))
+        # After update, send per-symbol messages (one message per ticker)
+        try:
+            pairs = load_pairs()
+        except Exception:
+            pairs = []
+        for sym in (pairs or []):
+            try:
+                smsg = build_symbol_message(sym)
+                await tg_send(chat_id, _code(smsg))
+            except Exception:
+                # Continue even if one symbol fails to render
+                pass
         return {"ok": True}
 
     

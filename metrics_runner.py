@@ -285,6 +285,24 @@ async def _collect_one_stub(symbol: str):
     _write_json_atomic(path, data)
 
 # public entry for /now (no jitter)
+
+# public entry for /now (micro jitter to avoid burst hitting Binance)
+async def collect_all_with_micro_jitter(min_ms: int = 120, max_ms: int = 360) -> int:
+    pairs = load_pairs()
+    if not pairs:
+        return 0
+    n = 0
+    for i, sym in enumerate(pairs):
+        await _collect_one_stub(sym)
+        n += 1
+        # micro sleep between symbols to avoid hammering remote APIs
+        try:
+            delay = random.uniform(float(min_ms), float(max_ms)) / 1000.0
+            await asyncio.sleep(delay)
+        except Exception:
+            # do not fail the whole /now if sleep fails
+            pass
+    return n
 async def collect_all_no_jitter() -> int:
     pairs = load_pairs()
     if not pairs:
