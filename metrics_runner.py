@@ -10,30 +10,37 @@ import httpx
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 # ---------- basic io ----------
+
 def load_pairs(storage_dir: str = STORAGE_DIR) -> List[str]:
-    # prefer "<sd>/pairs.json", fallback "<sd>/data/pairs.json"
-    for candidate in (os.path.join(storage_dir, "pairs.json"), os.path.join(storage_dir, "data", "pairs.json")):
+    """
+    Load trade pairs from JSON. Prefer "<storage_dir>/pairs.json",
+    fallback to "<storage_dir>/data/pairs.json". Return only *quote*-USDC/USDT/BUSD/FDUSD pairs,
+    uppercase, unique, preserving order.
+    """
+    path = None
+    for candidate in (
+        os.path.join(storage_dir, "pairs.json"),
+        os.path.join(storage_dir, "data", "pairs.json"),
+    ):
         if os.path.exists(candidate):
             path = candidate
             break
-    else:
+    if not path:
         return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f) or []
     except Exception:
         return []
-    out=[]; seen=set()
+    out, seen = [], set()
     for x in data:
         s = str(x).strip().upper()
-        if not s or s in seen: continue
+        if not s or s in seen:
+            continue
         if s.endswith(("USDC","USDT","BUSD","FDUSD")):
-            seen.add(s); out.append(s)
+            seen.add(s)
+            out.append(s)
     return out
-    except Exception:
-        return []
-    return []
-
 def _coin_file(symbol: str, storage_dir: str = STORAGE_DIR) -> str:
     os.makedirs(storage_dir, exist_ok=True)
     return os.path.join(storage_dir, f"{symbol}.json")
