@@ -138,7 +138,6 @@ async def telegram_webhook(update: Request):
         # (the internal impl will set next anchors)
     except Exception:
         pass
-message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or "").strip()
     text_norm = text
     text_lower = text_norm.lower()
