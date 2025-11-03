@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse  # добавлено для HEAD /
 
 # ---------- soft imports ----------
 def _soft_import(path: str):
@@ -25,11 +26,11 @@ _start_collector         = _soft_import("metrics_runner:start_collector")
 _stop_collector          = _soft_import("metrics_runner:stop_collector")
 
 # ---------- telegram ----------
+# НЕ МЕНЯЛ: как было в 48
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_API   = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 def _code(s: str) -> str:
-    # Все ответы — строго в тройных одинарных кавычках
     return f"'''\n{s}\n'''"
 
 async def tg_send(chat_id: int, text: str) -> None:
@@ -57,6 +58,10 @@ app = FastAPI()
 @app.get("/")
 async def root():
     return {"ok": True}
+
+@app.head("/")
+async def head():
+    return PlainTextResponse("ok")
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
