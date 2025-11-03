@@ -9,9 +9,10 @@ import re
 from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
 from now_command import run_now
+from scheduler import sched_on, sched_off, sched_run_once, sched_status, ensure_scheduler_started
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
-from budget_long import budget_summary, set_weekly, add_weekly, set_timezone, init_if_needed, weekly_tick, month_end_tick, manual_reset, budget_per_symbol_texts, budget_schedule_text
+from budget_long import budget_summary, set_weekly, add_weekly, set_timezone, init_if_needed, weekly_tick, month_end_tick
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -113,6 +114,7 @@ async def _binance_ping() -> str:
 @app.on_event("startup")
 async def on_startup():
     ping = await _binance_ping()
+    await ensure_scheduler_started()
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     msg = f"{now_utc} Бот запущен\nBinance connection: {ping}"
     if ADMIN_CHAT_ID:
@@ -242,23 +244,31 @@ async def telegram_webhook(update: Request):
 
     
     
+    
+    if text_lower.startswith("/sched"):
+        parts = text_lower.split()
+        cmd = parts[1] if len(parts) > 1 else "status"
+        try:
+            if cmd == "on":
+                msg = await sched_on()
+                await tg_send(chat_id, msg); return {"ok": True}
+            if cmd == "off":
+                msg = await sched_off()
+                await tg_send(chat_id, msg); return {"ok": True}
+            if cmd == "run":
+                msg = await sched_run_once()
+                await tg_send(chat_id, msg); return {"ok": True}
+            # default: status
+            msg = await sched_status()
+            await tg_send(chat_id, msg); return {"ok": True}
+        except Exception as e:
+            await tg_send(chat_id, f"```\n/sched error: {e}\n```")
+            return {"ok": True}
+
     if text_lower.startswith("/budget"):
         try:
             init_if_needed(STORAGE_DIR)
             parts = text_norm.split()
-            # /budget schedule
-            if len(parts) > 1 and parts[1].strip().lower() == 'schedule':
-                sch = budget_schedule_text(STORAGE_DIR)
-                await tg_send(chat_id, _code(sch))
-                return {"ok": True}
-            # /budget reset
-            if len(parts) > 1 and parts[1].strip().lower() == 'reset':
-                modes = _snapshot_market_modes(STORAGE_DIR)
-                manual_reset(STORAGE_DIR, modes)
-                texts = budget_per_symbol_texts(STORAGE_DIR)
-                for t in texts:
-                    await tg_send(chat_id, _code(t))
-                return {"ok": True}
             if len(parts) == 1:
                 msg, _ = budget_summary(STORAGE_DIR)
                 await tg_send(chat_id, msg)
@@ -419,6 +429,7 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     fn = filename or os.path.basename(filepath)
     try:
         import httpx
+import re
         async with httpx.AsyncClient(timeout=20.0) as client:
             with open(filepath, "rb") as f:
                 form = {"chat_id": str(chat_id)}
