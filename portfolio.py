@@ -138,6 +138,36 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     assets = sorted(set(list(spot.keys()) + list(earn.keys())))
     prices = await _get_usd_prices(client, assets)
 
+    # Determine CORE assets by trade_mode == LONG from /data/<PAIR>.json
+    def _get_core_assets(storage_dir: str) -> set[str]:
+        core = set()
+        try:
+            pairs = load_pairs(storage_dir)
+        except Exception:
+            pairs = []
+        stables = ("USDC","USDT","BUSD","FDUSD")
+        for pair in pairs or []:
+            p = (pair or "").upper().strip()
+            base = None
+            for suf in stables:
+                if p.endswith(suf) and len(p) > len(suf):
+                    base = p[:-len(suf)]
+                    break
+            if not base:
+                continue
+            try:
+                jpath = os.path.join(storage_dir, f"{p}.json")
+                with open(jpath, "r", encoding="utf-8") as jf:
+                    data = json.load(jf)
+                mode = (data.get("trade_mode") or "").upper()
+                if mode == "LONG":
+                    core.add(base)
+            except Exception:
+                # ignore unreadable files
+                pass
+        return core
+
+
     def left_label(asset: str, amt: float) -> str:
         if asset in {"USDT", "USDC"}:
             qty = f"{amt:.6f}"
@@ -146,7 +176,7 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         return f"{qty} {asset}"
 
     
-        # Build Spot rows and compute percent allocation among all spot assets > $1 (excluding USDC)
+    # Build Spot rows and compute percent allocation among core coins (BTC & ETH) only
     spot_items = []  # (asset, amount, usd)
     stables = {"USDT","USDC","BUSD","FDUSD"}
     spot_rows, spot_total = [], 0.0
@@ -157,20 +187,20 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
             spot_items.append((a, amt, usd))
             spot_total += usd
 
-    # Denominator excludes USDC
-    denom = sum(usd for (a, _, usd) in spot_items if a != "USDC")
+    # Percent denominator = BTC+ETH only
+    core = _get_core_assets(storage_dir)
+    denom = sum(usd for (a, _, usd) in spot_items if a in core)
 
-    # Build spot_rows with percentage for non-USDC assets
+    # Append % only for BTC/ETH; BNB & USDC shown without %
     spot_rows = []
     for a, amt, usd in spot_items:
         left = left_label(a, amt)
-        if denom > 0 and a != "USDC":
+        if denom > 0 and a in core:
             pct = (usd / denom) * 100.0
             left = f"{left} {pct:.0f}%"
         spot_rows.append((left, usd))
 
 # Continue with Earn computation
-
     earn_rows, earn_total = [], 0.0
 
     for a, amt in sorted(earn.items()):
