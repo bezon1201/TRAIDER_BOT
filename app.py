@@ -358,7 +358,7 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
         await tg_send(chat_id, _code("Команды: /sheduler on|off | config | <sec> [jitter] | tail <N>"))
         return {"ok": True}
-if text_lower.startswith("/portfolio"):
+    if text_lower.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
             _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
