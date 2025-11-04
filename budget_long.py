@@ -12,6 +12,15 @@ from pathlib import Path
 DATA_PATH = "/data"
 FILE_PATH = os.path.join(DATA_PATH, "budget_long.json")
 
+def init_if_needed(*_args, **_kwargs):
+    """
+    Инициализация бюджета при первом запуске.
+    Принимает любые аргументы, чтобы быть совместимой с вызовами из app/scheduler.
+    """
+    if not os.path.exists(FILE_PATH):
+        _save(_init_payload(tz_hours=0))
+
+
 # --- helpers ---------------------------------------------------------------
 
 def _now_utc() -> datetime:
