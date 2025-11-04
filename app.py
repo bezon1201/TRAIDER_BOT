@@ -273,6 +273,21 @@ async def telegram_webhook(update: Request):
     
     if text_lower.startswith("/json"):
         parts = text.split()
+        # /json del <NAME> — delete allowed JSON file from STORAGE_DIR
+        if len(parts) >= 3 and parts[1].strip().lower() == "del":
+            sym = parts[2].strip().upper()
+            safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
+            # whitelist: only files that appear in the list of STORAGE_DIR/*.json
+            files = set(os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json")))
+            if safe not in files:
+                await tg_send(chat_id, _code("Файл не найден"))
+                return {"ok": True}
+            try:
+                os.remove(os.path.join(STORAGE_DIR, safe))
+                await tg_send(chat_id, _code(f"Удалено: {safe}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка удаления: {e}"))
+            return {"ok": True}
         # /json -> list all json files in STORAGE_DIR
         if len(parts) == 1:
             files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
