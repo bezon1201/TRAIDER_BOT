@@ -1,147 +1,181 @@
-import os
-import json
-from typing import Any
+# budget.py — budgets & flag overrides (LONG) + global cancel
+# Storage: /data/<SYMBOL>.json
+import os, json, re as _re, tempfile
 
-STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
+STORAGE_DIR = os.getenv("DATA_DIR", "/data")
+
+# ---------- basic json utils ----------
+def _ensure_parent(path: str) -> None:
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
 
 def _load_json_safe(path: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        return {}
     except Exception:
         return {}
 
 def _save_json_atomic(path: str, data: dict) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    _ensure_parent(path)
+    tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
-
-def read_pair_budget(symbol: str) -> float:
-    path = os.path.join(STORAGE_DIR, f"{symbol.upper()}.json")
-    data = _load_json_safe(path)
-    v = data.get("budget")
-    try:
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, str) and v.strip():
-            return float(v.strip())
-    except Exception:
-        pass
-    return 0.0
-
-def write_pair_budget(symbol: str, value: float) -> float:
-    path = os.path.join(STORAGE_DIR, f"{symbol.upper()}.json")
-    data = _load_json_safe(path)
-    data["budget"] = float(value)
-    _save_json_atomic(path, data)
-    return float(value)
-
-def adjust_pair_budget(symbol: str, delta: float) -> float:
-    cur = read_pair_budget(symbol)
-    newv = cur + float(delta)
-    if newv < 0:
-        newv = 0.0
-    return write_pair_budget(symbol, newv)
-
-def _fmt_budget(val: float) -> str:
-    return str(int(val)) if abs(val - int(val)) < 1e-9 else str(round(val, 6))
-
-def apply_budget_header(symbol: str, msg: str) -> str:
-    """Ensure first non-empty line is 'SYMBOL <budget>'."""
-    budget = read_pair_budget(symbol)
-    lines = (msg or "").splitlines()
-    # Find first non-empty line and insert/replace
-    for i, line in enumerate(lines):
-        if line.strip() == "":
-            continue
-        if line.strip().upper() == symbol.upper():
-            lines[i] = f"{symbol.upper()} {_fmt_budget(budget)}"
-            return "\n".join(lines)
-        else:
-            header = f"{symbol.upper()} {_fmt_budget(budget)}"
-            return "\n".join([header] + lines)
-    # message empty: just header
-    return f"{symbol.upper()} {_fmt_budget(budget)}"
-
-
-# ---------- flag overrides (for LONG) ----------
-# States per key: 'open' -> ⚠️, 'fill' -> ✅
-# Stored under JSON key 'flag_overrides': {"oco": "open", "L0": "fill", ...}
 
 def _pair_json_path(symbol: str) -> str:
     return os.path.join(STORAGE_DIR, f"{symbol.upper()}.json")
 
-def _load_pair_json(symbol: str) -> dict:
-    return _load_json_safe(_pair_json_path(symbol))
+# ---------- budgets ----------
+def read_pair_budget(symbol: str) -> float:
+    data = _load_json_safe(_pair_json_path(symbol))
+    b = data.get("budget", 0)
+    try:
+        return float(b)
+    except Exception:
+        return 0.0
 
-def _save_pair_json(symbol: str, data: dict) -> None:
+def write_pair_budget(symbol: str, value: float) -> float:
+    data = _load_json_safe(_pair_json_path(symbol))
+    try:
+        v = float(value)
+    except Exception:
+        v = 0.0
+    data["budget"] = v
     _save_json_atomic(_pair_json_path(symbol), data)
+    return v
 
-def read_overrides(symbol: str) -> dict:
-    data = _load_pair_json(symbol)
+def adjust_pair_budget(symbol: str, delta: float) -> float:
+    cur = read_pair_budget(symbol)
+    try:
+        d = float(delta)
+    except Exception:
+        d = 0.0
+    return write_pair_budget(symbol, cur + d)
+
+# Helper for UI header; safe no-op if caller passes already formatted text.
+def apply_budget_header(symbol: str, header_text: str) -> str:
+    budget = read_pair_budget(symbol)
+    # append budget after SYMBOL if >0
+    sym = symbol.upper()
+    if budget and isinstance(header_text, str):
+        if header_text.startswith(sym):
+            return f"{sym} {int(budget) if budget.is_integer() else budget} {header_text[len(sym):]}"
+        return f"{sym} {int(budget) if float(budget).is_integer() else budget}"
+    return header_text
+
+# ---------- flag overrides (for LONG only) ----------
+# States: 'open' -> ⚠️ (order sent), 'fill' -> ✅ (order filled)
+_VALID_KEYS = {"oco","l0","l1","l2","l3"}
+
+def _read_overrides(symbol: str) -> dict:
+    data = _load_json_safe(_pair_json_path(symbol))
     ov = data.get("flag_overrides")
     return ov if isinstance(ov, dict) else {}
 
-def write_overrides(symbol: str, overrides: dict) -> None:
-    data = _load_pair_json(symbol)
+def _write_overrides(symbol: str, overrides: dict) -> None:
+    data = _load_json_safe(_pair_json_path(symbol))
     data["flag_overrides"] = overrides
-    _save_pair_json(symbol, data)
-
-_VALID_KEYS = {"oco","l0","l1","l2","l3"}
+    _save_json_atomic(_pair_json_path(symbol), data)
 
 def set_flag_override(symbol: str, key: str, state: str) -> str:
-    """Set override for a key.
-    state in {'open','fill'}; returns resulting state: 'open','fill'.
-    If existing is 'fill', keep as 'fill' (no downgrade).
-    """
     k = key.lower()
     if k not in _VALID_KEYS:
         raise ValueError("invalid key")
     st = state.lower()
     if st not in ("open","fill"):
         raise ValueError("invalid state")
-    ov = read_overrides(symbol)
+    ov = _read_overrides(symbol)
     cur = (ov.get(k) or "").lower()
-    if cur == "fill":
-        # terminal; don't change
+    if cur == "fill":  # terminal, don't downgrade
         return "fill"
     ov[k] = st
-    write_overrides(symbol, ov)
+    _write_overrides(symbol, ov)
     return st
 
 def cancel_flag_override(symbol: str, key: str) -> str:
-    """Cancel manual override for key.
-    If current is 'fill' -> keep (no change). If 'open' -> remove.
-    Returns resulting state label: 'auto' | 'fill'.
-    """
     k = key.lower()
     if k not in _VALID_KEYS:
         raise ValueError("invalid key")
-    ov = read_overrides(symbol)
+    ov = _read_overrides(symbol)
     cur = (ov.get(k) or "").lower()
     if cur == "fill":
         return "fill"
     if k in ov:
         del ov[k]
-        write_overrides(symbol, ov)
+        _write_overrides(symbol, ov)
     return "auto"
 
 def apply_flags_overrides(symbol: str, flags: dict) -> dict:
-    """Apply overrides to given flags dict per key.
-    'fill' -> ✅, 'open' -> ⚠️, else keep automatic flag.
-    """
+    # Apply manual overrides on top of computed flags.
+    # Priority: ✅ (fill) → ⚠️ (open) → auto (🔴/🟡/🟢)
     if not isinstance(flags, dict):
         return flags
-    ov = read_overrides(symbol)
+    ov = _read_overrides(symbol)
+    if not ov:
+        return flags
     out = dict(flags)
-    for k, st in (ov or {}).items():
-        k_up = k.upper() if k.upper() in ("OCO","L0","L1","L2","L3") else k
+    def put(key_up: str, emoji: str):
+        if key_up in out:
+            out[key_up] = emoji
+    for k, st in ov.items():
+        key_up = k.upper()
         if st == "fill":
-            out[k_up if k_up in out else k] = "✅"
+            put(key_up, "✅")
         elif st == "open":
-            out[k_up if k_up in out else k] = "⚠️"
+            put(key_up, "⚠️")
     return out
+
+# ---------- global cancel: reset budgets & overrides ----------
+def _extract_symbols_from_pairs_json(pairs_obj) -> set[str]:
+    syms = set()
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                walk(v)
+                if isinstance(k, str) and _re.fullmatch(r"[A-Z0-9]{6,}", k):
+                    syms.add(k.upper())
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+        elif isinstance(x, str):
+            if _re.fullmatch(r"[A-Z0-9]{6,}", x):
+                syms.add(x.upper())
+    walk(pairs_obj)
+    return syms
+
+def _list_candidate_symbols() -> set[str]:
+    syms = set()
+    # from pairs.json
+    p_json = os.path.join(STORAGE_DIR, "pairs.json")
+    try:
+        with open(p_json, "r", encoding="utf-8") as f:
+            syms |= _extract_symbols_from_pairs_json(json.load(f))
+    except Exception:
+        pass
+    # from *.json filenames
+    try:
+        for name in os.listdir(STORAGE_DIR):
+            if name.lower().endswith(".json"):
+                base = name[:-5]
+                if _re.fullmatch(r"[A-Z0-9]{6,}", base):
+                    syms.add(base.upper())
+    except Exception:
+        pass
+    return syms
+
+def reset_all_budgets_and_overrides() -> int:
+    syms = sorted(_list_candidate_symbols())
+    cnt = 0
+    for sym in syms:
+        path = _pair_json_path(sym)
+        data = _load_json_safe(path)
+        data["budget"] = 0
+        if "flag_overrides" in data:
+            try:
+                del data["flag_overrides"]
+            except Exception:
+                data["flag_overrides"] = {}
+        _save_json_atomic(path, data)
+        cnt += 1
+    return cnt
