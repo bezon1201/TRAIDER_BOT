@@ -44,7 +44,7 @@ def _read_json(path: str) -> dict:
 
 def _write_json_atomic(path: str, data: dict) -> None:
     
-    # Merge live values from disk to avoid overwriting manual budget/flags
+    # Preserve live 'budget' and manual overrides from on-disk file
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as _rf:

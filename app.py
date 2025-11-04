@@ -30,6 +30,7 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 
+
 # --- budget helpers (/budget cancel & rolover) ---
 def _coin_json_path(symbol: str) -> str:
     return os.path.join(STORAGE_DIR, f"{symbol}.json")
@@ -56,8 +57,10 @@ def _extract_market_state(j: dict) -> str:
         v = (m.get("12h") or m.get("6h") or m.get("4h") or m.get("2h") or "").upper()
     else:
         v = str(m or "").upper()
-    if "UP" in v: return "UP"
-    if "DOWN" in v: return "DOWN"
+    if "UP" in v:
+        return "UP"
+    if "DOWN" in v:
+        return "DOWN"
     return "RANGE"
 
 _BASE_PCTS = {
@@ -128,7 +131,7 @@ def _budget_rolover_all_pairs() -> int:
     return updated
 
 def _budget_cancel_all_pairs() -> int:
-    \"\"\"End-of-month reset: budget=0, zero pockets, AUTO flags.\"\"\"
+    """End-of-month reset: budget=0, zero pockets, AUTO flags."""
     try:
         from metrics_runner import load_pairs
     except Exception:
@@ -140,14 +143,16 @@ def _budget_cancel_all_pairs() -> int:
 
     pairs = []
     if callable(load_pairs):
-        try: pairs = load_pairs()
-        except Exception: pairs = []
+        try:
+            pairs = load_pairs()
+        except Exception:
+            pairs = []
     if not pairs:
         try:
             names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
             for name in names:
                 base_name = name[:-5]
-                if base_name.lower() in (\"pairs\",\"portfolio\"):
+                if base_name.lower() in ("pairs","portfolio"):
                     continue
                 pairs.append(base_name.upper())
         except Exception:
@@ -157,26 +162,28 @@ def _budget_cancel_all_pairs() -> int:
     for sym in pairs:
         path = _coin_json_path(sym)
         data = _load_json(path)
-        if not isinstance(data, dict): data = {}
+        if not isinstance(data, dict):
+            data = {}
 
-        data[\"budget\"] = 0.0
+        data["budget"] = 0.0
         state = _extract_market_state(data)
-        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS[\"RANGE\"]))
-        week = (data.get(\"pockets\") or {}).get(\"week\") or 1
-        data[\"pockets\"] = {
-            \"state\": state,
-            \"week\": week,
-            \"alloc_pct\": {k: pct.get(k,0) for k in _KEYS},
-            \"alloc_amt\": {k: 0.0 for k in _KEYS},
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
+        week = (data.get("pockets") or {}).get("week") or 1
+        data["pockets"] = {
+            "state": state,
+            "week": week,
+            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
+            "alloc_amt": {k: 0.0 for k in _KEYS},
         }
-        data.pop(\"flag_overrides\", None)
+        data.pop("flag_overrides", None)
+
         try:
             if callable(compute_all_flags):
-                data[\"flags\"] = compute_all_flags(data)
+                data["flags"] = compute_all_flags(data)
             else:
-                data.pop(\"flags\", None)
+                data.pop("flags", None)
         except Exception:
-            data.pop(\"flags\", None)
+            data.pop("flags", None)
 
         _save_json(path, data)
         updated += 1
