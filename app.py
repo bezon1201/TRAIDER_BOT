@@ -30,7 +30,7 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 
-# --- /budget cancel helper ---
+# --- budget helpers (/budget cancel & rolover) ---
 def _coin_json_path(symbol: str) -> str:
     return os.path.join(STORAGE_DIR, f"{symbol}.json")
 
@@ -49,53 +49,142 @@ def _save_json(path: str, data: dict) -> None:
     os.replace(tmp, path)
 
 def _budget_cancel_all_pairs() -> int:
-    """Set budget=0 for all pairs and remove manual flag overrides; recompute flags to AUTO when possible."""
+    """Set budget=0 for all pairs and remove manual flag overrides; also drop flags (AUTO will be recomputed)."""
+    try:
+        from metrics_runner import load_pairs
+    except Exception:
+        load_pairs = None
     try:
         from auto_flags import compute_all_flags
     except Exception:
         compute_all_flags = None
 
-    # Prefer local loader if present, otherwise scan pairs.json or *.json
     pairs = []
-    try:
-        pairs = load_pairs()  # defined in this module (wrapper) or imported earlier
-    except Exception:
-        pass
+    if callable(load_pairs):
+        try:
+            pairs = load_pairs()
+        except Exception:
+            pairs = []
     if not pairs:
-        # Fallback: all *.json except meta files
         try:
             names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
             for name in names:
-                base_name = name[:-5]  # strip .json
-                if base_name.lower() in ("pairs", "portfolio"):
+                base_name = name[:-5]
+                if base_name.lower() in ("pairs","portfolio"):
                     continue
                 pairs.append(base_name.upper())
         except Exception:
             pairs = []
 
     updated = 0
-    for sym in (pairs or []):
+    for sym in pairs:
         path = _coin_json_path(sym)
         data = _load_json(path)
         if not isinstance(data, dict):
             data = {}
-        # 1) zero budget
         data["budget"] = 0.0
-        # 2) remove manual overrides (⚠️/✅ originate from overrides)
         if "flag_overrides" in data:
-            try:
-                del data["flag_overrides"]
-            except Exception:
-                data["flag_overrides"] = {}
-        # 2.5) set flags to AUTO (recompute if we can; otherwise drop to let /now refresh)
+            try: del data["flag_overrides"]
+            except Exception: data["flag_overrides"] = {}
         try:
             if callable(compute_all_flags):
                 data["flags"] = compute_all_flags(data)
             else:
-                # remove possibly stale flags; they will be recomputed on /now
                 data.pop("flags", None)
         except Exception:
             data.pop("flags", None)
+        _save_json(path, data)
+        updated += 1
+    return updated
+
+def _extract_market_state(j: dict) -> str:
+    """Return UP/RANGE/DOWN from json (prefer market_mode['12h'])."""
+    m = (j or {}).get("market_mode")
+    if isinstance(m, dict):
+        v = (m.get("12h") or m.get("6h") or m.get("4h") or m.get("2h") or "").upper()
+    else:
+        v = str(m or "").upper()
+    if "UP" in v:
+        return "UP"
+    if "DOWN" in v:
+        return "DOWN"
+    return "RANGE"
+
+_BASE_PCTS = {
+    "UP":    {"OCO":10, "L0":10, "L1":5, "L2":0, "L3":0},
+    "RANGE": {"OCO": 5, "L0": 5, "L1":10, "L2":5, "L3":0},
+    "DOWN":  {"OCO": 5, "L0": 0, "L1":5, "L2":10, "L3":5},
+}
+_KEYS = ("OCO","L0","L1","L2","L3")
+
+def _next_week(prev: int) -> int:
+    try:
+        p = int(prev or 0)
+    except Exception:
+        p = 0
+    p = ((p % 4) + 1) if p else 1
+    return p
+
+def _budget_rolover_all_pairs() -> int:
+    """Rollover pockets to next week based on current market state and manual flags."""
+    from metrics_runner import load_pairs
+    pairs = []
+    try:
+        pairs = load_pairs()
+    except Exception:
+        pass
+    if not pairs:
+        try:
+            names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
+            for name in names:
+                base_name = name[:-5]
+                if base_name.lower() in ("pairs","portfolio"):
+                    continue
+                pairs.append(base_name.upper())
+        except Exception:
+            pairs = []
+
+    updated = 0
+    for sym in pairs:
+        path = _coin_json_path(sym)
+        data = _load_json(path)
+        if not isinstance(data, dict):
+            data = {}
+        budget = float(data.get("budget") or 0.0)
+        prev_pockets = (data.get("pockets") or {})
+        prev_amt = dict(prev_pockets.get("alloc_amt") or {})
+
+        # Determine state and base percentages
+        state = _extract_market_state(data)
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
+
+        # Compute base amounts
+        base_amt = {k: round(budget * (pct.get(k,0) / 100.0), 6) for k in _KEYS}
+
+        # Determine new amounts using overrides
+        ov = dict((data.get("flag_overrides") or {}))
+        new_amt = {}
+        # Remove 'open' overrides (we return to AUTO if not executed)
+        new_ov = {k:v for k,v in ov.items() if v == "fill"}
+        for k in _KEYS:
+            if ov.get(k) == "fill":
+                new_amt[k] = base_amt.get(k, 0.0)
+            else:
+                new_amt[k] = base_amt.get(k, 0.0) + float(prev_amt.get(k, 0.0))
+                # ensure no lingering 'open' for next week
+                # (already removed by new_ov)
+        week = _next_week(prev_pockets.get("week") or 0)
+        data["pockets"] = {
+            "state": state,
+            "week": week,
+            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
+            "alloc_amt": {k: round(float(new_amt.get(k,0.0)), 6) for k in _KEYS},
+        }
+        # Update overrides
+        if new_ov:
+            data["flag_overrides"] = new_ov
+        else:
+            data.pop("flag_overrides", None)
 
         _save_json(path, data)
         updated += 1
@@ -305,6 +394,15 @@ async def telegram_webhook(update: Request):
                 await tg_send(chat_id, _code(f"OK. Сброс: budget=0, флаги=AUTO. Пары: {count}"))
             except Exception as e:
                 await tg_send(chat_id, _code(f"Ошибка сброса: {e.__class__.__name__}"))
+            return {"ok": True}
+
+        parts = text.split()
+        if len(parts) == 2 and parts[1].strip().lower() in ("rolover","rollover"):
+            try:
+                count = _budget_rolover_all_pairs()
+                await tg_send(chat_id, _code(f"Rollover: пересчитаны карманы. Пары: {count}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка rollover: {e.__class__.__name__}"))
             return {"ok": True}
     # --- FLAG COMMANDS START ---
         tokens = (text or "").split()
