@@ -29,6 +29,77 @@ BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
+
+# --- /budget cancel helper ---
+def _coin_json_path(symbol: str) -> str:
+    return os.path.join(STORAGE_DIR, f"{symbol}.json")
+
+def _load_json(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_json(path: str, data: dict) -> None:
+    tmp = path + ".tmp"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+def _budget_cancel_all_pairs() -> int:
+    """Set budget=0 for all pairs and remove manual flag overrides; recompute flags to AUTO when possible."""
+    try:
+        from auto_flags import compute_all_flags
+    except Exception:
+        compute_all_flags = None
+
+    # Prefer local loader if present, otherwise scan pairs.json or *.json
+    pairs = []
+    try:
+        pairs = load_pairs()  # defined in this module (wrapper) or imported earlier
+    except Exception:
+        pass
+    if not pairs:
+        # Fallback: all *.json except meta files
+        try:
+            names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
+            for name in names:
+                base_name = name[:-5]  # strip .json
+                if base_name.lower() in ("pairs", "portfolio"):
+                    continue
+                pairs.append(base_name.upper())
+        except Exception:
+            pairs = []
+
+    updated = 0
+    for sym in (pairs or []):
+        path = _coin_json_path(sym)
+        data = _load_json(path)
+        if not isinstance(data, dict):
+            data = {}
+        # 1) zero budget
+        data["budget"] = 0.0
+        # 2) remove manual overrides (⚠️/✅ originate from overrides)
+        if "flag_overrides" in data:
+            try:
+                del data["flag_overrides"]
+            except Exception:
+                data["flag_overrides"] = {}
+        # 2.5) set flags to AUTO (recompute if we can; otherwise drop to let /now refresh)
+        try:
+            if callable(compute_all_flags):
+                data["flags"] = compute_all_flags(data)
+            else:
+                # remove possibly stale flags; they will be recomputed on /now
+                data.pop("flags", None)
+        except Exception:
+            data.pop("flags", None)
+
+        _save_json(path, data)
+        updated += 1
+    return updated
 import json, re
 from general_scheduler import start_collector, stop_collector, scheduler_get_state, scheduler_set_enabled, scheduler_set_timing, scheduler_tail
 
@@ -226,6 +297,15 @@ async def telegram_webhook(update: Request):
                 pass
         return {"ok": True}
     if text_lower.startswith("/budget"):
+
+        parts = text.split()
+        if len(parts) == 2 and parts[1].strip().lower() == "cancel":
+            try:
+                count = _budget_cancel_all_pairs()
+                await tg_send(chat_id, _code(f"OK. Сброс: budget=0, флаги=AUTO. Пары: {count}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка сброса: {e.__class__.__name__}"))
+            return {"ok": True}
     # --- FLAG COMMANDS START ---
         tokens = (text or "").split()
         # pattern: /budget <symbol> <target> <action>
