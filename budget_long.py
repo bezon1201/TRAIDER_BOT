@@ -1,15 +1,18 @@
-
 # -*- coding: utf-8 -*-
 """
 Budget management for LONG (core) coins.
 """
+
 from __future__ import annotations
 import os, json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
+from pathlib import Path
 
 DATA_PATH = "/data"
 FILE_PATH = os.path.join(DATA_PATH, "budget_long.json")
+
+# --- helpers ---------------------------------------------------------------
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -78,6 +81,8 @@ def _save(payload):
         json.dump(payload, f, ensure_ascii=False, indent=2)
     os.replace(tmp, FILE_PATH)
 
+# --- alloc helpers ----------------------------------------------------------
+
 def _blank_symbol():
     return {
         "weekly": 0,
@@ -100,13 +105,13 @@ def _alloc_default(weekly: int, monthly: int):
         "L3":  {"left": l3,  "spent": 0},
     }
 
-# Public API used by app
+# --- public API -------------------------------------------------------------
+
 def init_if_needed():
     if not os.path.exists(FILE_PATH):
         _save(_init_payload(tz_hours=0))
 
 def set_timezone(tz_hours: int):
-    p = _load()
     p = _init_payload(tz_hours=tz_hours)
     _save(p)
     return f"TZ set to UTC{tz_hours:+d}"
@@ -168,7 +173,6 @@ def weekly_tick():
     p["week_start_utc"] = _iso(ws_local - timedelta(hours=tz))
     p["week_end_utc"] = _iso(we_local - timedelta(hours=tz))
     p["week_number"] = int(ws_local.isocalendar().week)
-    # rollover weekly legs: add +25% от их недельной доли
     for s in p["symbols"].values():
         weekly = int(s.get("weekly", 0))
         add_share = _round_int(0.25 * _round_int(0.2 * weekly))
@@ -233,3 +237,36 @@ def budget_schedule_text() -> str:
         f"Month: {p['month_start_utc']} → {p['month_end_utc']}",
         f"TZ: UTC{tz:+d}"
     ])
+
+# --- compatibility for scheduler.py ----------------------------------------
+
+DATA_DIR = Path("/data")
+BUDGET_FILE = DATA_DIR / "budget_long.json"
+
+def _default_state():
+    return {
+        "tz_offset": 0,
+        "week_number": None,
+        "week_start_utc": None,
+        "month_start_utc": None,
+        "symbols": {},
+        "totals": {"weekly": 0, "monthly": 0},
+    }
+
+def load_state():
+    try:
+        if not BUDGET_FILE.exists():
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            state = _default_state()
+            with open(BUDGET_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            return state
+        with open(BUDGET_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return _default_state()
+
+def save_state(state: dict):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(BUDGET_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
