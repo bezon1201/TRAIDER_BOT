@@ -81,8 +81,9 @@ async def _scheduler_loop():
     import asyncio, random, time
     global _scheduler_task
     _sched_log("loop start")
-    while True:
-        st = _load_scheduler_state()
+    try:
+        while True:
+st = _load_scheduler_state()
         if not st.get("enabled"):
             _sched_log("disabled; sleeping 5s")
             await asyncio.sleep(5.0)
@@ -104,8 +105,16 @@ async def _scheduler_loop():
         except Exception:
             delay = float(interval)
         await asyncio.sleep(delay)
-
+        
 # public api
+    except asyncio.CancelledError:
+        _sched_log("loop cancelled")
+        raise
+    except Exception as e:
+        _sched_log(f"loop error: {e.__class__.__name__}: {e}")
+    finally:
+        _sched_log("loop exit")
+
 async def start_collector():
     """Start background scheduler if not running."""
     import asyncio
@@ -123,15 +132,21 @@ async def start_collector():
 
 async def stop_collector():
     """Stop background scheduler if running."""
+    import asyncio
     global _scheduler_task
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         _sched_log("cancel requested")
         try:
             await _scheduler_task
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
     _scheduler_task = None
+    _sched_log("stopped")
+    return None
+
     _sched_log("stopped")
     return None
 
