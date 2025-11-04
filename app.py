@@ -116,7 +116,6 @@ def _budget_cancel_all_pairs() -> int:
     return updated
 
 def _extract_market_state(j: dict) -> str:
-(j: dict) -> str:
     """Return UP/RANGE/DOWN from json (prefer market_mode['12h'])."""
     m = (j or {}).get("market_mode")
     if isinstance(m, dict):
