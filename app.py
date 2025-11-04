@@ -249,7 +249,7 @@ async def telegram_webhook(update: Request):
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
         # ignore known command prefixes
-        if sym not in ("NOW","MODE","PORTFOLIO","COINS","DATA","JSON","INVESTED","INVEST","MARKET"):
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","DATA","JSON","INVESTED","INVEST","MARKET","SHEDULER"):
             msg = build_symbol_message(sym)
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
@@ -304,7 +304,61 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
 
 
-    if text_lower.startswith("/portfolio"):
+    
+    
+    if text_lower.startswith("/sheduler"):
+        parts = (text or "").strip().split()
+        # /sheduler config
+        if len(parts) >= 2 and parts[1].lower() == "config":
+            st = scheduler_get_state()
+            await tg_send(chat_id, _code(json.dumps(st, ensure_ascii=False, indent=2)))
+            return {"ok": True}
+        # /sheduler on|off
+        if len(parts) >= 2 and parts[1].lower() in ("on","off"):
+            on = parts[1].lower() == "on"
+            scheduler_set_enabled(on)
+            if on:
+                await start_collector()
+            else:
+                await stop_collector()
+            await tg_send(chat_id, _code(f"Scheduler: {'ON' if on else 'OFF'}"))
+            return {"ok": True}
+        # /sheduler tail N
+        if len(parts) >= 3 and parts[1].lower() == "tail":
+            try:
+                n = int(parts[2])
+            except Exception:
+                n = 100
+            n = max(1, min(5000, n))
+            tail_text = scheduler_tail(n)
+            tmp_path = os.path.join(STORAGE_DIR, "scheduler_tail.txt")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(tail_text or "")
+                await tg_send_file(chat_id, tmp_path, filename="scheduler_tail.txt", caption="scheduler_tail.txt")
+            except Exception:
+                await tg_send(chat_id, _code(tail_text or "—"))
+            return {"ok": True}
+        # /sheduler <interval> [jitter]
+        if len(parts) >= 2 and parts[1].isdigit():
+            interval = int(parts[1])
+            jitter = None
+            if len(parts) >= 3 and parts[2].isdigit():
+                jitter = int(parts[2])
+            # validation
+            interval = max(15, min(43200, interval))
+            if jitter is not None:
+                jitter = max(1, min(5, jitter))
+            st = scheduler_set_timing(interval, jitter)
+            await tg_send(chat_id, _code("OK"))
+            # If enabled, restart loop to apply quickly
+            if st.get("enabled"):
+                await stop_collector()
+                await start_collector()
+            return {"ok": True}
+        await tg_send(chat_id, _code("Команды: /sheduler on|off | config | <sec> [jitter] | tail <N>"))
+        return {"ok": True}
+if text_lower.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
             _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])

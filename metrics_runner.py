@@ -314,14 +314,16 @@ async def collect_all_no_jitter() -> int:
     return n
 
 
+
+
 # --- compatibility stubs (no background collector) ---
 async def start_collector():
     return None
 
 async def stop_collector():
     return None
-
 async def collect_selected_with_micro_jitter(symbols, min_ms: int = 120, max_ms: int = 360) -> int:
+(symbols, min_ms: int = 120, max_ms: int = 360) -> int:
     """Collect only for provided symbols with micro jitter."""
     if not symbols:
         return 0
