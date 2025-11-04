@@ -1,190 +1,173 @@
-import os
-import re
-import json
-from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
 
-DATA_DIR = Path(os.getenv("STORAGE_DIR", "."))
+# coding: utf-8
+"""
+Budget & flags module for pairs.
+Stores per-pair "budget" and manual flag overrides in <SYMBOL>.json files.
+Exposes helpers used by app.py and metrics_runner.py.
+"""
 
-FLAG_OK = "🟢"
-FLAG_MAYBE = "🟡"
-FLAG_STOP = "🔴"
-FLAG_SENT = "⚠️"
-FLAG_FILLED = "✅"
+from __future__ import annotations
+import json, os, glob
+from typing import Dict, Any, Optional
 
-LEVEL_KEYS = ["TP", "SLt", "SL", "L0", "L1", "L2", "L3"]  # names as shown on cards
-OVERRIDE_KEYS = ["TP", "SLt", "SL", "L0", "L1", "L2", "L3"]
+DATA_DIR = os.environ.get("DATA_DIR", ".")
+
+VALID_LEVELS = ["TP", "SLt", "SL", "L0", "L1", "L2", "L3"]
+WARN_FLAG = "⚠️"
+FILL_FLAG = "✅"
+
+def _pair_path(symbol: str) -> str:
+    sym = normalize_symbol(symbol)
+    return os.path.join(DATA_DIR, f"{sym}.json")
 
 def normalize_symbol(s: str) -> str:
-    s = s.strip()
-    if s.startswith("/"):
-        s = s[1:]
-    return s.replace("-", "").replace("_", "").upper()
+    s = (s or "").strip().upper()
+    # allow commands like /budget btcusdc=25
+    s = s.replace("/", "")
+    return s
 
-def _pair_path(sym: str) -> Path:
-    return DATA_DIR / f"{sym}.json"
-
-def _read_pair(sym: str) -> Dict[str, Any]:
-    p = _pair_path(sym)
-    if not p.exists():
+def _load_json(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return {}
 
-def _write_pair(sym: str, data: Dict[str, Any]) -> None:
-    p = _pair_path(sym)
-    p.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+def _save_json(path: str, data: Dict[str, Any]) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
 
-def get_budget_for_symbol(sym: str) -> Optional[int]:
-    sym = normalize_symbol(sym)
-    d = _read_pair(sym)
-    b = d.get("budget")
-    if isinstance(b, (int, float)):
-        return int(b)
-    return 0
+def load_pair(symbol: str) -> Dict[str, Any]:
+    """Load pair JSON (returns dict; missing file -> {})."""
+    return _load_json(_pair_path(symbol))
 
-# ---- parsing ----
+def save_pair(symbol: str, data: Dict[str, Any]) -> None:
+    _save_json(_pair_path(symbol), data)
 
-class BudgetCmd:
-    kind: str
-    sym: Optional[str]
-    value: Optional[int]
-    level: Optional[str]
+# ---------------- Budgets ----------------
 
-    def __init__(self, kind: str, sym: Optional[str] = None, value: Optional[int] = None, level: Optional[str] = None):
-        self.kind = kind
-        self.sym = sym
-        self.value = value
-        self.level = level
+def get_budget(symbol: str) -> float:
+    d = load_pair(symbol)
+    v = d.get("budget", 0)
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
 
-def parse_budget_command(text: str) -> BudgetCmd:
-    t = text.strip()
-    if not t.lower().startswith("/budget"):
-        raise ValueError("not a budget command")
-    payload = t[len("/budget"):].strip()
+def set_budget(symbol: str, amount: float) -> float:
+    d = load_pair(symbol)
+    try:
+        amt = float(amount)
+    except Exception:
+        amt = 0.0
+    d["budget"] = float(round(amt, 8))
+    save_pair(symbol, d)
+    return d["budget"]
 
-    if payload.lower() == "cancel":
-        return BudgetCmd("cancel_all")
+def adjust_budget(symbol: str, delta: float) -> float:
+    cur = get_budget(symbol)
+    try:
+        dv = float(delta)
+    except Exception:
+        dv = 0.0
+    return set_budget(symbol, cur + dv)
 
-    # /budget btcusdc=25
-    m = re.match(r"^([a-z0-9_/\-]+)\s*=\s*([0-9]+)\s*$", payload, re.I)
-    if m:
-        return BudgetCmd("set", normalize_symbol(m.group(1)), int(m.group(2)))
+# ---------------- Flags (manual overrides) ----------------
 
-    # /budget btceth + 5  or /budget btceth - 7
-    m = re.match(r"^([a-z0-9_/\-]+)\s*([+\-])\s*([0-9]+)\s*$", payload, re.I)
-    if m:
-        sign = 1 if m.group(2) == "+" else -1
-        return BudgetCmd("inc", normalize_symbol(m.group(1)), sign * int(m.group(3)))
+def _ensure_overrides(d: Dict[str, Any]) -> Dict[str, Any]:
+    fo = d.get("flag_overrides")
+    if not isinstance(fo, dict):
+        fo = {}
+        d["flag_overrides"] = fo
+    return fo
 
-    # /budget btcusdc oco open
-    m = re.match(r"^([a-z0-9_/\-]+)\s*oco\s*open\s*$", payload, re.I)
-    if m:
-        return BudgetCmd("oco_open", normalize_symbol(m.group(1)))
+def set_all_flags_warn(symbol: str) -> None:
+    """Set ALL levels to WARN (⚠️). Used by 'oco open' / LONG."""
+    d = load_pair(symbol)
+    fo = _ensure_overrides(d)
+    for lvl in VALID_LEVELS:
+        fo[lvl] = WARN_FLAG
+    save_pair(symbol, d)
 
-    # /budget ethusdc L2 cancel
-    m = re.match(r"^([a-z0-9_/\-]+)\s*(L[0-3]|TP|SLT|SL)\s*cancel\s*$", payload, re.I)
-    if m:
-        lvl = m.group(2).upper()
-        return BudgetCmd("level_cancel", normalize_symbol(m.group(1)), level=lvl)
+def set_level_cancel(symbol: str, level: str) -> None:
+    """Return a level flag back to automatic (remove override)."""
+    lvl = level.strip()
+    d = load_pair(symbol)
+    fo = _ensure_overrides(d)
+    if lvl in fo:
+        fo.pop(lvl, None)
+    save_pair(symbol, d)
 
-    # /budget btcusdc L0 fill
-    m = re.match(r"^([a-z0-9_/\-]+)\s*(L[0-3]|TP|SLT|SL)\s*fill\s*$", payload, re.I)
-    if m:
-        lvl = m.group(2).upper()
-        return BudgetCmd("level_fill", normalize_symbol(m.group(1)), level=lvl)
+def set_level_fill(symbol: str, level: str) -> None:
+    """Mark a level as filled (✅)."""
+    lvl = level.strip()
+    d = load_pair(symbol)
+    fo = _ensure_overrides(d)
+    fo[lvl] = FILL_FLAG
+    save_pair(symbol, d)
 
-    # Fallback help
-    return BudgetCmd("help")
-
-def _ensure_overrides(d: Dict[str, Any]) -> Dict[str, str]:
-    ov = d.get("flag_overrides")
-    if not isinstance(ov, dict):
-        ov = {}
-        d["flag_overrides"] = ov
-    return ov
-
-def _apply_set(sym: str, value: int) -> str:
-    d = _read_pair(sym)
-    d["budget"] = max(0, int(value))
-    _write_pair(sym, d)
-    return f"{sym} budget = {d['budget']}"
-
-def _apply_inc(sym: str, delta: int) -> str:
-    d = _read_pair(sym)
-    cur = int(d.get("budget") or 0)
-    d["budget"] = max(0, cur + int(delta))
-    _write_pair(sym, d)
-    sign = "+" if delta >= 0 else ""
-    return f"{sym} budget {sign}{delta} → {d['budget']}"
-
-def _apply_oco_open(sym: str) -> str:
-    d = _read_pair(sym)
-    ov = _ensure_overrides(d)
-    for k in OVERRIDE_KEYS:
-        ov[k] = "⚠️"
-    _write_pair(sym, d)
-    return f"{sym} flags → ⚠️ (oco open)"
-
-def _apply_level_cancel(sym: str, level: str) -> str:
-    d = _read_pair(sym)
-    ov = _ensure_overrides(d)
-    ov.pop(level.upper(), None)  # remove explicit flag to return to automatic
-    _write_pair(sym, d)
-    return f"{sym} {level.upper()} → авто"
-
-def _apply_level_fill(sym: str, level: str) -> str:
-    d = _read_pair(sym)
-    ov = _ensure_overrides(d)
-    ov[level.upper()] = "✅"
-    _write_pair(sym, d)
-    return f"{sym} {level.upper()} → ✅"
-
-def reset_all() -> int:
-    """Drop all budgets to 0 and remove explicit flag overrides for every pair file."""
+def cancel_all_budgets_and_flags() -> int:
+    """Reset all budgets to 0 and remove all manual overrides for ALL pair jsons in DATA_DIR.
+    Returns number of updated pairs.
+    """
     cnt = 0
-    for p in DATA_DIR.glob("*.json"):
+    for path in glob.glob(os.path.join(DATA_DIR, "*.json")):
         try:
-            d = json.loads(p.read_text(encoding="utf-8"))
+            d = _load_json(path)
+            changed = False
+            if d.get("budget", 0) != 0:
+                d["budget"] = 0
+                changed = True
+            if d.get("flag_overrides"):
+                d["flag_overrides"] = {}
+                changed = True
+            if changed:
+                _save_json(path, d)
+                cnt += 1
         except Exception:
             continue
-        changed = False
-        if d.get("budget"):
-            d["budget"] = 0
-            changed = True
-        if isinstance(d.get("flag_overrides"), dict) and d["flag_overrides"]:
-            d["flag_overrides"] = {}
-            changed = True
-        if changed:
-            p.write_text(json.dumps(d, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-            cnt += 1
     return cnt
 
-def apply_budget_command(cmd: BudgetCmd) -> str:
-    if cmd.kind == "help":
-        return ("Формат:\n"
-                "/budget <pair>=<num>\n"
-                "/budget <pair> +/- <num>\n"
-                "/budget <pair> oco open\n"
-                "/budget <pair> <L0|L1|L2|L3|TP|SLt|SL> cancel\n"
-                "/budget <pair> <L0|L1|L2|L3|TP|SLt|SL> fill\n"
-                "/budget cancel")
-    if cmd.kind == "cancel_all":
-        n = reset_all()
-        return f"Сброс флагов и бюджетов по {n} парам"
-    if not cmd.sym:
-        return "Не указана пара"
-    sym = cmd.sym
-    if cmd.kind == "set":
-        return _apply_set(sym, int(cmd.value or 0))
-    if cmd.kind == "inc":
-        return _apply_inc(sym, int(cmd.value or 0))
-    if cmd.kind == "oco_open":
-        return _apply_oco_open(sym)
-    if cmd.kind == "level_cancel":
-        return _apply_level_cancel(sym, cmd.level or "L0")
-    if cmd.kind == "level_fill":
-        return _apply_level_fill(sym, cmd.level or "L0")
-    return "Команда не распознана"
+# ---------------- Application into computed flags ----------------
+
+def apply_flags_overrides(pair: Dict[str, Any]) -> Dict[str, Any]:
+    """Overlay manual overrides onto computed flags in a pair dict.
+    Expectations:
+      pair["flags"] - dict with computed flags for levels, e.g. {'L0':'🟢','L1':'🟡',...}
+      pair["flag_overrides"] - optional dict {'L0':'⚠️','L2':'✅', ...}
+    Returns the same dict with pair['flags'] updated in place.
+    """
+    if not isinstance(pair, dict):
+        return pair
+    flags = pair.get("flags")
+    if not isinstance(flags, dict):
+        flags = {}
+        pair["flags"] = flags
+    fo = pair.get("flag_overrides") or {}
+    if isinstance(fo, dict):
+        for lvl, val in fo.items():
+            if lvl in VALID_LEVELS and val in (WARN_FLAG, FILL_FLAG):
+                flags[lvl] = val
+    # Ensure only known levels exist
+    for k in list(flags.keys()):
+        if k not in VALID_LEVELS:
+            flags.pop(k, None)
+    return pair
+
+__all__ = [
+    "normalize_symbol",
+    "load_pair",
+    "save_pair",
+    "get_budget",
+    "set_budget",
+    "adjust_budget",
+    "set_all_flags_warn",
+    "set_level_cancel",
+    "set_level_fill",
+    "cancel_all_budgets_and_flags",
+    "apply_flags_overrides",
+]
