@@ -31,14 +31,12 @@ def build_long_card(data: dict) -> str:
     pockets = (data.get("pockets") or {})
     alloc_amt = (pockets.get("alloc_amt") or {})
 
-    # OCO/TP-SL line
     if all(k in oco for k in ("tp_limit","sl_trigger","sl_limit")):
         pf = flags.get("OCO","")
         amt = _ia(alloc_amt.get("OCO", 0))
         prefix = f"{amt}{pf}" if pf else f"{amt}"
         lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
-    # Grid L0..L3
     grid = data.get("grid") or {}
     for k in ("L0","L1","L2","L3"):
         if k in grid and grid[k] is not None:
