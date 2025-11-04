@@ -31,7 +31,7 @@ STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 
 
-# --- budget helpers (/budget cancel & rolover) ---
+# --- budget helpers (cancel, rolover, start) ---
 def _coin_json_path(symbol: str) -> str:
     return os.path.join(STORAGE_DIR, f"{symbol}.json")
 
@@ -123,13 +123,12 @@ def _budget_rolover_all_pairs() -> int:
             "alloc_amt": {k: round(float(new_amt.get(k,0.0)), 6) for k in _KEYS},
         }
         data.pop("flag_overrides", None)  # new week -> AUTO
-
         _save_json(path, data)
         updated += 1
     return updated
 
 def _budget_cancel_all_pairs() -> int:
-    # End-of-month reset: budget=0, zero pockets, AUTO flags.
+    # v9 behavior: fully zero pocket amounts and budget; flags -> AUTO.
     try:
         from metrics_runner import load_pairs
     except Exception:
@@ -157,10 +156,7 @@ def _budget_cancel_all_pairs() -> int:
     updated = 0
     for sym in pairs:
         path = _coin_json_path(sym)
-        data = _load_json(path)
-        if not isinstance(data, dict): data = {}
-
-        data["budget"] = 0.0
+        data = _load_json(path) or {}
         state = _extract_market_state(data)
         pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
         week = (data.get("pockets") or {}).get("week") or 1
@@ -171,7 +167,6 @@ def _budget_cancel_all_pairs() -> int:
             "alloc_amt": {k: 0.0 for k in _KEYS},
         }
         data.pop("flag_overrides", None)
-
         try:
             if callable(compute_all_flags):
                 data["flags"] = compute_all_flags(data)
@@ -179,7 +174,51 @@ def _budget_cancel_all_pairs() -> int:
                 data.pop("flags", None)
         except Exception:
             data.pop("flags", None)
+        data["budget"] = 0.0
+        _save_json(path, data)
+        updated += 1
+    return updated
 
+def _budget_start_all_pairs() -> int:
+    """
+    Recalculate pockets to BASE by current market and current budget.
+    Does NOT change manual overrides or flags.
+    """
+    try:
+        from metrics_runner import load_pairs
+    except Exception:
+        load_pairs = None
+
+    pairs = []
+    if callable(load_pairs):
+        try: pairs = load_pairs()
+        except Exception: pairs = []
+    if not pairs:
+        try:
+            names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
+            for name in names:
+                base_name = name[:-5]
+                if base_name.lower() in ("pairs","portfolio"):
+                    continue
+                pairs.append(base_name.upper())
+        except Exception:
+            pairs = []
+
+    updated = 0
+    for sym in pairs:
+        path = _coin_json_path(sym)
+        data = _load_json(path) or {}
+        budget = float(data.get("budget") or 0.0)
+        state = _extract_market_state(data)
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
+        base_amt = {k: round(budget * (pct.get(k,0) / 100.0), 6) for k in _KEYS}
+        week = (data.get("pockets") or {}).get("week") or 1
+        data["pockets"] = {
+            "state": state,
+            "week": week,
+            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
+            "alloc_amt": {k: float(base_amt.get(k,0.0)) for k in _KEYS},
+        }
         _save_json(path, data)
         updated += 1
     return updated
@@ -389,21 +428,9 @@ async def telegram_webhook(update: Request):
             try:
                 count = _budget_start_all_pairs()
                 await asyncio.sleep(0.15)
-                await tg_send(chat_id, _code(f"Start: карманы выставлены по базе. Пары: {count}"))
+                await tg_send(chat_id, _code(f"Start: карманы установлены по базе. Пары: {count}"))
             except Exception as e:
                 await tg_send(chat_id, _code(f"Ошибка start: {e.__class__.__name__}"))
-            return {"ok": True}
-
-        parts = text.split()
-
-        # /budget cancel
-        if len(parts) == 2 and parts[1].strip().lower() == "cancel":
-            try:
-                count = _budget_cancel_all_pairs()
-                await asyncio.sleep(0.15)
-                await tg_send(chat_id, _code(f"OK. Сброс: budget=0, карманы=0, флаги=AUTO. Пары: {count}"))
-            except Exception as e:
-                await tg_send(chat_id, _code(f"Ошибка сброса: {e.__class__.__name__}"))
             return {"ok": True}
 
         # /budget rolover
@@ -414,6 +441,16 @@ async def telegram_webhook(update: Request):
                 await tg_send(chat_id, _code(f"Rollover: пересчитаны карманы. Пары: {count}"))
             except Exception as e:
                 await tg_send(chat_id, _code(f"Ошибка rollover: {e.__class__.__name__}"))
+            return {"ok": True}
+
+        # /budget cancel
+        if len(parts) == 2 and parts[1].strip().lower() == "cancel":
+            try:
+                count = _budget_cancel_all_pairs()
+                await asyncio.sleep(0.15)
+                await tg_send(chat_id, _code(f"OK. Сброс: budget=0, карманы=0, флаги=AUTO. Пары: {count}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка сброса: {e.__class__.__name__}"))
             return {"ok": True}
     # --- FLAG COMMANDS START ---
         tokens = (text or "").split()
@@ -744,59 +781,3 @@ def _apply_budget_header(symbol: str, msg: str) -> str:
         return "\n".join(lines)
     except Exception:
         return msg or ""
-
-
-def _budget_start_all_pairs() -> int:
-    """Recalculate pockets to BASE by current market using current budget. Flags/overrides unchanged."""
-    from metrics_runner import load_pairs
-    try:
-        pairs = load_pairs()
-    except Exception:
-        pairs = []
-    if not pairs:
-        try:
-            names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
-            for name in names:
-                base_name = name[:-5]
-                if base_name.lower() in ("pairs","portfolio"):
-                    continue
-                pairs.append(base_name.upper())
-        except Exception:
-            pairs = []
-
-    updated = 0
-    for sym in pairs:
-        path = os.path.join(STORAGE_DIR, f"{sym}.json")
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-        except Exception:
-            data = {}
-        budget = float(data.get("budget") or 0.0)
-        state = _extract_market_state(data)
-        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
-        keys = ("OCO","L0","L1","L2","L3")
-        base_amt = {k: round(budget * (pct.get(k,0)/100.0), 6) for k in keys}
-        week = (data.get("pockets") or {}).get("week") or 1
-        data["pockets"] = {
-            "state": state,
-            "week": week,
-            "alloc_pct": {k: pct.get(k,0) for k in keys},
-            "alloc_amt": {k: float(base_amt.get(k,0.0)) for k in keys},
-        }
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as wf:
-            json.dump(data, wf, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        updated += 1
-    return updated
-
-
-if text_lower.strip() == "./budget start":
-    try:
-        count = _budget_start_all_pairs()
-        await asyncio.sleep(0.15)
-        await tg_send(chat_id, _code(f"Start: карманы выставлены по базе. Пары: {count}"))
-    except Exception as e:
-        await tg_send(chat_id, _code(f"Ошибка start: {e.__class__.__name__}"))
-    raise SystemExit  # ensure no further handling
