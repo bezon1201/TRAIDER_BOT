@@ -57,10 +57,8 @@ def _extract_market_state(j: dict) -> str:
         v = (m.get("12h") or m.get("6h") or m.get("4h") or m.get("2h") or "").upper()
     else:
         v = str(m or "").upper()
-    if "UP" in v:
-        return "UP"
-    if "DOWN" in v:
-        return "DOWN"
+    if "UP" in v: return "UP"
+    if "DOWN" in v: return "DOWN"
     return "RANGE"
 
 _BASE_PCTS = {
@@ -110,9 +108,10 @@ def _budget_rolover_all_pairs() -> int:
         base_amt = {k: round(budget * (pct.get(k,0) / 100.0), 6) for k in _KEYS}
 
         ov = dict((data.get("flag_overrides") or {}))
+        ov_up = {str(k).upper(): v for k, v in ov.items()}
         new_amt = {}
         for k in _KEYS:
-            if ov.get(k) == "fill":
+            if ov_up.get(k) == "fill":
                 new_amt[k] = base_amt.get(k, 0.0)  # executed → reset to base
             else:
                 new_amt[k] = base_amt.get(k, 0.0) + float(prev_amt.get(k, 0.0))  # not executed → base + tail
@@ -123,15 +122,14 @@ def _budget_rolover_all_pairs() -> int:
             "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
             "alloc_amt": {k: round(float(new_amt.get(k,0.0)), 6) for k in _KEYS},
         }
-        # Drop ALL manual overrides for new week → AUTO
-        data.pop("flag_overrides", None)
+        data.pop("flag_overrides", None)  # new week -> AUTO
 
         _save_json(path, data)
         updated += 1
     return updated
 
 def _budget_cancel_all_pairs() -> int:
-    """End-of-month reset: budget=0, zero pockets, AUTO flags."""
+    # End-of-month reset: budget=0, zero pockets, AUTO flags.
     try:
         from metrics_runner import load_pairs
     except Exception:
@@ -143,10 +141,8 @@ def _budget_cancel_all_pairs() -> int:
 
     pairs = []
     if callable(load_pairs):
-        try:
-            pairs = load_pairs()
-        except Exception:
-            pairs = []
+        try: pairs = load_pairs()
+        except Exception: pairs = []
     if not pairs:
         try:
             names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
@@ -162,8 +158,7 @@ def _budget_cancel_all_pairs() -> int:
     for sym in pairs:
         path = _coin_json_path(sym)
         data = _load_json(path)
-        if not isinstance(data, dict):
-            data = {}
+        if not isinstance(data, dict): data = {}
 
         data["budget"] = 0.0
         state = _extract_market_state(data)
