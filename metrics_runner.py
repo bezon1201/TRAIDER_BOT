@@ -300,7 +300,16 @@ async def _collect_one_stub(symbol: str):
 # public entry for /now (no jitter)
 
 # public entry for /now (micro jitter to avoid burst hitting Binance)
-async def collect_all_with_micro_jitter(min_ms: int = 120, max_ms: int = 360) -> int:
+
+async def collect_all_with_micro_jitter(min_ms: int = 120, max_ms: int = 360, **kwargs) -> int:
+    # compatibility: allow scheduler to pass jitter_max_sec (seconds)
+    jsec = kwargs.get("jitter_max_sec")
+    if isinstance(jsec, (int, float)) and jsec > 0:
+        try:
+            min_ms = max(50, int(min_ms))
+            max_ms = max(min_ms + 50, int(min_ms + jsec * 1000))
+        except Exception:
+            pass
     pairs = load_pairs()
     if not pairs:
         return 0
@@ -310,8 +319,7 @@ async def collect_all_with_micro_jitter(min_ms: int = 120, max_ms: int = 360) ->
         n += 1
         # micro sleep between symbols to avoid hammering remote APIs
         try:
-            delay = random.uniform(float(min_ms), float(max_ms)) / 1000.0
-            await asyncio.sleep(delay)
+            await asyncio.sleep(random.uniform(min_ms, max_ms) / 1000.0)
         except Exception:
             # do not fail the whole /now if sleep fails
             pass

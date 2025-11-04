@@ -1,5 +1,5 @@
 
-import os, json, asyncio, time, inspect
+import os, json, asyncio, time, inspect, random
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -11,6 +11,8 @@ STATE_PATH = os.path.join(STORAGE_DIR, "scheduler_state.json")
 
 _task: Optional[asyncio.Task] = None
 _lock = asyncio.Lock()
+
+_tick_lock = asyncio.Lock()
 
 DEFAULT_STATE = {
     "enabled": False,
@@ -134,7 +136,8 @@ async def sched_off():
     return await sched_status()
 
 async def sched_run_once():
-    updated = await _tick()
+    async with _tick_lock:
+        updated = await _tick()
     st = _load_state()
     st["updated_last"] = int(updated); st["last_ok_utc"] = _iso(time.time()); st["last_run_utc"] = _iso(time.time())
     _save_state(st)
