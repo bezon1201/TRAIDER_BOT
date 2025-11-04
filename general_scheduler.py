@@ -75,8 +75,7 @@ def _scheduler_tail_lines(n: int) -> str:
     except Exception:
         n = 100
     items = list(_scheduler_logs)[-n:]
-    return "
-".join(items)
+    return "\n".join(items)
 
 async def _scheduler_loop():
     import asyncio, random, time
