@@ -6,7 +6,6 @@ import json
 import httpx
 
 from portfolio import build_portfolio_message, adjust_invested_total
-from metrics_runner import start_collector, stop_collector
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
@@ -20,6 +19,7 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 import json, re
+from general_scheduler import start_collector, stop_collector, scheduler_get_state, scheduler_set_enabled, scheduler_set_timing, scheduler_tail
 
 # === Coins config helpers ===
 def _pairs_env() -> list[str]:
@@ -358,7 +358,7 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
         await tg_send(chat_id, _code("Команды: /sheduler on|off | config | <sec> [jitter] | tail <N>"))
         return {"ok": True}
-    if text_lower.startswith("/portfolio"):
+if text_lower.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
             _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
