@@ -55,15 +55,21 @@ def adjust_pair_budget(symbol: str, delta: float) -> float:
 
 # Helper for UI header; safe no-op if caller passes already formatted text.
 def apply_budget_header(symbol: str, header_text: str) -> str:
-    budget = read_pair_budget(symbol)
-    # append budget after SYMBOL if >0
+    """Return header with budget number inserted after SYMBOL, always showing (incl. 0)."""
+    b = read_pair_budget(symbol)
     sym = symbol.upper()
-    if budget and isinstance(header_text, str):
-        if header_text.startswith(sym):
-            return f"{sym} {int(budget) if budget.is_integer() else budget} {header_text[len(sym):]}"
-        return f"{sym} {int(budget) if float(budget).is_integer() else budget}"
-    return header_text
-
+    if not isinstance(header_text, str):
+        return header_text
+    if b is None:
+        return header_text
+    try:
+        bf = float(b)
+        btxt = str(int(bf)) if bf.is_integer() else str(bf)
+    except Exception:
+        btxt = str(b)
+    if header_text.startswith(sym):
+        return f"{sym} {btxt} {header_text[len(sym):]}"
+    return f"{sym} {btxt}"
 # ---------- flag overrides (for LONG only) ----------
 # States: 'open' -> ⚠️ (order sent), 'fill' -> ✅ (order filled)
 _VALID_KEYS = {"oco","l0","l1","l2","l3"}

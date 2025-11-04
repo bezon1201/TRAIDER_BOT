@@ -9,6 +9,12 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
+from budget import (
+    read_pair_budget, write_pair_budget, adjust_pair_budget,
+    apply_budget_header, set_flag_override, cancel_flag_override,
+    reset_all_budgets_and_overrides,
+)
+
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -208,6 +214,7 @@ async def telegram_webhook(update: Request):
         for sym in (pairs or []):
             try:
                 smsg = build_symbol_message(sym)
+                smsg = _apply_budget_header_to_card(sym, smsg)
                 _log("/now symbol", sym, "len=", len(smsg or ""))
                 await tg_send(chat_id, _code(smsg))
             except Exception:
@@ -245,12 +252,76 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     
+
+# Budget command
+if text_lower.startswith("/budget"):
+    parts = (text or "").strip().split()
+    # /budget cancel -> global reset
+    if len(parts) >= 2 and parts[1].lower() == "cancel":
+        n = reset_all_budgets_and_overrides()
+        await tg_send(chat_id, _code(f"BUDGET\nСброс флагов и бюджетов по {n} парам"))
+        return {"ok": True}
+    # /budget <sym>=N  OR  /budget <sym> +/- N
+    if len(parts) >= 2:
+        tail = parts[1:]
+        sym_token = tail[0].upper()
+        # support '/budget btcusdc=25'
+        if "=" in sym_token:
+            sym, val = sym_token.split("=", 1)
+            try:
+                write_pair_budget(sym.upper(), float(val))
+                await tg_send(chat_id, _code(f"BUDGET\n{sym.upper()} = {float(val)}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка: {e}"))
+            return {"ok": True}
+        # '/budget btcusdc + 5' or 'btcusdc +5' or 'btcusdc+ 5' or 'btcusdc+5'
+        sym = re.sub(r"[+\-]$", "", sym_token)
+        op, num = None, None
+        if len(tail) >= 2 and tail[1] in ("+","-"):
+            op = tail[1]
+            if len(tail) >= 3:
+                num = tail[2]
+        elif len(tail) >= 2:
+            # maybe combined +5 or -3
+            m = re.match(r"([+\-])(\d+(?:[.]\d+)?)$", tail[1])
+            if m:
+                op, num = m.group(1), m.group(2)
+        if op and num is not None:
+            try:
+                v = float(num)
+                if op == "-":
+                    v = -v
+                newv = adjust_pair_budget(sym.upper(), v)
+                await tg_send(chat_id, _code(f"BUDGET\n{sym.upper()} -> {newv}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка: {e}"))
+            return {"ok": True}
+        # flag control: '/budget <sym> oco open'  '/budget <sym> L2 cancel'  '/budget <sym> L0 fill'
+        if len(tail) >= 2:
+            tgt = tail[1].upper()
+            action = tail[2].lower() if len(tail) >= 3 else ""
+            symu = sym.upper()
+            if tgt == "OCO" and action == "open":
+                set_flag_override(symu, "GLOBAL", "open")
+                await tg_send(chat_id, _code(f"BUDGET\n{symu} → ⚠️"))
+                return {"ok": True}
+            if re.fullmatch(r"L[0-3]", tgt) and action == "cancel":
+                cancel_flag_override(symu, tgt)
+                await tg_send(chat_id, _code(f"BUDGET\n{symu} {tgt} → AUTO"))
+                return {"ok": True}
+            if re.fullmatch(r"L[0-3]", tgt) and action == "fill":
+                set_flag_override(symu, tgt, "fill")
+                await tg_send(chat_id, _code(f"BUDGET\n{symu} {tgt} → ✅"))
+                return {"ok": True}
+    await tg_send(chat_id, _code("BUDGET\nНет данных о режиме торговли"))
+    return {"ok": True}
     # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
         # ignore known command prefixes
-        if sym not in ("NOW","MODE","PORTFOLIO","COINS","DATA","JSON","INVESTED","INVEST","MARKET","SHEDULER"):
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","DATA","JSON","INVESTED","INVEST","MARKET","SHEDULER","BUDGET"):
             msg = build_symbol_message(sym)
+            msg = _apply_budget_header_to_card(sym, msg)
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
 
@@ -416,6 +487,18 @@ def _market_line_for(symbol: str) -> str:
     return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
 
 
+
+
+def _apply_budget_header_to_card(symbol: str, message: str) -> str:
+    try:
+        lines = (message or "").splitlines()
+        if not lines:
+            return message
+        # normalize header
+        lines[0] = apply_budget_header(symbol, lines[0])
+        return "\n".join(lines)
+    except Exception:
+        return message
 def _code(msg: str) -> str:
     return f"""```
 {msg}
