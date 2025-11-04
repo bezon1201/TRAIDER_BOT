@@ -182,7 +182,11 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     if text_lower.startswith("/now"):
-        count, msg = await run_now()
+        parts = (text or "").strip().split()
+        mode_arg = None
+        if len(parts) >= 2 and parts[1].strip().lower() in ("long","short"):
+            mode_arg = parts[1].strip().upper()
+        count, msg = await run_now(mode_arg)
         _log("/now result:", count)
         await tg_send(chat_id, _code(msg))
         # After update, send per-symbol messages (one message per ticker)
@@ -190,6 +194,17 @@ async def telegram_webhook(update: Request):
             pairs = load_pairs()
         except Exception:
             pairs = []
+        # Filter pairs by mode if requested
+        if mode_arg:
+            try:
+                filtered = []
+                for _s in (pairs or []):
+                    _, _m = get_mode(_s)
+                    if _m == mode_arg:
+                        filtered.append(_s)
+                pairs = filtered
+            except Exception:
+                pass
         for sym in (pairs or []):
             try:
                 smsg = build_symbol_message(sym)

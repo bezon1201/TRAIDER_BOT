@@ -320,3 +320,24 @@ async def start_collector():
 
 async def stop_collector():
     return None
+
+async def collect_selected_with_micro_jitter(symbols, min_ms: int = 120, max_ms: int = 360) -> int:
+    """Collect only for provided symbols with micro jitter."""
+    if not symbols:
+        return 0
+    n = 0
+    for sym in symbols:
+        try:
+            await _collect_one_stub(sym)
+            n += 1
+        except Exception:
+            # skip individual failures to not break the whole run
+            pass
+        # micro jitter between requests
+        try:
+            import random, asyncio
+            delay = random.uniform(float(min_ms), float(max_ms)) / 1000.0
+            await asyncio.sleep(delay)
+        except Exception:
+            pass
+    return n
