@@ -249,7 +249,7 @@ async def telegram_webhook(update: Request):
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
         # ignore known command prefixes
-        if sym not in ("NOW","MODE","PORTFOLIO","COINS","JSON","INVESTED","INVEST","MARKET"):
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","DATA","JSON","INVESTED","INVEST","MARKET"):
             msg = build_symbol_message(sym)
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
