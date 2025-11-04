@@ -48,8 +48,9 @@ def _save_json(path: str, data: dict) -> None:
         json.dump(data or {}, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
+
 def _budget_cancel_all_pairs() -> int:
-    """Set budget=0 for all pairs and remove manual flag overrides; also drop flags (AUTO will be recomputed)."""
+    """End-of-month reset: set budget=0, zero pockets, drop manual overrides, recompute AUTO flags."""
     try:
         from metrics_runner import load_pairs
     except Exception:
@@ -59,6 +60,7 @@ def _budget_cancel_all_pairs() -> int:
     except Exception:
         compute_all_flags = None
 
+    # Collect pairs
     pairs = []
     if callable(load_pairs):
         try:
@@ -82,10 +84,25 @@ def _budget_cancel_all_pairs() -> int:
         data = _load_json(path)
         if not isinstance(data, dict):
             data = {}
+
+        # 1) zero budget
         data["budget"] = 0.0
-        if "flag_overrides" in data:
-            try: del data["flag_overrides"]
-            except Exception: data["flag_overrides"] = {}
+
+        # 2) pockets -> zero tails; keep base pct for current market state
+        state = _extract_market_state(data)
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
+        zero_amt = {k: 0.0 for k in _KEYS}
+        prev_pockets = data.get("pockets") or {}
+        week = prev_pockets.get("week") or 1  # week stays as-is
+        data["pockets"] = {
+            "state": state,
+            "week": week,
+            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
+            "alloc_amt": zero_amt,
+        }
+
+        # 3) drop manual overrides; flags -> AUTO
+        data.pop("flag_overrides", None)
         try:
             if callable(compute_all_flags):
                 data["flags"] = compute_all_flags(data)
@@ -93,11 +110,13 @@ def _budget_cancel_all_pairs() -> int:
                 data.pop("flags", None)
         except Exception:
             data.pop("flags", None)
+
         _save_json(path, data)
         updated += 1
     return updated
 
 def _extract_market_state(j: dict) -> str:
+(j: dict) -> str:
     """Return UP/RANGE/DOWN from json (prefer market_mode['12h'])."""
     m = (j or {}).get("market_mode")
     if isinstance(m, dict):
