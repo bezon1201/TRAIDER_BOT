@@ -271,38 +271,38 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
 
     
-    if text_lower.startswith("/json"):
+    
+    if text_lower.startswith("/data"):
         parts = text.split()
-        # /json del <NAME> — delete allowed JSON file from STORAGE_DIR
-        if len(parts) >= 3 and parts[1].strip().lower() == "del":
-            sym = parts[2].strip().upper()
-            safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
-            # whitelist: only files that appear in the list of STORAGE_DIR/*.json
-            files = set(os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json")))
-            if safe not in files:
-                await tg_send(chat_id, _code("Файл не найден"))
-                return {"ok": True}
-            try:
-                os.remove(os.path.join(STORAGE_DIR, safe))
-                await tg_send(chat_id, _code(f"Удалено: {safe}"))
-            except Exception as e:
-                await tg_send(chat_id, _code(f"Ошибка удаления: {e}"))
-            return {"ok": True}
-        # /json -> list all json files in STORAGE_DIR
+        # /data -> list all files in STORAGE_DIR (any extension, non-recursive)
         if len(parts) == 1:
-            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*.json"))])
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)])
             msg = "Файлы: " + (", ".join(files) if files else "—")
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
-        # /json <PAIR> -> send /data/<PAIR>.json as document
-        sym = parts[1].strip().upper()
-        safe = f"{sym}.json" if not sym.endswith(".json") else os.path.basename(sym)
-        path = os.path.join(STORAGE_DIR, safe)
-        if not os.path.exists(path):
+        # /data delete <NAME> -> delete file only if it exists in listing
+        if len(parts) >= 3 and parts[1].strip().lower() == "delete":
+            name = os.path.basename(parts[2].strip())
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)])
+            if name not in files:
+                await tg_send(chat_id, _code("Файл не найден"))
+                return {"ok": True}
+            path = os.path.join(STORAGE_DIR, name)
+            try:
+                os.remove(path)
+                await tg_send(chat_id, _code(f"Удалено: {name}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка удаления: {name}: {e.__class__.__name__}"))
+            return {"ok": True}
+        # /data <NAME> -> send file as document
+        name = os.path.basename(parts[1].strip())
+        path = os.path.join(STORAGE_DIR, name)
+        if not (os.path.exists(path) and os.path.isfile(path)):
             await tg_send(chat_id, _code("Файл не найден"))
             return {"ok": True}
-        await tg_send_file(chat_id, path, filename=safe, caption=safe)
+        await tg_send_file(chat_id, path, filename=name, caption=name)
         return {"ok": True}
+
 
     if text_lower.startswith("/portfolio"):
         try:
