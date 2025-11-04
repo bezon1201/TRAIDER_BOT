@@ -1,187 +1,190 @@
-# budget.py — budgets & flag overrides (LONG) + global cancel
-# Storage: /data/<SYMBOL>.json
-import os, json, re as _re, tempfile
+import os
+import re
+import json
+from pathlib import Path
+from typing import Tuple, Optional, Dict, Any
 
-STORAGE_DIR = os.getenv("DATA_DIR", "/data")
+DATA_DIR = Path(os.getenv("STORAGE_DIR", "."))
 
-# ---------- basic json utils ----------
-def _ensure_parent(path: str) -> None:
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
+FLAG_OK = "🟢"
+FLAG_MAYBE = "🟡"
+FLAG_STOP = "🔴"
+FLAG_SENT = "⚠️"
+FLAG_FILLED = "✅"
 
-def _load_json_safe(path: str) -> dict:
+LEVEL_KEYS = ["TP", "SLt", "SL", "L0", "L1", "L2", "L3"]  # names as shown on cards
+OVERRIDE_KEYS = ["TP", "SLt", "SL", "L0", "L1", "L2", "L3"]
+
+def normalize_symbol(s: str) -> str:
+    s = s.strip()
+    if s.startswith("/"):
+        s = s[1:]
+    return s.replace("-", "").replace("_", "").upper()
+
+def _pair_path(sym: str) -> Path:
+    return DATA_DIR / f"{sym}.json"
+
+def _read_pair(sym: str) -> Dict[str, Any]:
+    p = _pair_path(sym)
+    if not p.exists():
+        return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
-def _save_json_atomic(path: str, data: dict) -> None:
-    _ensure_parent(path)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+def _write_pair(sym: str, data: Dict[str, Any]) -> None:
+    p = _pair_path(sym)
+    p.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
-def _pair_json_path(symbol: str) -> str:
-    return os.path.join(STORAGE_DIR, f"{symbol.upper()}.json")
+def get_budget_for_symbol(sym: str) -> Optional[int]:
+    sym = normalize_symbol(sym)
+    d = _read_pair(sym)
+    b = d.get("budget")
+    if isinstance(b, (int, float)):
+        return int(b)
+    return 0
 
-# ---------- budgets ----------
-def read_pair_budget(symbol: str) -> float:
-    data = _load_json_safe(_pair_json_path(symbol))
-    b = data.get("budget", 0)
-    try:
-        return float(b)
-    except Exception:
-        return 0.0
+# ---- parsing ----
 
-def write_pair_budget(symbol: str, value: float) -> float:
-    data = _load_json_safe(_pair_json_path(symbol))
-    try:
-        v = float(value)
-    except Exception:
-        v = 0.0
-    data["budget"] = v
-    _save_json_atomic(_pair_json_path(symbol), data)
-    return v
+class BudgetCmd:
+    kind: str
+    sym: Optional[str]
+    value: Optional[int]
+    level: Optional[str]
 
-def adjust_pair_budget(symbol: str, delta: float) -> float:
-    cur = read_pair_budget(symbol)
-    try:
-        d = float(delta)
-    except Exception:
-        d = 0.0
-    return write_pair_budget(symbol, cur + d)
+    def __init__(self, kind: str, sym: Optional[str] = None, value: Optional[int] = None, level: Optional[str] = None):
+        self.kind = kind
+        self.sym = sym
+        self.value = value
+        self.level = level
 
-# Helper for UI header; safe no-op if caller passes already formatted text.
-def apply_budget_header(symbol: str, header_text: str) -> str:
-    """Return header with budget number inserted after SYMBOL, always showing (incl. 0)."""
-    b = read_pair_budget(symbol)
-    sym = symbol.upper()
-    if not isinstance(header_text, str):
-        return header_text
-    if b is None:
-        return header_text
-    try:
-        bf = float(b)
-        btxt = str(int(bf)) if bf.is_integer() else str(bf)
-    except Exception:
-        btxt = str(b)
-    if header_text.startswith(sym):
-        return f"{sym} {btxt} {header_text[len(sym):]}"
-    return f"{sym} {btxt}"
-# ---------- flag overrides (for LONG only) ----------
-# States: 'open' -> ⚠️ (order sent), 'fill' -> ✅ (order filled)
-_VALID_KEYS = {"oco","l0","l1","l2","l3"}
+def parse_budget_command(text: str) -> BudgetCmd:
+    t = text.strip()
+    if not t.lower().startswith("/budget"):
+        raise ValueError("not a budget command")
+    payload = t[len("/budget"):].strip()
 
-def _read_overrides(symbol: str) -> dict:
-    data = _load_json_safe(_pair_json_path(symbol))
-    ov = data.get("flag_overrides")
-    return ov if isinstance(ov, dict) else {}
+    if payload.lower() == "cancel":
+        return BudgetCmd("cancel_all")
 
-def _write_overrides(symbol: str, overrides: dict) -> None:
-    data = _load_json_safe(_pair_json_path(symbol))
-    data["flag_overrides"] = overrides
-    _save_json_atomic(_pair_json_path(symbol), data)
+    # /budget btcusdc=25
+    m = re.match(r"^([a-z0-9_/\-]+)\s*=\s*([0-9]+)\s*$", payload, re.I)
+    if m:
+        return BudgetCmd("set", normalize_symbol(m.group(1)), int(m.group(2)))
 
-def set_flag_override(symbol: str, key: str, state: str) -> str:
-    k = key.lower()
-    if k not in _VALID_KEYS:
-        raise ValueError("invalid key")
-    st = state.lower()
-    if st not in ("open","fill"):
-        raise ValueError("invalid state")
-    ov = _read_overrides(symbol)
-    cur = (ov.get(k) or "").lower()
-    if cur == "fill":  # terminal, don't downgrade
-        return "fill"
-    ov[k] = st
-    _write_overrides(symbol, ov)
-    return st
+    # /budget btceth + 5  or /budget btceth - 7
+    m = re.match(r"^([a-z0-9_/\-]+)\s*([+\-])\s*([0-9]+)\s*$", payload, re.I)
+    if m:
+        sign = 1 if m.group(2) == "+" else -1
+        return BudgetCmd("inc", normalize_symbol(m.group(1)), sign * int(m.group(3)))
 
-def cancel_flag_override(symbol: str, key: str) -> str:
-    k = key.lower()
-    if k not in _VALID_KEYS:
-        raise ValueError("invalid key")
-    ov = _read_overrides(symbol)
-    cur = (ov.get(k) or "").lower()
-    if cur == "fill":
-        return "fill"
-    if k in ov:
-        del ov[k]
-        _write_overrides(symbol, ov)
-    return "auto"
+    # /budget btcusdc oco open
+    m = re.match(r"^([a-z0-9_/\-]+)\s*oco\s*open\s*$", payload, re.I)
+    if m:
+        return BudgetCmd("oco_open", normalize_symbol(m.group(1)))
 
-def apply_flags_overrides(symbol: str, flags: dict) -> dict:
-    # Apply manual overrides on top of computed flags.
-    # Priority: ✅ (fill) → ⚠️ (open) → auto (🔴/🟡/🟢)
-    if not isinstance(flags, dict):
-        return flags
-    ov = _read_overrides(symbol)
-    if not ov:
-        return flags
-    out = dict(flags)
-    def put(key_up: str, emoji: str):
-        if key_up in out:
-            out[key_up] = emoji
-    for k, st in ov.items():
-        key_up = k.upper()
-        if st == "fill":
-            put(key_up, "✅")
-        elif st == "open":
-            put(key_up, "⚠️")
-    return out
+    # /budget ethusdc L2 cancel
+    m = re.match(r"^([a-z0-9_/\-]+)\s*(L[0-3]|TP|SLT|SL)\s*cancel\s*$", payload, re.I)
+    if m:
+        lvl = m.group(2).upper()
+        return BudgetCmd("level_cancel", normalize_symbol(m.group(1)), level=lvl)
 
-# ---------- global cancel: reset budgets & overrides ----------
-def _extract_symbols_from_pairs_json(pairs_obj) -> set[str]:
-    syms = set()
-    def walk(x):
-        if isinstance(x, dict):
-            for k, v in x.items():
-                walk(v)
-                if isinstance(k, str) and _re.fullmatch(r"[A-Z0-9]{6,}", k):
-                    syms.add(k.upper())
-        elif isinstance(x, list):
-            for i in x:
-                walk(i)
-        elif isinstance(x, str):
-            if _re.fullmatch(r"[A-Z0-9]{6,}", x):
-                syms.add(x.upper())
-    walk(pairs_obj)
-    return syms
+    # /budget btcusdc L0 fill
+    m = re.match(r"^([a-z0-9_/\-]+)\s*(L[0-3]|TP|SLT|SL)\s*fill\s*$", payload, re.I)
+    if m:
+        lvl = m.group(2).upper()
+        return BudgetCmd("level_fill", normalize_symbol(m.group(1)), level=lvl)
 
-def _list_candidate_symbols() -> set[str]:
-    syms = set()
-    # from pairs.json
-    p_json = os.path.join(STORAGE_DIR, "pairs.json")
-    try:
-        with open(p_json, "r", encoding="utf-8") as f:
-            syms |= _extract_symbols_from_pairs_json(json.load(f))
-    except Exception:
-        pass
-    # from *.json filenames
-    try:
-        for name in os.listdir(STORAGE_DIR):
-            if name.lower().endswith(".json"):
-                base = name[:-5]
-                if _re.fullmatch(r"[A-Z0-9]{6,}", base):
-                    syms.add(base.upper())
-    except Exception:
-        pass
-    return syms
+    # Fallback help
+    return BudgetCmd("help")
 
-def reset_all_budgets_and_overrides() -> int:
-    syms = sorted(_list_candidate_symbols())
+def _ensure_overrides(d: Dict[str, Any]) -> Dict[str, str]:
+    ov = d.get("flag_overrides")
+    if not isinstance(ov, dict):
+        ov = {}
+        d["flag_overrides"] = ov
+    return ov
+
+def _apply_set(sym: str, value: int) -> str:
+    d = _read_pair(sym)
+    d["budget"] = max(0, int(value))
+    _write_pair(sym, d)
+    return f"{sym} budget = {d['budget']}"
+
+def _apply_inc(sym: str, delta: int) -> str:
+    d = _read_pair(sym)
+    cur = int(d.get("budget") or 0)
+    d["budget"] = max(0, cur + int(delta))
+    _write_pair(sym, d)
+    sign = "+" if delta >= 0 else ""
+    return f"{sym} budget {sign}{delta} → {d['budget']}"
+
+def _apply_oco_open(sym: str) -> str:
+    d = _read_pair(sym)
+    ov = _ensure_overrides(d)
+    for k in OVERRIDE_KEYS:
+        ov[k] = "⚠️"
+    _write_pair(sym, d)
+    return f"{sym} flags → ⚠️ (oco open)"
+
+def _apply_level_cancel(sym: str, level: str) -> str:
+    d = _read_pair(sym)
+    ov = _ensure_overrides(d)
+    ov.pop(level.upper(), None)  # remove explicit flag to return to automatic
+    _write_pair(sym, d)
+    return f"{sym} {level.upper()} → авто"
+
+def _apply_level_fill(sym: str, level: str) -> str:
+    d = _read_pair(sym)
+    ov = _ensure_overrides(d)
+    ov[level.upper()] = "✅"
+    _write_pair(sym, d)
+    return f"{sym} {level.upper()} → ✅"
+
+def reset_all() -> int:
+    """Drop all budgets to 0 and remove explicit flag overrides for every pair file."""
     cnt = 0
-    for sym in syms:
-        path = _pair_json_path(sym)
-        data = _load_json_safe(path)
-        data["budget"] = 0
-        if "flag_overrides" in data:
-            try:
-                del data["flag_overrides"]
-            except Exception:
-                data["flag_overrides"] = {}
-        _save_json_atomic(path, data)
-        cnt += 1
+    for p in DATA_DIR.glob("*.json"):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        changed = False
+        if d.get("budget"):
+            d["budget"] = 0
+            changed = True
+        if isinstance(d.get("flag_overrides"), dict) and d["flag_overrides"]:
+            d["flag_overrides"] = {}
+            changed = True
+        if changed:
+            p.write_text(json.dumps(d, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            cnt += 1
     return cnt
+
+def apply_budget_command(cmd: BudgetCmd) -> str:
+    if cmd.kind == "help":
+        return ("Формат:\n"
+                "/budget <pair>=<num>\n"
+                "/budget <pair> +/- <num>\n"
+                "/budget <pair> oco open\n"
+                "/budget <pair> <L0|L1|L2|L3|TP|SLt|SL> cancel\n"
+                "/budget <pair> <L0|L1|L2|L3|TP|SLt|SL> fill\n"
+                "/budget cancel")
+    if cmd.kind == "cancel_all":
+        n = reset_all()
+        return f"Сброс флагов и бюджетов по {n} парам"
+    if not cmd.sym:
+        return "Не указана пара"
+    sym = cmd.sym
+    if cmd.kind == "set":
+        return _apply_set(sym, int(cmd.value or 0))
+    if cmd.kind == "inc":
+        return _apply_inc(sym, int(cmd.value or 0))
+    if cmd.kind == "oco_open":
+        return _apply_oco_open(sym)
+    if cmd.kind == "level_cancel":
+        return _apply_level_cancel(sym, cmd.level or "L0")
+    if cmd.kind == "level_fill":
+        return _apply_level_fill(sym, cmd.level or "L0")
+    return "Команда не распознана"
