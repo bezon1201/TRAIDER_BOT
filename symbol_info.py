@@ -20,7 +20,6 @@ def build_symbol_message(symbol: str) -> str:
     sym = (symbol or "").upper().strip()
     data = _read_json(_coin_path(sym))
     data["symbol"] = sym
-    # Apply manual overrides to flags at render-time to avoid delays
     if isinstance(data.get("flags"), dict):
         data["flags"] = apply_flags_overrides(sym, data.get("flags"))
     mode = (data.get("trade_mode") or "").upper()

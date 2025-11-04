@@ -44,7 +44,7 @@ def _read_json(path: str) -> dict:
 
 def _write_json_atomic(path: str, data: dict) -> None:
     
-    # Preserve live 'budget' and manual overrides from on-disk file to avoid overwriting /budget changes
+    # Merge live values from disk to avoid overwriting manual budget/flags
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as _rf:
@@ -53,14 +53,12 @@ def _write_json_atomic(path: str, data: dict) -> None:
             _live = {}
     except Exception:
         _live = {}
-
     if isinstance(_live, dict):
         if "budget" in _live:
             try:
                 data["budget"] = float(_live.get("budget", 0.0))
             except Exception:
                 data["budget"] = _live.get("budget")
-        # Respect removal of overrides by /budget cancel; keep 'fill' if present
         if "flag_overrides" in _live:
             if _live.get("flag_overrides") in ({}, None):
                 data.pop("flag_overrides", None)
@@ -68,7 +66,6 @@ def _write_json_atomic(path: str, data: dict) -> None:
                 data["flag_overrides"] = _live.get("flag_overrides")
         else:
             data.pop("flag_overrides", None)
-
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":" ))

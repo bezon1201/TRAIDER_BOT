@@ -108,12 +108,11 @@ def _budget_rolover_all_pairs() -> int:
 
         ov = dict((data.get("flag_overrides") or {}))
         new_amt = {}
-        new_ov = {k:v for k,v in ov.items() if v == "fill"}
         for k in _KEYS:
             if ov.get(k) == "fill":
-                new_amt[k] = base_amt.get(k, 0.0)
+                new_amt[k] = base_amt.get(k, 0.0)  # executed → reset to base
             else:
-                new_amt[k] = base_amt.get(k, 0.0) + float(prev_amt.get(k, 0.0))
+                new_amt[k] = base_amt.get(k, 0.0) + float(prev_amt.get(k, 0.0))  # not executed → base + tail
         week = _next_week(prev_pockets.get("week") or 0)
         data["pockets"] = {
             "state": state,
@@ -121,15 +120,15 @@ def _budget_rolover_all_pairs() -> int:
             "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
             "alloc_amt": {k: round(float(new_amt.get(k,0.0)), 6) for k in _KEYS},
         }
-        if new_ov: data["flag_overrides"] = new_ov
-        else: data.pop("flag_overrides", None)
+        # Drop ALL manual overrides for new week → AUTO
+        data.pop("flag_overrides", None)
 
         _save_json(path, data)
         updated += 1
     return updated
 
 def _budget_cancel_all_pairs() -> int:
-    """End-of-month reset: budget=0, zero pockets, AUTO flags."""
+    \"\"\"End-of-month reset: budget=0, zero pockets, AUTO flags.\"\"\"
     try:
         from metrics_runner import load_pairs
     except Exception:
@@ -148,7 +147,7 @@ def _budget_cancel_all_pairs() -> int:
             names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
             for name in names:
                 base_name = name[:-5]
-                if base_name.lower() in ("pairs","portfolio"):
+                if base_name.lower() in (\"pairs\",\"portfolio\"):
                     continue
                 pairs.append(base_name.upper())
         except Exception:
@@ -160,24 +159,24 @@ def _budget_cancel_all_pairs() -> int:
         data = _load_json(path)
         if not isinstance(data, dict): data = {}
 
-        data["budget"] = 0.0
+        data[\"budget\"] = 0.0
         state = _extract_market_state(data)
-        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
-        week = (data.get("pockets") or {}).get("week") or 1
-        data["pockets"] = {
-            "state": state,
-            "week": week,
-            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
-            "alloc_amt": {k: 0.0 for k in _KEYS},
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS[\"RANGE\"]))
+        week = (data.get(\"pockets\") or {}).get(\"week\") or 1
+        data[\"pockets\"] = {
+            \"state\": state,
+            \"week\": week,
+            \"alloc_pct\": {k: pct.get(k,0) for k in _KEYS},
+            \"alloc_amt\": {k: 0.0 for k in _KEYS},
         }
-        data.pop("flag_overrides", None)
+        data.pop(\"flag_overrides\", None)
         try:
             if callable(compute_all_flags):
-                data["flags"] = compute_all_flags(data)
+                data[\"flags\"] = compute_all_flags(data)
             else:
-                data.pop("flags", None)
+                data.pop(\"flags\", None)
         except Exception:
-            data.pop("flags", None)
+            data.pop(\"flags\", None)
 
         _save_json(path, data)
         updated += 1
