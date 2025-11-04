@@ -273,7 +273,8 @@ async def _collect_one_stub(symbol: str):
                 data.pop("grid", None)
             # auto flags (OCO and L0-L3)
             try:
-                data["flags"] = compute_all_flags(data)
+                flags_auto = compute_all_flags(data)
+                data["flags"] = apply_flags_overrides(symbol, flags_auto)
             except Exception:
                 data.pop("flags", None)
         else:

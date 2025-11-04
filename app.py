@@ -227,7 +227,6 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
     if text_lower.startswith("/budget"):
     # --- FLAG COMMANDS START ---
-    if text_lower.startswith("/budget"):
         tokens = (text or "").split()
         # pattern: /budget <symbol> <target> <action>
         if len(tokens) >= 4:
