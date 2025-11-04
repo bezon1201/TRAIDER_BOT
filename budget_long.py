@@ -39,19 +39,27 @@ def _round_int(x: float | int) -> int:
 def _init_payload(tz_hours: int = 0):
     now = _now_utc()
     local = now + timedelta(hours=tz_hours)
+
+    # Неделя: воскресенье 10:00 местного времени
     dow = local.weekday()  # Mon=0..Sun=6
     back = (dow - 6) % 7
     week_start_local = (local - timedelta(days=back)).replace(hour=10, minute=0, second=0, microsecond=0)
     if local < week_start_local:
         week_start_local -= timedelta(days=7)
     week_end_local = week_start_local + timedelta(days=7)
+
+    # Месяц: календарные границы в local
     month_start_local = _start_of_month(local)
     month_end_local = _end_of_month(local)
+
+    # Переводим в UTC для хранения
     week_start_utc = week_start_local - timedelta(hours=tz_hours)
     week_end_utc = week_end_local - timedelta(hours=tz_hours)
     month_start_utc = month_start_local - timedelta(hours=tz_hours)
     month_end_utc = month_end_local - timedelta(hours=tz_hours)
+
     week_number = int(week_start_local.isocalendar().week)
+
     return {
         "tz_hours": tz_hours,
         "week_start_utc": _iso(week_start_utc),
@@ -92,6 +100,7 @@ def _blank_symbol():
 
 def _alloc_default(weekly: int, monthly: int):
     weekly = int(weekly or 0); monthly = int(monthly or 0)
+    # доли: OCO 20% от W, L0 20% от W; L1 40% от M, L2 20% от M, L3 0%
     oco = _round_int(weekly * 0.20)
     l0  = _round_int(weekly * 0.20)
     l1 = _round_int(monthly * 0.40)
@@ -104,6 +113,19 @@ def _alloc_default(weekly: int, monthly: int):
         "L2":  {"left": l2,  "spent": 0},
         "L3":  {"left": l3,  "spent": 0},
     }
+
+def _ensure_legs(s: dict) -> dict:
+    """Гарантируем наличие всех ног и целочисленных значений."""
+    legs = s.get("legs") or {}
+    for k in ("OCO","L0","L1","L2","L3"):
+        if k not in legs or not isinstance(legs[k], dict):
+            legs[k] = {"left": 0, "spent": 0}
+        legs[k]["left"]  = int(legs[k].get("left", 0) or 0)
+        legs[k]["spent"] = int(legs[k].get("spent", 0) or 0)
+    s["legs"] = legs
+    s["weekly"]  = int(s.get("weekly", 0) or 0)
+    s["monthly"] = int(s.get("monthly", s["weekly"]*4) or 0)
+    return s
 
 # --- public API -------------------------------------------------------------
 
@@ -143,6 +165,7 @@ def spend(symbol: str, leg: str, amount: int):
         return "Leg must be one of OCO, L0, L1, L2, L3"
     amt = max(0, _round_int(amount))
     s = p["symbols"][sym]
+    s = _ensure_legs(s)
     s["legs"][leg]["spent"] += amt
     s["legs"][leg]["left"] = max(0, s["legs"][leg]["left"] - amt)
     _save(p)
@@ -153,6 +176,7 @@ def manual_reset():
     tz = int(p.get("tz_hours", 0))
     newp = _init_payload(tz_hours=tz)
     for sym, s in p.get("symbols", {}).items():
+        s = _ensure_legs(s)
         weekly = _round_int(s.get("weekly", 0))
         monthly = _round_int(s.get("monthly", weekly*4))
         newp["symbols"][sym] = {
@@ -174,8 +198,9 @@ def weekly_tick():
     p["week_end_utc"] = _iso(we_local - timedelta(hours=tz))
     p["week_number"] = int(ws_local.isocalendar().week)
     for s in p["symbols"].values():
+        s = _ensure_legs(s)
         weekly = int(s.get("weekly", 0))
-        add_share = _round_int(0.25 * _round_int(0.2 * weekly))
+        add_share = _round_int(0.25 * _round_int(0.2 * weekly))  # rollover 1/4 от недельной доли ноги
         for leg in ("OCO","L0"):
             s["legs"][leg]["left"] += add_share
     _save(p)
@@ -188,6 +213,7 @@ def month_end_tick():
     newp["week_end_utc"] = p["week_end_utc"]
     newp["week_number"] = p.get("week_number", newp["week_number"])
     for sym, s in p.get("symbols", {}).items():
+        s = _ensure_legs(s)
         weekly = int(s.get("weekly", 0))
         monthly = int(s.get("monthly", weekly*4))
         legs = s.get("legs", _alloc_default(weekly, monthly))
@@ -196,14 +222,18 @@ def month_end_tick():
             "monthly": monthly,
             "legs": _alloc_default(weekly, monthly)
         }
+        # L1-3 переносятся (rollover)
         for leg in ("L1","L2","L3"):
             ns["legs"][leg]["left"] += int(legs[leg]["left"])
         newp["symbols"][sym] = ns
     _save(newp)
 
+# --- formatting -------------------------------------------------------------
+
 def _format_symbol(sym: str, s: dict) -> str:
+    s = _ensure_legs(s)
     W = int(s.get("weekly", 0)); M = int(s.get("monthly", 0))
-    legs = s.get("legs", _alloc_default(W, M))
+    legs = s["legs"]
     def leg(tag): 
         d = legs[tag]; return f"{tag} {int(d['left'])}/{int(d['spent'])}"
     return "\n".join([
@@ -218,13 +248,13 @@ def budget_per_symbol_texts(symbols: Optional[List[str]] = None) -> List[str]:
     if symbols:
         want = set(s.upper() for s in symbols)
         syms = [s for s in syms if s.upper() in want]
-    return [_format_symbol(sym, p["symbols"][sym]) for sym in sorted(syms)]
+    return [_format_symbol(sym, _ensure_legs(p["symbols"][sym])) for sym in sorted(syms)]
 
 def budget_summary() -> str:
     p = _load()
     blocks = budget_per_symbol_texts()
-    tW = sum(int(s.get("weekly",0)) for s in p.get("symbols", {}).values())
-    tM = sum(int(s.get("monthly",0)) for s in p.get("symbols", {}).values())
+    tW = sum(int(_ensure_legs(s).get("weekly",0)) for s in p.get("symbols", {}).values())
+    tM = sum(int(_ensure_legs(s).get("monthly",0)) for s in p.get("symbols", {}).values())
     week = int(p.get("week_number", 0))
     footer = f"\nTotal weekly: {tW}\nTotal monthly: {tM}\nWeek: {week}"
     return ("\n\n".join(blocks) if blocks else "(no core pairs)") + "\n" + footer
@@ -237,6 +267,37 @@ def budget_schedule_text() -> str:
         f"Month: {p['month_start_utc']} → {p['month_end_utc']}",
         f"TZ: UTC{tz:+d}"
     ])
+
+# --- programmatic access for cards (/now) ----------------------------------
+
+def budget_numbers_for_symbol(symbol: str) -> dict:
+    """
+    Возвращает компактный словарь с целыми числами для карточки:
+    {
+      'weekly': W, 'monthly': M,
+      'legs': { 'OCO': {'left':..,'spent':..}, 'L0': {...}, 'L1': {...}, 'L2': {...}, 'L3': {...} }
+    }
+    Если символа нет — все нули.
+    """
+    p = _load()
+    sym = (symbol or "").upper()
+    s = p.get("symbols", {}).get(sym)
+    if not s:
+        return {
+            "weekly": 0, "monthly": 0,
+            "legs": {k: {"left": 0, "spent": 0} for k in ("OCO","L0","L1","L2","L3")}
+        }
+    s = _ensure_legs(s)
+    # Копия только с int
+    res = {
+        "weekly": int(s.get("weekly", 0)),
+        "monthly": int(s.get("monthly", 0)),
+        "legs": {}
+    }
+    for k in ("OCO","L0","L1","L2","L3"):
+        d = s["legs"][k]
+        res["legs"][k] = {"left": int(d.get("left",0)), "spent": int(d.get("spent",0))}
+    return res
 
 # --- compatibility for scheduler.py ----------------------------------------
 
