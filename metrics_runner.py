@@ -44,7 +44,6 @@ def _read_json(path: str) -> dict:
 
 def _write_json_atomic(path: str, data: dict) -> None:
     
-    # Preserve live 'budget' and manual overrides from on-disk file
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as _rf:
@@ -70,7 +69,6 @@ def _write_json_atomic(path: str, data: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":" ))
     os.replace(tmp, path)
-
 
 def _ensure_skeleton(symbol: str, now_iso: str, existing: dict) -> dict:
     out = dict(existing) if isinstance(existing, dict) else {}
