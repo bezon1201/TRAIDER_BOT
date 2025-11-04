@@ -10,6 +10,17 @@ from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
 
+from budget import read_pair_budget, write_pair_budget, adjust_pair_budget, apply_budget_header
+
+# --- budget-aware wrapper for symbol cards ---
+try:
+    _orig_build_symbol_message = build_symbol_message
+    def build_symbol_message(symbol: str):
+        card = _orig_build_symbol_message(symbol)
+        return apply_budget_header(symbol, card)
+except Exception:
+    pass
+
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
 WEBHOOK_BASE = os.getenv("TRAIDER_WEBHOOK_BASE") or os.getenv("WEBHOOK_BASE") or ""
@@ -214,6 +225,36 @@ async def telegram_webhook(update: Request):
                 # Continue even if one symbol fails to render
                 pass
         return {"ok": True}
+    if text_lower.startswith("/budget"):
+        parts = (text or "").split(maxsplit=1)
+        if len(parts) == 1 or not parts[1].strip():
+            await tg_send(chat_id, _code("Формат: /budget SYMBOL=VALUE | SYMBOL +DELTA | SYMBOL -DELTA"))
+            return {"ok": True}
+        arg = parts[1].strip()
+        arg = re.sub(r"\s+", " ", arg)
+        m = re.match(r"^/?([a-z0-9_]+)\s*([=+\-])\s*([0-9]+(?:\.[0-9]+)?)$", arg, flags=re.I)
+        if m is None:
+            m = re.match(r"^/?([a-z0-9_]+)([=+\-])([0-9]+(?:\.[0-9]+)?)$", arg, flags=re.I)
+        if not m:
+            await tg_send(chat_id, _code("Не понял. Примеры: /budget btcusdc=25 | /budget btcusdc +5 | /budget btcusdc-3"))
+            return {"ok": True}
+        sym = m.group(1).upper()
+        op  = m.group(2)
+        val = float(m.group(3))
+        cur = read_pair_budget(sym)
+        if op == "=":
+            newv = val
+        elif op == "+":
+            newv = cur + val
+        else:
+            newv = cur - val
+        if newv < 0:
+            newv = 0.0
+        write_pair_budget(sym, newv)
+        disp = int(newv) if abs(newv - int(newv)) < 1e-9 else round(newv, 6)
+        await tg_send(chat_id, _code(f"OK. BUDGET[{sym}] = {disp}"))
+        return {"ok": True}
+
 
     
     if text_lower.startswith("/mode"):
@@ -441,3 +482,49 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     except Exception:
         # silently ignore to avoid breaking webhook
         pass
+
+def _save_json_atomic(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, path)
+
+def read_pair_budget(symbol: str) -> float:
+    try:
+        data = _load_json_safe(os.path.join(STORAGE_DIR, f"{symbol}.json"))
+        v = data.get("budget")
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str) and v.strip():
+            return float(v.strip())
+    except Exception:
+        pass
+    return 0.0
+
+def write_pair_budget(symbol: str, value: float) -> float:
+    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
+    data = _load_json_safe(path)
+    data["budget"] = float(value)
+    _save_json_atomic(path, data)
+    return float(value)
+
+def _apply_budget_header(symbol: str, msg: str) -> str:
+    try:
+        budget = read_pair_budget(symbol)
+        lines = (msg or "").splitlines()
+        # find first non-empty line; replace pure symbol line with "SYMBOL budget"
+        for i, line in enumerate(lines):
+            if line.strip() == "":
+                continue
+            if line.strip().upper() == symbol.upper():
+                b = int(budget) if abs(budget - int(budget)) < 1e-9 else round(budget, 6)
+                lines[i] = f"{symbol.upper()} {b}"
+                break
+            else:
+                b = int(budget) if abs(budget - int(budget)) < 1e-9 else round(budget, 6)
+                header = f"{symbol.upper()} {b}"
+                return "\n".join([header] + lines)
+        return "\n".join(lines)
+    except Exception:
+        return msg or ""
