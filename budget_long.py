@@ -1,305 +1,235 @@
 
-import os, json, time, datetime
-from typing import Dict, Tuple
+# -*- coding: utf-8 -*-
+"""
+Budget management for LONG (core) coins.
+"""
+from __future__ import annotations
+import os, json
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Any, List, Optional
 
-SETTINGS = "budget_long.json"
-STATE = "budget_long_state.json"
+DATA_PATH = "/data"
+FILE_PATH = os.path.join(DATA_PATH, "budget_long.json")
 
-DEFAULT_SETTINGS = {"version":1,"tz_offset_hours":0,"cycle_weeks":4,"pairs":{}}
-DEFAULT_STATE    = {"tz_offset_hours":0,"week_index":1,"week_start_utc":None,"next_week_start_utc":None,"month_start_utc":None,"month_end_utc":None,"last_week_roll_utc":None,"last_month_roll_utc":None,"pairs":{}}
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
-TABLES = {
-    "UP":    {"OCO": 0.40, "L0": 0.40, "L1": 0.20, "L2": 0.00, "L3": 0.00},
-    "RANGE": {"OCO": 0.20, "L0": 0.20, "L1": 0.40, "L2": 0.20, "L3": 0.00},
-    "DOWN":  {"OCO": 0.20, "L0": 0.00, "L1": 0.20, "L2": 0.40, "L3": 0.20},
-}
+def _iso(dtobj: datetime) -> str:
+    return dtobj.astimezone(timezone.utc).replace(tzinfo=timezone.utc).isoformat().replace("+00:00","Z")
 
-STABLES = {"USDC","USDT","BUSD","FDUSD"}
+def _start_of_month(dtobj: datetime) -> datetime:
+    return dtobj.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-def _atomic_write(path: str, data: dict):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+def _end_of_month(dtobj: datetime) -> datetime:
+    if dtobj.month == 12:
+        nxt = dtobj.replace(year=dtobj.year+1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        nxt = dtobj.replace(month=dtobj.month+1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return nxt
 
-def _read_json(path: str, default: dict) -> dict:
+def _round_int(x: float | int) -> int:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        return int(round(float(x)))
+    except Exception:
+        return 0
+
+def _init_payload(tz_hours: int = 0):
+    now = _now_utc()
+    local = now + timedelta(hours=tz_hours)
+    dow = local.weekday()  # Mon=0..Sun=6
+    back = (dow - 6) % 7
+    week_start_local = (local - timedelta(days=back)).replace(hour=10, minute=0, second=0, microsecond=0)
+    if local < week_start_local:
+        week_start_local -= timedelta(days=7)
+    week_end_local = week_start_local + timedelta(days=7)
+    month_start_local = _start_of_month(local)
+    month_end_local = _end_of_month(local)
+    week_start_utc = week_start_local - timedelta(hours=tz_hours)
+    week_end_utc = week_end_local - timedelta(hours=tz_hours)
+    month_start_utc = month_start_local - timedelta(hours=tz_hours)
+    month_end_utc = month_end_local - timedelta(hours=tz_hours)
+    week_number = int(week_start_local.isocalendar().week)
+    return {
+        "tz_hours": tz_hours,
+        "week_start_utc": _iso(week_start_utc),
+        "week_end_utc": _iso(week_end_utc),
+        "month_start_utc": _iso(month_start_utc),
+        "month_end_utc": _iso(month_end_utc),
+        "week_number": week_number,
+        "symbols": {}
+    }
+
+def _load():
+    if not os.path.isdir(DATA_PATH):
+        os.makedirs(DATA_PATH, exist_ok=True)
+    if not os.path.exists(FILE_PATH):
+        return _init_payload()
+    try:
+        with open(FILE_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return json.loads(json.dumps(default))
+        return _init_payload()
 
-def load_settings(sd: str) -> dict:
-    # prefer root; fallback to legacy data/
-    root_path = os.path.join(sd, SETTINGS)
-    data_path = os.path.join(sd, "data", os.path.basename(SETTINGS))
-    cfg = _read_json(root_path, DEFAULT_SETTINGS)
-    if cfg == DEFAULT_SETTINGS:
-        legacy = _read_json(data_path, DEFAULT_SETTINGS)
-        if legacy != DEFAULT_SETTINGS:
-            # migrate legacy to root for visibility in /json
-            _atomic_write(root_path, legacy)
-            cfg = legacy
-    return cfg
-def save_settings(sd: str, cfg: dict): _atomic_write(os.path.join(sd, SETTINGS), cfg)
-def load_state(sd: str) -> dict:
-    # prefer root; fallback to legacy data/
-    root_state = os.path.join(sd, STATE)
-    data_state = os.path.join(sd, "data", os.path.basename(STATE))
-    st = _read_json(root_state, DEFAULT_STATE)
-    if st == DEFAULT_STATE:
-        legacy = _read_json(data_state, DEFAULT_STATE)
-        if legacy != DEFAULT_STATE:
-            _atomic_write(root_state, legacy)
-            st = legacy
-    st["tz_offset_hours"] = int(load_settings(sd).get("tz_offset_hours",0) or 0)
-    return st
-def save_state(sd: str, st: dict): _atomic_write(os.path.join(sd, STATE), st)
+def _save(payload):
+    if not os.path.isdir(DATA_PATH):
+        os.makedirs(DATA_PATH, exist_ok=True)
+    tmp = FILE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, FILE_PATH)
 
-def _localize(ts_utc: float, tz: int) -> float: return ts_utc + tz*3600
-def _to_utc(ts_local: float, tz: int) -> float: return ts_local - tz*3600
-def _iso(ts_utc: float) -> str: return datetime.datetime.utcfromtimestamp(ts_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _blank_symbol():
+    return {
+        "weekly": 0,
+        "monthly": 0,
+        "legs": _alloc_default(0, 0)
+    }
 
-def _parse_pair(pair: str):
-    p = (pair or "").upper().strip()
-    for suf in ("USDC","USDT","BUSD","FDUSD"):
-        if p.endswith(suf) and len(p) > len(suf):
-            return p[:-len(suf)], suf
-    return p, ""
+def _alloc_default(weekly: int, monthly: int):
+    weekly = int(weekly or 0); monthly = int(monthly or 0)
+    oco = _round_int(weekly * 0.20)
+    l0  = _round_int(weekly * 0.20)
+    l1 = _round_int(monthly * 0.40)
+    l2 = _round_int(monthly * 0.20)
+    l3 = _round_int(monthly * 0.00)
+    return {
+        "OCO": {"left": oco, "spent": 0},
+        "L0":  {"left": l0,  "spent": 0},
+        "L1":  {"left": l1,  "spent": 0},
+        "L2":  {"left": l2,  "spent": 0},
+        "L3":  {"left": l3,  "spent": 0},
+    }
 
-def _core_set(sd: str) -> set:
-    try:
-        pairs = _read_json(os.path.join(sd, "pairs.json"), [])
-        if pairs == []:
-            # fallback legacy path
-            pairs = _read_json(os.path.join(sd, "data", "pairs.json"), [])
-    except Exception:
-        pairs = []
-    out = set()
-    for sym in pairs or []:
-        base, suf = _parse_pair(sym)
-        if not base or suf not in STABLES: continue
-        try:
-            # root first
-            j = _read_json(os.path.join(sd, f"{sym.upper()}.json"), {})
-            if j == {}:
-                # fallback legacy data/<pair>.json
-                j = _read_json(os.path.join(sd, "data", f"{sym.upper()}.json"), {})
-            if (j.get("trade_mode") or "").upper() == "LONG":
-                out.add(sym.upper())
-        except Exception: pass
-    return out
+# Public API used by app
+def init_if_needed():
+    if not os.path.exists(FILE_PATH):
+        _save(_init_payload(tz_hours=0))
 
-def _weekly_anchor(now_utc: float, tz: int):
-    dt_local = datetime.datetime.utcfromtimestamp(_localize(now_utc, tz))
-    days_back = (dt_local.weekday() - 6) % 7
-    sunday = dt_local - datetime.timedelta(days=days_back)
-    sunday_10 = sunday.replace(hour=10, minute=0, second=0, microsecond=0)
-    if dt_local < sunday_10: ws_local = sunday_10 - datetime.timedelta(days=7)
-    else: ws_local = sunday_10
-    next_local = ws_local + datetime.timedelta(days=7)
-    return _to_utc(ws_local.timestamp(), tz), _to_utc(next_local.timestamp(), tz)
+def set_timezone(tz_hours: int):
+    p = _load()
+    p = _init_payload(tz_hours=tz_hours)
+    _save(p)
+    return f"TZ set to UTC{tz_hours:+d}"
 
-def _month_anchors(now_utc: float, tz: int):
-    dt_local = datetime.datetime.utcfromtimestamp(_localize(now_utc, tz))
-    ms_local = dt_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if ms_local.month == 12: nm_local = ms_local.replace(year=ms_local.year+1, month=1)
-    else: nm_local = ms_local.replace(month=ms_local.month+1)
-    return _to_utc(ms_local.timestamp(), tz), _to_utc(nm_local.timestamp(), tz)
+def set_weekly(symbol: str, weekly_amount: int):
+    p = _load()
+    s = p["symbols"].setdefault(symbol.upper(), _blank_symbol())
+    s["weekly"] = _round_int(weekly_amount)
+    if "monthly" not in s or s["monthly"] is None:
+        s["monthly"] = s["weekly"] * 4
+    s["legs"] = _alloc_default(s["weekly"], s["monthly"])
+    _save(p)
+    return f"{symbol.upper()} weekly budget set"
 
-def _ensure_pair_state(ps: dict):
-    for k in ("oco","l0"):
-        if k not in ps: ps[k] = {"weekly_quota":0.0,"rollover":0.0,"spent":0.0}
-        else:
-            ps[k].setdefault("weekly_quota",0.0); ps[k].setdefault("rollover",0.0); ps[k].setdefault("spent",0.0)
-    if "l_month" not in ps:
-        ps["l_month"] = {"L1":{"left":0.0,"spent":0.0},"L2":{"left":0.0,"spent":0.0},"L3":{"left":0.0,"spent":0.0}}
+def add_weekly(symbol: str, delta: int):
+    p = _load()
+    s = p["symbols"].setdefault(symbol.upper(), _blank_symbol())
+    s["weekly"] = max(0, _round_int(s.get("weekly", 0) + delta))
+    s["legs"] = _alloc_default(s["weekly"], s.get("monthly", s["weekly"]*4))
+    _save(p)
+    return f"{symbol.upper()} weekly budget changed by {int(delta)}"
 
-def init_if_needed(sd: str, now_ts: float|None=None):
-    now_utc = now_ts or time.time()
-    cfg = load_settings(sd); st = load_state(sd); changed=False
-    if not st.get("week_start_utc"):
-        ws, nxt = _weekly_anchor(now_utc, int(cfg.get("tz_offset_hours",0) or 0))
-        st["week_start_utc"], st["next_week_start_utc"] = _iso(ws), _iso(nxt); st["week_index"]=1; st["last_week_roll_utc"]=None; changed=True
-    if not st.get("month_start_utc"):
-        ms, me = _month_anchors(now_utc, int(cfg.get("tz_offset_hours",0) or 0))
-        st["month_start_utc"], st["month_end_utc"] = _iso(ms), _iso(me); st["last_month_roll_utc"]=None; changed=True
-    core = _core_set(sd)
-    for sym in core:
-        st["pairs"].setdefault(sym, {}); _ensure_pair_state(st["pairs"][sym])
-    if changed: save_state(sd, st)
+def spend(symbol: str, leg: str, amount: int):
+    p = _load()
+    sym = symbol.upper(); leg = leg.upper()
+    if sym not in p["symbols"]:
+        return f"{sym} not found in budget"
+    if leg not in ("OCO","L0","L1","L2","L3"):
+        return "Leg must be one of OCO, L0, L1, L2, L3"
+    amt = max(0, _round_int(amount))
+    s = p["symbols"][sym]
+    s["legs"][leg]["spent"] += amt
+    s["legs"][leg]["left"] = max(0, s["legs"][leg]["left"] - amt)
+    _save(p)
+    return f"{sym} {leg} spent +{amt}"
 
-def set_timezone(sd: str, tz_hours: int):
-    cfg = load_settings(sd); cfg["tz_offset_hours"]=int(tz_hours); save_settings(sd, cfg); init_if_needed(sd)
+def manual_reset():
+    p = _load()
+    tz = int(p.get("tz_hours", 0))
+    newp = _init_payload(tz_hours=tz)
+    for sym, s in p.get("symbols", {}).items():
+        weekly = _round_int(s.get("weekly", 0))
+        monthly = _round_int(s.get("monthly", weekly*4))
+        newp["symbols"][sym] = {
+            "weekly": weekly,
+            "monthly": monthly,
+            "legs": _alloc_default(weekly, monthly)
+        }
+    _save(newp)
+    return "Budget reset to new period start"
 
-def _current_M_for_pair(sd: str, sym: str) -> float:
-    w = float(((load_settings(sd).get("pairs") or {}).get(sym, {}) or {}).get("weekly", 0.0) or 0.0)
-    return max(0.0, 4.0*w)
+def weekly_tick():
+    p = _load()
+    tz = int(p.get("tz_hours", 0))
+    ws = datetime.fromisoformat(p["week_start_utc"].replace("Z","+00:00"))
+    we = datetime.fromisoformat(p["week_end_utc"].replace("Z","+00:00"))
+    ws_local = ws + timedelta(hours=tz) + timedelta(days=7)
+    we_local = we + timedelta(hours=tz) + timedelta(days=7)
+    p["week_start_utc"] = _iso(ws_local - timedelta(hours=tz))
+    p["week_end_utc"] = _iso(we_local - timedelta(hours=tz))
+    p["week_number"] = int(ws_local.isocalendar().week)
+    # rollover weekly legs: add +25% от их недельной доли
+    for s in p["symbols"].values():
+        weekly = int(s.get("weekly", 0))
+        add_share = _round_int(0.25 * _round_int(0.2 * weekly))
+        for leg in ("OCO","L0"):
+            s["legs"][leg]["left"] += add_share
+    _save(p)
 
-def set_weekly(sd: str, sym: str, weekly: float): 
-    cfg = load_settings(sd); pairs = cfg.setdefault("pairs", {})
-    if weekly < 0: weekly = 0.0
-    old = float(((pairs.get(sym, {}) or {}).get("weekly", 0.0)) or 0.0)
-    pairs[sym] = {"weekly": round(weekly, 2)}; save_settings(sd, cfg); return old, pairs[sym]["weekly"]
+def month_end_tick():
+    p = _load()
+    tz = int(p.get("tz_hours", 0))
+    newp = _init_payload(tz_hours=tz)
+    newp["week_start_utc"] = p["week_start_utc"]
+    newp["week_end_utc"] = p["week_end_utc"]
+    newp["week_number"] = p.get("week_number", newp["week_number"])
+    for sym, s in p.get("symbols", {}).items():
+        weekly = int(s.get("weekly", 0))
+        monthly = int(s.get("monthly", weekly*4))
+        legs = s.get("legs", _alloc_default(weekly, monthly))
+        ns = {
+            "weekly": weekly,
+            "monthly": monthly,
+            "legs": _alloc_default(weekly, monthly)
+        }
+        for leg in ("L1","L2","L3"):
+            ns["legs"][leg]["left"] += int(legs[leg]["left"])
+        newp["symbols"][sym] = ns
+    _save(newp)
 
-def add_weekly(sd: str, sym: str, delta: float):
-    cfg = load_settings(sd); pairs = cfg.setdefault("pairs", {})
-    old = float(((pairs.get(sym, {}) or {}).get("weekly", 0.0)) or 0.0)
-    new = max(0.0, old + delta); pairs[sym] = {"weekly": round(new, 2)}; save_settings(sd, cfg); return old, pairs[sym]["weekly"]
+def _format_symbol(sym: str, s: dict) -> str:
+    W = int(s.get("weekly", 0)); M = int(s.get("monthly", 0))
+    legs = s.get("legs", _alloc_default(W, M))
+    def leg(tag): 
+        d = legs[tag]; return f"{tag} {int(d['left'])}/{int(d['spent'])}"
+    return "\n".join([
+        f"{sym}  W {W}  M {M}",
+        f"{leg('OCO')} {leg('L0')}",
+        f"{leg('L1')} {leg('L2')} {leg('L3')}"
+    ])
 
-def _table_for_mode(mode: str) -> dict: return TABLES.get((mode or "RANGE").upper(), TABLES["RANGE"])
+def budget_per_symbol_texts(symbols: Optional[List[str]] = None) -> List[str]:
+    p = _load()
+    syms = list(p.get("symbols", {}).keys())
+    if symbols:
+        want = set(s.upper() for s in symbols)
+        syms = [s for s in syms if s.upper() in want]
+    return [_format_symbol(sym, p["symbols"][sym]) for sym in sorted(syms)]
 
-def weekly_tick(sd: str, market_modes: Dict[str,str]) -> dict:
-    init_if_needed(sd)
-    st = load_state(sd); cfg = load_settings(sd)
-    core = _core_set(sd); out = {}
-    now_utc = time.time()
-    ws_utc, nxt_utc = _weekly_anchor(now_utc, int(cfg.get("tz_offset_hours",0) or 0))
-    st["week_start_utc"]=_iso(ws_utc); st["next_week_start_utc"]=_iso(nxt_utc); st["last_week_roll_utc"]=_iso(now_utc)
-    st["week_index"] = ((st.get("week_index") or 1) % int(cfg.get("cycle_weeks",4) or 4)) + 1
-    for sym in core:
-        mode = (market_modes.get(sym) or "RANGE").upper(); tbl = _table_for_mode(mode)
-        ps = st["pairs"].setdefault(sym, {}); _ensure_pair_state(ps)
-        M = _current_M_for_pair(sd, sym)
-        oco_month = M * tbl["OCO"]; l0_month = M * tbl["L0"]
-        week_quota_oco = oco_month / int(cfg.get("cycle_weeks",4) or 4); week_quota_l0 = l0_month / int(cfg.get("cycle_weeks",4) or 4)
-        ps["oco"]["weekly_quota"]=round(week_quota_oco,2); ps["l0"]["weekly_quota"]=round(week_quota_l0,2)
-        out[sym] = {"mode":mode,"M":round(M,2),"OCO_week":round(week_quota_oco + (ps['oco']['rollover'] or 0.0),2),"L0_week":round(week_quota_l0 + (ps['l0']['rollover'] or 0.0),2)}
-        for k in ("L1","L2","L3"): ps["l_month"].setdefault(k, {"left":0.0,"spent":0.0})
-    save_state(sd, st); return out
+def budget_summary() -> str:
+    p = _load()
+    blocks = budget_per_symbol_texts()
+    tW = sum(int(s.get("weekly",0)) for s in p.get("symbols", {}).values())
+    tM = sum(int(s.get("monthly",0)) for s in p.get("symbols", {}).values())
+    week = int(p.get("week_number", 0))
+    footer = f"\nTotal weekly: {tW}\nTotal monthly: {tM}\nWeek: {week}"
+    return ("\n\n".join(blocks) if blocks else "(no core pairs)") + "\n" + footer
 
-def month_end_tick(sd: str) -> dict:
-    init_if_needed(sd)
-    st = load_state(sd); cfg = load_settings(sd)
-    now_utc = time.time(); ms_utc, me_utc = _month_anchors(now_utc, int(cfg.get("tz_offset_hours",0) or 0))
-    st["month_start_utc"]=_iso(ms_utc); st["month_end_utc"]=_iso(me_utc); st["last_month_roll_utc"]=_iso(now_utc)
-    actions = {}
-    for sym, ps in (st.get("pairs") or {}).items():
-        _ensure_pair_state(ps)
-        oco_left = max(0.0, (ps["oco"].get("weekly_quota") or 0.0) + (ps["oco"].get("rollover") or 0.0) - (ps["oco"].get("spent") or 0.0))
-        l0_left  = max(0.0, (ps["l0"].get("weekly_quota") or 0.0)  + (ps["l0"].get("rollover")  or 0.0) - (ps["l0"].get("spent")  or 0.0))
-        ps["oco"]["rollover"]=0.0; ps["l0"]["rollover"]=0.0
-        actions[sym] = {"market_buy": round(oco_left + l0_left,2), "carry": {}}
-        carry = {}
-        for k in ("L1","L2","L3"):
-            left = float(ps["l_month"].get(k, {}).get("left",0.0) or 0.0); spent=float(ps["l_month"].get(k, {}).get("spent",0.0) or 0.0)
-            rem = max(0.0, left - spent); carry[k]=round(rem,2); ps["l_month"][k] = {"left": rem, "spent": 0.0}
-        actions[sym]["carry"] = carry
-    save_state(sd, st); return actions
-
-
-def manual_reset(sd: str, market_modes: Dict[str,str]) -> dict:
-    """
-    Сбрасывает ролловеры/траты и пересчитывает так, будто сейчас
-    1-е число и первая неделя. Распределяет L1/L2/L3 на месяц,
-    OCO/L0 — недельные квоты.
-    """
-    init_if_needed(sd)
-    st = load_state(sd); cfg = load_settings(sd)
-    tz = int(cfg.get("tz_offset_hours", 0) or 0)
-    now_utc = time.time()
-    ws_utc, nxt_utc = _weekly_anchor(now_utc, tz)
-    ms_utc, me_utc  = _month_anchors(now_utc, tz)
-    st["week_index"] = 1
-    st["week_start_utc"] = _iso(ws_utc)
-    st["next_week_start_utc"] = _iso(nxt_utc)
-    st["last_week_roll_utc"] = _iso(now_utc)
-    st["month_start_utc"] = _iso(ms_utc)
-    st["month_end_utc"] = _iso(me_utc)
-    st["last_month_roll_utc"] = _iso(now_utc)
-    core = _core_set(sd)
-    for sym in core:
-        mode = (market_modes.get(sym) or "RANGE").upper()
-        tbl = _table_for_mode(mode)
-        ps = st["pairs"].setdefault(sym, {})
-        _ensure_pair_state(ps)
-        M = _current_M_for_pair(sd, sym)
-        # weekly OCO/L0
-        oco_month = M * tbl["OCO"]; l0_month = M * tbl["L0"]
-        week_quota_oco = oco_month / int(cfg.get("cycle_weeks",4) or 4)
-        week_quota_l0  = l0_month  / int(cfg.get("cycle_weeks",4) or 4)
-        ps["oco"]["weekly_quota"] = round(week_quota_oco, 2)
-        ps["l0"]["weekly_quota"]  = round(week_quota_l0, 2)
-        ps["oco"]["rollover"] = 0.0; ps["l0"]["rollover"] = 0.0
-        ps["oco"]["spent"] = 0.0; ps["l0"]["spent"] = 0.0
-        # monthly L1/L2/L3
-        for k in ("L1","L2","L3"):
-            alloc = round(M * tbl[k], 2)
-            ps["l_month"][k] = {"left": alloc, "spent": 0.0}
-        ps.setdefault("l_month_meta", {})["alloc_month"] = st["month_start_utc"]
-    save_state(sd, st)
-    return st
-def budget_summary(sd: str):
-    cfg = load_settings(sd); st = load_state(sd); core = _core_set(sd)
-    lines = []; tot_weekly=0.0
-    for sym in sorted(core):
-        w = float(((cfg.get("pairs") or {}).get(sym, {}) or {}).get("weekly", 0.0) or 0.0); M = 4.0*w
-        ps = (st.get("pairs") or {}).get(sym, {}); _ensure_pair_state(ps)
-        oco_avail = (ps["oco"]["weekly_quota"] or 0.0) + (ps["oco"]["rollover"] or 0.0)
-        l0_avail  = (ps["l0"]["weekly_quota"]  or 0.0) + (ps["l0"]["rollover"]  or 0.0)
-        l1 = ps["l_month"]["L1"]; l2 = ps["l_month"]["L2"]; l3 = ps["l_month"]["L3"]
-        lines.append(f"{sym}  W {w:.2f}  M {M:.2f}  OCO_w {oco_avail:.2f}  L0_w {l0_avail:.2f}  L1 {l1['left']:.2f}/{l1['spent']:.2f}  L2 {l2['left']:.2f}/{l2['spent']:.2f}  L3 {l3['left']:.2f}/{l3['spent']:.2f}")
-        tot_weekly += w
-    header = "Budget Long (core)\nSYMBOL  W weekly  M monthly  OCO_week  L0_week  L1 left/spent  L2 left/spent  L3 left/spent"
-    body = "\n".join(lines) if lines else "(no core pairs)"
-    footer = f"TOTAL weekly {tot_weekly:.2f}\nWeek: {st.get('week_start_utc','?')} → {st.get('next_week_start_utc','?')}\nMonth: {st.get('month_start_utc','?')} → {st.get('month_end_utc','?')}\nTZ: UTC{cfg.get('tz_offset_hours',0):+d}"
-    msg = "```\n" + header + "\n" + body + "\n" + footer + "\n```"; return msg, {"lines": lines}
-
-def budget_per_symbol_texts(sd: str):
-    """Возвращает список форматированных сообщений по каждой core-LONG паре."""
-    cfg = load_settings(sd); st = load_state(sd); core = _core_set(sd)
-    out = []
-    for sym in sorted(core):
-        w = float(((cfg.get("pairs") or {}).get(sym, {}) or {}).get("weekly", 0.0) or 0.0)
-        M = 4.0 * w
-        ps = (st.get("pairs") or {}).get(sym, {})
-        _ensure_pair_state(ps)
-        oco_avail = (ps["oco"].get("weekly_quota") or 0.0) + (ps["oco"].get("rollover") or 0.0)
-        l0_avail  = (ps["l0"].get("weekly_quota")  or 0.0) + (ps["l0"].get("rollover")  or 0.0)
-        l1 = ps["l_month"]["L1"]; l2 = ps["l_month"]["L2"]; l3 = ps["l_month"]["L3"]
-        text = f"{sym}  W {w:.2f}  M {M:.2f}\\n" \
-               f"OCO_w {oco_avail:.2f}  L0_w {l0_avail:.2f}\\n" \
-               f"L1 {l1['left']:.2f}/{l1['spent']:.2f}  L2 {l2['left']:.2f}/{l2['spent']:.2f}  L3 {l3['left']:.2f}/{l3['spent']:.2f}"
-        out.append(text)
-    return out
-
-def budget_schedule_text(sd: str):
-    cfg = load_settings(sd); st = load_state(sd)
-    tz = int(cfg.get("tz_offset_hours",0) or 0)
-    return "Week: {ws} → {wn}\\nMonth: {ms} → {me}\\nTZ: UTC{tz:+d}".format(
-        ws=st.get("week_start_utc","?"), wn=st.get("next_week_start_utc","?"),
-        ms=st.get("month_start_utc","?"), me=st.get("month_end_utc","?"),
-        tz=tz
-    )
-
-
-def budget_numbers_for_symbol(sd: str, symbol: str) -> dict:
-    """Вернёт целочисленные значения бюджета для карточки /now."""
-    try:
-        symbol = (symbol or "").upper().strip()
-        init_if_needed(sd)
-        cfg = load_settings(sd); st = load_state(sd)
-        pairs_cfg = (cfg.get("pairs") or {})
-        w = int(round(float(((pairs_cfg.get(symbol) or {}).get("weekly", 0)) or 0)))
-        M = int(4 * w)
-        ps = (st.get("pairs") or {}).get(symbol) or {}
-        _ensure_pair_state(ps)
-        # weekly left
-        oco_quota = int(round(float((ps["oco"].get("weekly_quota") or 0))))
-        oco_roll  = int(round(float((ps["oco"].get("rollover") or 0))))
-        oco_spent = int(round(float((ps["oco"].get("spent") or 0))))
-        oco_left  = max(0, oco_quota + oco_roll - oco_spent)
-
-        l0_quota = int(round(float((ps["l0"].get("weekly_quota") or 0))))
-        l0_roll  = int(round(float((ps["l0"].get("rollover") or 0))))
-        l0_spent = int(round(float((ps["l0"].get("spent") or 0))))
-        l0_left  = max(0, l0_quota + l0_roll - l0_spent)
-
-        # monthly left
-        l1_left = int(round(float(((ps["l_month"].get("L1") or {}).get("left") or 0))))
-        l2_left = int(round(float(((ps["l_month"].get("L2") or {}).get("left") or 0))))
-        l3_left = int(round(float(((ps["l_month"].get("L3") or {}).get("left") or 0))))
-        return {"W": w, "M": M, "oco_left": oco_left, "l0_left": l0_left, "L1": l1_left, "L2": l2_left, "L3": l3_left}
-    except Exception:
-        return {"W": 0, "M": 0, "oco_left": 0, "l0_left": 0, "L1": 0, "L2": 0, "L3": 0}
+def budget_schedule_text() -> str:
+    p = _load()
+    tz = int(p.get("tz_hours", 0))
+    return "\n".join([
+        f"Week: {p['week_start_utc']} → {p['week_end_utc']}",
+        f"Month: {p['month_start_utc']} → {p['month_end_utc']}",
+        f"TZ: UTC{tz:+d}"
+    ])
