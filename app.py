@@ -10,7 +10,7 @@ from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
 
-from budget import read_pair_budget, write_pair_budget, adjust_pair_budget, apply_budget_header
+from budget import read_pair_budget, write_pair_budget, adjust_pair_budget, apply_budget_header, set_flag_override, cancel_flag_override
 
 # --- budget-aware wrapper for symbol cards ---
 try:
@@ -226,6 +226,34 @@ async def telegram_webhook(update: Request):
                 pass
         return {"ok": True}
     if text_lower.startswith("/budget"):
+    # --- FLAG COMMANDS START ---
+    if text_lower.startswith("/budget"):
+        tokens = (text or "").split()
+        # pattern: /budget <symbol> <target> <action>
+        if len(tokens) >= 4:
+            sym = tokens[1].lstrip("/").upper()
+            target = tokens[2].lower()
+            action = tokens[3].lower()
+            if target in ("oco","l0","l1","l2","l3") and action in ("open","cancel","fill"):
+                try:
+                    if action == "open":
+                        st = set_flag_override(sym, target, "open")
+                        await tg_send(chat_id, _code(f"OK. FLAG[{sym}][{target.upper()}] = ⚠️"))
+                    elif action == "fill":
+                        st = set_flag_override(sym, target, "fill")
+                        await tg_send(chat_id, _code(f"OK. FLAG[{sym}][{target.upper()}] = ✅"))
+                    else:  # cancel
+                        res = cancel_flag_override(sym, target)
+                        if res == "fill":
+                            await tg_send(chat_id, _code(f"SKIP. FLAG[{sym}][{target.upper()}] уже ✅"))
+                        else:
+                            await tg_send(chat_id, _code(f"OK. FLAG[{sym}][{target.upper()}] = AUTO"))
+                    return {"ok": True}
+                except Exception as e:
+                    await tg_send(chat_id, _code(f"Ошибка: {e}"))
+                    return {"ok": False}
+    # --- FLAG COMMANDS END ---
+
         parts = (text or "").split(maxsplit=1)
         if len(parts) == 1 or not parts[1].strip():
             await tg_send(chat_id, _code("Формат: /budget SYMBOL=VALUE | SYMBOL +DELTA | SYMBOL -DELTA"))
