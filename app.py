@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, Response
 
 APP_START_TS = datetime.utcnow()
 
-app = FastAPI(title="Traider Bot", version="0.1.0")
+app = FastAPI(title="Traider Bot", version="0.1.1")
 
 
 def _get_proxies() -> Optional[dict]:
@@ -93,30 +93,35 @@ async def _on_startup() -> None:
     await _tg_send_admin(msg)
 
 
-@app.get("/", include_in_schema=False)
+# Explicitly allow GET and HEAD for health checks (avoids 405 on HEAD)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 async def root() -> Dict[str, Any]:
     return {"ok": True, "uptime_sec": (datetime.utcnow() - APP_START_TS).total_seconds()}
 
 
-@app.head("/", include_in_schema=False)
-async def root_head() -> Response:
-    return Response(status_code=200)
-
-
-@app.get("/health", include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD"], include_in_schema=False)
 async def health() -> Dict[str, Any]:
     return {"status": "ok"}
 
 
-@app.head("/health", include_in_schema=False)
-async def health_head() -> Response:
-    return Response(status_code=200)
-
-
+# Telegram webhooks
 @app.post("/telegram")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
     """
-    Minimal webhook handler. Echoes OK for now.
+    Minimal webhook handler (legacy path). Echoes OK.
+    """
+    try:
+        _ = await req.json()
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.post("/webhook/{token}")
+async def telegram_webhook_token(token: str, req: Request) -> Dict[str, Any]:
+    """
+    Webhook path that includes the Bot token, as Telegram often uses.
+    We don't validate here yet; just return ok.
     """
     try:
         _ = await req.json()
