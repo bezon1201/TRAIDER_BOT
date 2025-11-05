@@ -2,6 +2,7 @@
 import os, json, time, hmac, hashlib, tempfile
 from typing import Dict, List, Tuple
 import httpx
+from metrics_runner import load_pairs
 
 BINANCE_API = "https://api.binance.com"
 
@@ -232,4 +233,4 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
     pct_part = f" {profit_pct:.1f}%" if invested > 0 else ""
     summary = [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}"]
-    return "```\n" + "\n".join(lines + [""] + summary) + "\n```"
+    return "\n" + "\n".join(lines + [""] + summary) + "\n"
