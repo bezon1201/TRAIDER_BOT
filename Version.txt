@@ -1,10 +1,1 @@
-11
-- Исправлен формат карточки /portfolio: вывод строго моноширинным блоком с тройными апострофами (```).
-- Больше никаких литералов \n в тексте: отправляем реальные переводы строк.
-- Нормализация LDUSDC → USDC (суммируется к стейблам).
-- Игнор активов, суммарная стоимость которых < 1 USD.
-- BTC/ETH первыми, затем альты по убыванию USD.
-- Отдельные блоки: FIAT, STABLES / EARN.
-- Цифры выравнены: столбец с $ ровно под $.
-- httpx берёт proxy из переменных окружения (trust_env=True).
-- Добавлен requirements.txt (httpx, fastapi, uvicorn).
+1 2025-11-05 13:19 UTC Initial scaffold: app.py, requirements.txt; startup Binance check + admin notify; webhook endpoint.
