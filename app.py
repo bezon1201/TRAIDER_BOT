@@ -186,7 +186,7 @@ async def telegram_webhook(update: Request):
         mode_arg = None
         if len(parts) >= 2 and parts[1].strip().lower() in ("long","short"):
             mode_arg = parts[1].strip().upper()
-        count, msg = await run_now(mode_arg)
+        count, msg = await run_now()
         _log("/now result:", count)
         await tg_send(chat_id, _code(msg))
         # After update, send per-symbol messages (one message per ticker)
