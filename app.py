@@ -413,6 +413,7 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
     if text_lower.startswith("/budget"):
 
+        parts = text.split()
         # order-level manual transitions
         if len(parts) >= 4:
             pair = parts[1].upper()
