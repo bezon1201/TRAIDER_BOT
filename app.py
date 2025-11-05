@@ -155,6 +155,7 @@ def _budget_rolover_all_pairs() -> int:
         }
         data.pop("flag_overrides", None)  # new week -> AUTO
 
+        data['reserve'] = {'total': 0.0, 'by_order': {'OCO':0.0,'L0':0.0,'L1':0.0,'L2':0.0,'L3':0.0}}
         _save_json(path, data)
         updated += 1
     return updated
@@ -201,6 +202,8 @@ def _budget_cancel_all_pairs() -> int:
             "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
             "alloc_amt": {k: 0.0 for k in _KEYS},
         }
+        data['reserve'] = {'total': 0.0, 'by_order': {'OCO':0.0,'L0':0.0,'L1':0.0,'L2':0.0,'L3':0.0}}
+        data['spent'] = {'total': 0.0, 'by_order': {'OCO':0.0,'L0':0.0,'L1':0.0,'L2':0.0,'L3':0.0}}
         data.pop("flag_overrides", None)
 
         try:
