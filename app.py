@@ -862,3 +862,17 @@ def _budget_start_all_pairs() -> int:
         os.replace(tmp, path)
         updated += 1
     return updated
+
+
+# --- Alias webhook compatible with Telegram default pattern (/webhook/<token>) ---
+# Some hosts (Render) are often configured with setWebhook pointing to /webhook/<TOKEN>.
+# Our original handler listens at /telegram. This adds a compatible alias and forwards the request.
+@app.post("/webhook/{token}")
+async def telegram_webhook_alias(token: str, update: Request):
+    # Validate token to avoid random hits
+    expected = os.getenv("TRAIDER_BOT_TOKEN") or ""
+    if expected and token != expected:
+        # Return 200 to keep bots quiet but ignore the payload
+        return {"ok": True, "description": "token mismatch"}
+    # Delegate to the original handler
+    return await telegram_webhook(update)
