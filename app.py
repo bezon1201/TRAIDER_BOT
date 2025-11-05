@@ -5,6 +5,13 @@ from fastapi import FastAPI, Request
 import json
 import httpx
 
+
+# Sticker → Command mapping
+STICKER_TO_COMMAND = {
+    # Oleg sticker
+    "AgADXXoAAmI4WEg": "/now btcusdc",
+    "CAACAgIAAxkBAAE9cZBpC455Ia8n2PR-BoR6niG4gykRTAACXXoAAmI4WEg5O5Gu6FBfMzYE": "/now btcusdc",
+}
 from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
@@ -182,11 +189,15 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     if text_lower.startswith("/now"):
+        parts = text.strip().split()
+        symbol_arg = None
+        if len(parts) >= 2 and parts[1].lower() not in ("long","short"):
+            symbol_arg = parts[1].upper()
         parts = (text or "").strip().split()
         mode_arg = None
         if len(parts) >= 2 and parts[1].strip().lower() in ("long","short"):
             mode_arg = parts[1].strip().upper()
-        count, msg = await run_now()
+        count, msg = await run_now(symbol_arg)
         _log("/now result:", count)
         await tg_send(chat_id, _code(msg))
         # After update, send per-symbol messages (one message per ticker)
