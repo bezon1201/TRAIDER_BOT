@@ -1,3 +1,41 @@
+# COMMANDS (full list, inferred from sources)
+
+## Top-level commands detected:
+/budget
+/coins
+/data
+/invested") or text_lower.startswith("/invest 
+/market
+/mode
+/now
+/portfolio
+/sheduler
+
+## Grouped usage
+/budget
+  subcommands: cancel, oco, open, rolover, start
+
+/coins
+
+/data
+  subcommands: delete
+
+/invested") or text_lower.startswith("/invest 
+
+/market
+
+/mode
+
+/now
+  subcommands: long
+
+/portfolio
+  subcommands: pairs
+
+/sheduler
+  subcommands: on
+
+## Cheat sheet (curated)
 # COMMANDS (cheat sheet)
 
 ## General
