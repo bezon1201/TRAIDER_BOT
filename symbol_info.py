@@ -1,7 +1,6 @@
 
 import os, json
 from coin_long_format import build_long_card
-from budget import apply_flags_overrides
 from coin_short_format import build_short_card
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
@@ -20,9 +19,7 @@ def build_symbol_message(symbol: str) -> str:
     sym = (symbol or "").upper().strip()
     data = _read_json(_coin_path(sym))
     data["symbol"] = sym
-    if isinstance(data.get("flags"), dict):
-        data["flags"] = apply_flags_overrides(sym, data.get("flags"))
-    mode = (data.get("trade_mode") or "").upper()
+        mode = (data.get("trade_mode") or "").upper()
     if mode == "LONG":
         return build_long_card(data)
     elif mode == "SHORT":

@@ -1,4 +1,3 @@
-from budget import apply_flags_overrides
 
 import os, json, asyncio, random, time
 from datetime import datetime, timezone
@@ -43,17 +42,7 @@ def _read_json(path: str) -> dict:
         return {}
 
 def _write_json_atomic(path: str, data: dict) -> None:
-    
-    
-    # Preserve live values that are user-driven in JSON
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as _rf:
-                _live = json.load(_rf) or {}
-        else:
-            _live = {}
-    except Exception:
-        _live = {}
+    # (preserve removed: budget/reserve/spent/overrides)
     if isinstance(_live, dict):
         # budget
         if "budget" in _live:
@@ -62,17 +51,6 @@ def _write_json_atomic(path: str, data: dict) -> None:
             except Exception:
                 data["budget"] = _live.get("budget")
         # manual flag overrides
-        if "flag_overrides" in _live:
-            if _live.get("flag_overrides") in ({}, None):
-                data.pop("flag_overrides", None)
-            else:
-                data["flag_overrides"] = _live.get("flag_overrides")
-        else:
-            data.pop("flag_overrides", None)
-        # spent / reserve accumulators
-        for k in ("spent", "reserve"):
-            if k in _live and isinstance(_live[k], dict):
-                data[k] = _live[k]
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":" ))
@@ -305,7 +283,7 @@ async def _collect_one_stub(symbol: str):
             # auto flags (OCO and L0-L3)
             try:
                 flags_auto = compute_all_flags(data)
-                data["flags"] = apply_flags_overrides(symbol, flags_auto)
+                data["flags"] = flags_auto
             except Exception:
                 data.pop("flags", None)
         else:
