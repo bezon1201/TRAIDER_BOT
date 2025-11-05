@@ -1,144 +1,126 @@
-# app.py
 import os
-import time
-import hmac
-import hashlib
-import json
+import hmac, hashlib
 from datetime import datetime, timezone
+import json
+from typing import Optional
 
-import requests
-from fastapi import FastAPI, Response, Request
+import httpx
+from fastapi import FastAPI, Request, Response
 
-import portfolio
+from portfolio import build_portfolio_message
 
-app = FastAPI(title="Trader Bot", version="0.3.0")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID") or os.getenv("ADMIN_CHAT_ID".upper())
+WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "").rstrip("/")
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
+
+HTTP_PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+HTTPS_PROXY = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+
+proxies = None
+if HTTP_PROXY or HTTPS_PROXY:
+    proxies = {"http://": HTTP_PROXY or HTTPS_PROXY, "https://": HTTPS_PROXY or HTTP_PROXY}
+
+TIMEOUT = httpx.Timeout(20.0, connect=20.0)
+client = httpx.AsyncClient(timeout=TIMEOUT, proxies=proxies)
+tg_base = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+
+app = FastAPI()
 
 # ------------- helpers -------------
-def utc_now_label() -> str:
+async def tg(method: str, **params):
+    if not tg_base:
+        return {"ok": False, "description": "BOT_TOKEN is empty"}
+    resp = await client.post(f"{tg_base}/{method}", data=params)
+    try:
+        return resp.json()
+    except Exception:
+        return {"ok": False, "description": f"HTTP {resp.status_code}"}
+
+def utc_now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-def env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default)
+def _sign_binance(query: str, secret: str) -> str:
+    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
 
-def tg_api(method: str, **params):
-    token = env("BOT_TOKEN")
-    if not token:
-        return None
-    url = f"https://api.telegram.org/bot{token}/{method}"
+async def check_binance_account() -> bool:
     try:
-        return requests.post(url, data=params, timeout=10)
-    except requests.RequestException:
-        return None
-
-def notify_admin(text: str) -> bool:
-    token = env("BOT_TOKEN")
-    chat_id = env("ADMIN_CHAT_ID")
-    if not token or not chat_id:
+        if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+            return False
+        ms = int(datetime.now(timezone.utc).timestamp()*1000)
+        q = f"timestamp={ms}&recvWindow=60000"
+        sig = _sign_binance(q, BINANCE_API_SECRET)
+        headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+        r = await client.get("https://api.binance.com/api/v3/account", params=dict(timestamp=ms, recvWindow=60000, signature=sig), headers=headers)
+        return r.status_code == 200
+    except Exception:
         return False
-    r = tg_api("sendMessage", chat_id=chat_id, text=text)
-    return bool(r and r.status_code == 200)
 
-def check_binance_key() -> tuple[bool, str]:
-    api_key = env("BINANCE_API_KEY")
-    api_secret = env("BINANCE_API_SECRET")
-    if not api_key or not api_secret:
-        return False, "missing BINANCE_API_KEY/BINANCE_API_SECRET"
-    try:
-        base_url = "https://api.binance.com"
-        path = "/api/v3/account"
-        ts = int(time.time() * 1000)
-        query = f"timestamp={ts}"
-        signature = hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
-        headers = {"X-MBX-APIKEY": api_key}
-        resp = requests.get(
-            base_url + path,
-            params={"timestamp": ts, "signature": signature},
-            headers=headers,
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return True, "ok"
-        else:
-            return False, f"status {resp.status_code}"
-    except requests.RequestException:
-        return False, "network error"
+def _expected_webhook() -> Optional[str]:
+    if not WEBHOOK_BASE:
+        return None
+    return WEBHOOK_BASE + "/tg"
 
-def ensure_webhook():
-    base = env("WEBHOOK_BASE", "").rstrip("/")
-    token = env("BOT_TOKEN")
-    if not base or not token:
-        return False, "missing WEBHOOK_BASE/BOT_TOKEN"
-    desired = f"{base}/tg"
-    r_info = tg_api("getWebhookInfo")
-    current = None
-    if r_info and r_info.status_code == 200:
-        try:
-            current = r_info.json().get("result", {}).get("url")
-        except Exception:
-            current = None
-    if current == desired:
-        return True, "ok"
-    r_set = tg_api(
-        "setWebhook",
-        url=desired,
-        drop_pending_updates=True,
-        allowed_updates=json.dumps(["message","callback_query"]),
-        max_connections=40,
-    )
-    if r_set and r_set.status_code == 200:
-        try:
-            ok = r_set.json().get("ok", False)
-        except Exception:
-            ok = False
-        return (True, "set") if ok else (False, "setWebhook not ok")
-    return False, "setWebhook failed"
+async def ensure_webhook() -> tuple[bool, str]:
+    if not BOT_TOKEN:
+        return False, "BOT_TOKEN not set"
+    want = _expected_webhook()
+    if not want:
+        return False, "WEBHOOK_BASE not set"
+    info = await tg("getWebhookInfo")
+    cur = (info.get("result") or {}).get("url") if isinstance(info, dict) else None
+    if cur != want:
+        await tg("setWebhook", url=want, allowed_updates=json.dumps(["message","callback_query"]))
+        info = await tg("getWebhookInfo")
+        cur = (info.get("result") or {}).get("url")
+    return (cur == want), cur or ""
 
-# ------------- lifecycle -------------
+async def notify_admin(text: str, parse_mode: Optional[str]="HTML"):
+    if not ADMIN_CHAT_ID:
+        return
+    await tg("sendMessage", chat_id=ADMIN_CHAT_ID, text=text, parse_mode=parse_mode)
+
+# ------------- startup -------------
 @app.on_event("startup")
-def on_startup():
-    ok, _detail = check_binance_key()
+async def on_startup():
+    wh_ok, wh_detail = await ensure_webhook()
+    ok = await check_binance_account()
     status = "✅" if ok else "❌"
-    wh_ok, _ = ensure_webhook()
-    wh_status = "✅" if wh_ok else "❌"
-    msg = f"{utc_now_label()} Бот запущен\nBinance connection: {status}\nWebhook: {wh_status}"
-    notify_admin(msg)
+    await notify_admin(f"{utc_now_str()} Бот запущен\nBinance connection: {status}\nWebhook: {'✅' if wh_ok else '❌'}", parse_mode=None)
 
-# ------------- uptime endpoints (HEAD allowed) -------------
-@app.get("/")
-def root():
-    return {"status": "ok"}
+# ------------- health -------------
+@app.get("/", response_class=Response)
+@app.head("/", response_class=Response)
+@app.get("/health", response_class=Response)
+@app.head("/health", response_class=Response)
+async def health():
+    return Response(content="ok", media_type="text/plain")
 
-@app.head("/")
-def root_head():
-    return Response(status_code=200)
-
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-@app.head("/health")
-def health_head():
-    return Response(status_code=200)
-
-# ------------- Telegram webhook receiver -------------
+# ------------- telegram webhook -------------
 @app.post("/tg")
-async def tg_webhook(request: Request):
-    data = await request.json()
-    message = data.get("message") or data.get("edited_message")
-    if message:
-        chat_id = message["chat"]["id"]
-        text = message.get("text", "") or ""
-        if text.startswith("/start"):
-            tg_api("sendMessage", chat_id=chat_id, text="👋 Привет! Бот на связи.")
-        elif text.startswith("/portfolio"):
-            key = env("BINANCE_API_KEY")
-            secret = env("BINANCE_API_SECRET")
-            storage_dir = env("STORAGE_DIR", "/tmp")
-            try:
-                msg = portfolio.generate_portfolio_text(key, secret, storage_dir)
-            except Exception:
-                msg = "Ошибка формирования портфеля."
-            tg_api("sendMessage", chat_id=chat_id, text=msg, parse_mode="Markdown")
-        else:
-            tg_api("sendMessage", chat_id=chat_id, text="✅ Я работаю. Команды: /start, /portfolio")
+async def tg_webhook(req: Request):
+    upd = await req.json()
+    msg = upd.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    text = (msg.get("text") or "").strip()
+
+    if not chat_id:
+        return {"ok": True}
+
+    if text.lower() == "/start":
+        await tg("sendMessage", chat_id=chat_id, text="✅ Я работаю. Команды: /start, /portfolio")
+        return {"ok": True}
+
+    if text.lower().startswith("/portfolio"):
+        try:
+            payload = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
+        except Exception:
+            payload = "Ошибка формирования портфеля."
+        await tg("sendMessage", chat_id=chat_id, text=payload, parse_mode="HTML")
+        return {"ok": True}
+
+    # default echo for debug
+    await tg("sendMessage", chat_id=chat_id, text="Команда не распознана. Попробуй /portfolio")
     return {"ok": True}
