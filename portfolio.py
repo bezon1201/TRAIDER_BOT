@@ -1,270 +1,236 @@
-# portfolio.py
-import os
-import time
-import hmac
-import hashlib
-from typing import Dict, Optional, List, Tuple
-from decimal import Decimal, ROUND_DOWN
 
+import os, json, time, hmac, hashlib, tempfile
+from typing import Dict, List, Tuple
 import httpx
+from metrics_runner import load_pairs
 
-STABLES = {"USDC", "USDT", "FDUSD", "TUSD", "DAI", "BUSD"}
-BINANCE_API_BASE = "https://api.binance.com"
-SAPI_BASE = "https://api.binance.com"
+BINANCE_API = "https://api.binance.com"
 
+def _storage_path(storage_dir: str) -> str:
+    os.makedirs(storage_dir, exist_ok=True)
+    return os.path.join(storage_dir, "portfolio.json")
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+def _load_state(storage_dir: str) -> Dict:
+    path = _storage_path(storage_dir)
+    if not os.path.exists(path):
+        return {"invested_total": 0.0, "history": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"invested_total": 0.0, "history": []}
 
+def _atomic_write(path: str, data: Dict) -> None:
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=d, delete=False, encoding="utf-8") as tf:
+        json.dump(data, tf, ensure_ascii=False, separators=(",", ":"))
+        tmp = tf.name
+    os.replace(tmp, path)
+
+def adjust_invested_total(storage_dir: str, delta: float) -> float:
+    state = _load_state(storage_dir)
+    state["invested_total"] = round(float(state.get("invested_total", 0.0)) + float(delta), 8)
+    state.setdefault("history", []).append({
+        "ts": int(time.time() * 1000),
+        "delta": float(delta),
+        "total": float(state["invested_total"]),
+    })
+    _atomic_write(_storage_path(storage_dir), state)
+    return float(state["invested_total"])
 
 def _sign(query: str, secret: str) -> str:
-    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
-
-async def _signed_get(client: httpx.AsyncClient, path: str, api_key: str, api_secret: str, params: Optional[Dict[str, str]] = None):
+async def _signed_get(client: httpx.AsyncClient, path: str, key: str, secret: str, params: Dict = None):
     if params is None:
         params = {}
-    params["timestamp"] = str(_now_ms())
-    params.setdefault("recvWindow", "5000")
-    qs = "&".join(f"{k}={params[k]}" for k in sorted(params.keys()))
-    sig = _sign(qs, api_secret)
-    url = f"{SAPI_BASE}{path}?{qs}&signature={sig}"
-    headers = {"X-MBX-APIKEY": api_key}
-    try:
-        return await client.get(url, headers=headers)
-    except Exception:
-        return None
+    params["timestamp"] = int(time.time() * 1000)
+    params["recvWindow"] = 10_000
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign(q, secret)
+    url = f"{BINANCE_API}{path}?{q}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+    r = await client.get(url, headers=headers)
+    r.raise_for_status()
+    return r.json()
 
+async def _public_get(client: httpx.AsyncClient, path: str, params: Dict = None):
+    url = f"{BINANCE_API}{path}"
+    r = await client.get(url, params=params or {})
+    r.raise_for_status()
+    return r.json()
 
-async def fetch_spot_balances(client: httpx.AsyncClient, api_key: str, api_secret: str) -> Dict[str, Decimal]:
-    try:
-        ts = _now_ms()
-        query = f"timestamp={ts}&recvWindow=5000"
-        sig = _sign(query, api_secret)
-        url = f"{BINANCE_API_BASE}/api/v3/account?{query}&signature={sig}"
-        headers = {"X-MBX-APIKEY": api_key}
-        r = await client.get(url, headers=headers)
-        if r.status_code != 200:
-            return {}
-        data = r.json()
-    except Exception:
-        return {}
-    out: Dict[str, Decimal] = {}
+async def _load_spot_balances(client: httpx.AsyncClient, key: str, secret: str) -> Dict[str, float]:
+    data = await _signed_get(client, "/api/v3/account", key, secret, params={})
+    balances = {}
     for b in data.get("balances", []):
-        asset = b.get("asset")
-        try:
-            amt = Decimal(b.get("free", "0")) + Decimal(b.get("locked", "0"))
-        except Exception:
-            continue
-        if amt > Decimal("0"):
-            out[asset] = out.get(asset, Decimal("0")) + amt
+        free = float(b.get("free", "0") or 0)
+        locked = float(b.get("locked", "0") or 0)
+        amt = free + locked
+        if amt > 0:
+            balances[b["asset"]] = balances.get(b["asset"], 0.0) + amt
+    return balances
+
+async def _load_earn_positions(client: httpx.AsyncClient, key: str, secret: str) -> Dict[str, float]:
+    out = {}
+    try:
+        flex = await _signed_get(client, "/sapi/v1/simple-earn/flexible/position", key, secret, params={"size": 100})
+        rows = flex.get("rows", flex if isinstance(flex, list) else [])
+        for p in rows:
+            asset = p.get("asset") or p.get("assetSymbol") or p.get("assetName")
+            total = float(p.get("totalAmount") or p.get("total") or p.get("amount", 0) or 0)
+            if asset and total > 0:
+                out[asset] = out.get(asset, 0.0) + total
+    except Exception:
+        pass
+    try:
+        locked = await _signed_get(client, "/sapi/v1/simple-earn/locked/position", key, secret, params={"size": 100})
+        rows = locked.get("rows", locked if isinstance(locked, list) else [])
+        for p in rows:
+            asset = p.get("asset") or p.get("assetSymbol") or p.get("assetName")
+            total = float(p.get("totalAmount") or p.get("purchasedAmount") or 0)
+            if asset and total > 0:
+                out[asset] = out.get(asset, 0.0) + total
+    except Exception:
+        pass
     return out
 
+async def _get_usd_prices(client: httpx.AsyncClient, assets: List[str]) -> Dict[str, float]:
+    prices = {}
+    stables = {"USDT", "USDC", "BUSD", "FDUSD"}
+    for a in assets:
+        if a in stables:
+            prices[a] = 1.0
+    symbols = [f"{a}USDT" for a in assets if a not in stables]
+    if symbols:
+        try:
+            data = await _public_get(client, "/api/v3/ticker/price", params={"symbols": str(symbols).replace("'", '"')})
+            for item in data:
+                sym = item.get("symbol","")
+                if sym.endswith("USDT"):
+                    asset = sym[:-4]
+                    prices[asset] = float(item["price"])
+        except Exception:
+            for sym in symbols:
+                try:
+                    d = await _public_get(client, "/api/v3/ticker/price", params={"symbol": sym})
+                    prices[sym[:-4]] = float(d["price"])
+                except Exception:
+                    pass
+    return prices
 
-async def fetch_earn_balances(client: httpx.AsyncClient, api_key: str, api_secret: str) -> Dict[str, Decimal]:
-    out: Dict[str, Decimal] = {}
-    # Simple Earn Flexible
-    r = await _signed_get(client, "/sapi/v1/simple-earn/flexible/positions", api_key, api_secret, params={"size": "100"})
-    if r and r.status_code == 200:
+def _format_block(title: str, rows: List[Tuple[str, float]]) -> List[str]:
+    if not rows:
+        return []
+    lefts = [name for name, _ in rows]
+    maxw = max(len(x) for x in lefts)
+    lines = [f"{name.ljust(maxw)}  / {usd:.2f}$" for name, usd in rows]
+    return [title] + lines
+
+
+async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: str, storage_dir: str) -> str:
+    if not key or not secret:
+        return "BINANCE_API_KEY/SECRET не заданы."
+
+    spot = await _load_spot_balances(client, key, secret)
+    earn = await _load_earn_positions(client, key, secret)
+    assets = sorted(set(list(spot.keys()) + list(earn.keys())))
+    prices = await _get_usd_prices(client, assets)
+
+    # Determine CORE assets by trade_mode == LONG from /data/<PAIR>.json
+    def _get_core_assets(storage_dir: str) -> set[str]:
+        core = set()
         try:
-            j = r.json()
-            rows = j.get("rows", j if isinstance(j, list) else [])
-            for it in rows:
-                asset = it.get("asset")
-                raw = it.get("totalAmount") or it.get("amount") or "0"
-                amt = Decimal(str(raw))
-                if amt > 0:
-                    out[asset] = out.get(asset, Decimal("0")) + amt
+            pairs = load_pairs(storage_dir)
         except Exception:
-            pass
-    # Simple Earn Locked
-    r = await _signed_get(client, "/sapi/v1/simple-earn/locked/positions", api_key, api_secret, params={"size": "100"})
-    if r and r.status_code == 200:
-        try:
-            j = r.json()
-            rows = j.get("rows", j if isinstance(j, list) else [])
-            for it in rows:
-                asset = it.get("asset")
-                raw = it.get("totalAmount") or it.get("amount") or "0"
-                amt = Decimal(str(raw))
-                if amt > 0:
-                    out[asset] = out.get(asset, Decimal("0")) + amt
-        except Exception:
-            pass
-    # Legacy Savings fallback
-    if not out:
-        r = await _signed_get(client, "/sapi/v1/lending/daily/token/position", api_key, api_secret)
-        if r and r.status_code == 200:
+            pairs = []
+        stables = ("USDC","USDT","BUSD","FDUSD")
+        for pair in pairs or []:
+            p = (pair or "").upper().strip()
+            base = None
+            for suf in stables:
+                if p.endswith(suf) and len(p) > len(suf):
+                    base = p[:-len(suf)]
+                    break
+            if not base:
+                continue
             try:
-                for it in r.json():
-                    asset = it.get("asset")
-                    raw = it.get("totalAmount") or it.get("freeAmount") or it.get("amount") or "0"
-                    amt = Decimal(str(raw))
-                    if amt > 0:
-                        out[asset] = out.get(asset, Decimal("0")) + amt
+                jpath = os.path.join(storage_dir, f"{p}.json")
+                with open(jpath, "r", encoding="utf-8") as jf:
+                    data = json.load(jf)
+                mode = (data.get("trade_mode") or "").upper()
+                if mode == "LONG":
+                    core.add(base)
             except Exception:
+                # ignore unreadable files
                 pass
-    return out
+        return core
 
 
-class PriceBook:
-    def __init__(self) -> None:
-        self.cache: Dict[str, Decimal] = {}
-
-    async def get(self, client: httpx.AsyncClient, symbol: str):
-        if symbol in self.cache:
-            return self.cache[symbol]
-        url = f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol={symbol}"
-        try:
-            r = await client.get(url)
-            if r.status_code != 200:
-                return None
-            px = Decimal(r.json()["price"])
-            self.cache[symbol] = px
-            return px
-        except Exception:
-            return None
-
-
-async def price_in_usdc(client: httpx.AsyncClient, book: PriceBook, asset: str):
-    if asset == "USDC":
-        return Decimal("1")
-    p = await book.get(client, f"{asset}USDC")
-    if p:
-        return p
-    p1 = await book.get(client, f"{asset}USDT")
-    if p1:
-        p2 = await book.get(client, "USDTUSDC")
-        if p2:
-            return p1 * p2
-        p3 = await book.get(client, "USDCUSDT")
-        if p3 and p3 > 0:
-            return p1 / p3
-    p_inv = await book.get(client, f"USDC{asset}")
-    if p_inv and p_inv > 0:
-        return Decimal("1") / p_inv
-    if asset in STABLES:
-        return Decimal("1")
-    return None
-
-
-def _fmt_amount(asset: str, amt: Decimal) -> str:
-    if amt == 0:
-        return "0"
-    places = 8 if amt < Decimal("1") else (6 if amt < Decimal("100") else 2)
-    quant = Decimal(f"1e-{places}")
-    return (amt.quantize(quant, rounding=ROUND_DOWN).normalize()).to_eng_string()
-
-
-def _fmt_money(n: Decimal) -> str:
-    return f"{n.quantize(Decimal('0.01'), rounding=ROUND_DOWN):f}$"
-
-
-def _is_stable(asset: str) -> bool:
-    return asset in STABLES
-
-
-async def build_portfolio_message() -> str:
-    api_key = os.environ.get("BINANCE_API_KEY")
-    api_secret = os.environ.get("BINANCE_API_SECRET")
-    storage_dir = os.environ.get("STORAGE_DIR", "/data")
-
-    timeout = httpx.Timeout(20.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
-        spot = await fetch_spot_balances(client, api_key, api_secret) if api_key and api_secret else {}
-        earn = await fetch_earn_balances(client, api_key, api_secret) if api_key and api_secret else {}
-
-        book = PriceBook()
-
-        # Build Spot entries
-        spot_items: List[Tuple[str, Decimal, Decimal, bool]] = []
-        spot_nonstable_sum = Decimal("0")
-        for asset, amt in spot.items():
-            pr = await price_in_usdc(client, book, asset)
-            if pr is None:
-                continue
-            val = amt * pr
-            if val < Decimal("1"):
-                continue
-            is_stable = _is_stable(asset)
-            if not is_stable:
-                spot_nonstable_sum += val
-            spot_items.append((asset, amt, val, is_stable))
-
-        # Order Spot
-        btc = [x for x in spot_items if x[0] == "BTC"]
-        eth = [x for x in spot_items if x[0] == "ETH"]
-        rest_non = [x for x in spot_items if (not x[3] and x[0] not in {"BTC","ETH"})]
-        stables = [x for x in spot_items if x[3]]
-        rest_non.sort(key=lambda t: t[2], reverse=True)
-        stables.sort(key=lambda t: t[2], reverse=True)
-        ordered_spot = btc + eth + rest_non + stables
-
-        # Earn
-        earn_items: List[Tuple[str, Decimal, Decimal]] = []
-        for asset, amt in earn.items():
-            pr = await price_in_usdc(client, book, asset)
-            if pr is None:
-                continue
-            val = amt * pr
-            if val < Decimal("1"):
-                continue
-            earn_items.append((asset, amt, val))
-        earn_items.sort(key=lambda t: t[2], reverse=True)
-
-        total_spot = sum(v for (_a,_b,v,_s) in ordered_spot)
-        total_earn = sum(v for (_a,_b,v) in earn_items)
-        total = total_spot + total_earn
-
-        # Read invested
-        invested = None
-        try:
-            os.makedirs(storage_dir, exist_ok=True)
-            p = os.path.join(storage_dir, "portfolio.json")
-            if os.path.exists(p):
-                import json
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict) and "invested_usdc" in data:
-                    invested = Decimal(str(data["invested_usdc"]))
-        except Exception:
-            invested = None
-
-        # Format
-        lines: List[str] = []
-        amt_w, sym_w, pct_w = 14, 6, 4
-
-        lines.append("Spot")
-        for asset, amt, val, is_stable in ordered_spot:
-            amt_s = _fmt_amount(asset, amt).rjust(amt_w)
-            sym_s = asset.ljust(sym_w)
-            if not is_stable and spot_nonstable_sum > 0:
-                pct = (val / spot_nonstable_sum * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_DOWN)
-                pct_s = f"{pct}%".rjust(pct_w)
-            else:
-                pct_s = " " * pct_w
-            val_s = _fmt_money(val)
-            lines.append(f"{amt_s} {sym_s} {pct_s} | {val_s}")
-
-        if earn_items:
-            lines.append("Earn")
-            for asset, amt, val in earn_items:
-                amt_s = _fmt_amount(asset, amt).rjust(amt_w)
-                sym_s = asset.ljust(sym_w)
-                val_s = _fmt_money(val)
-                lines.append(f"{amt_s} {sym_s}     | {val_s}")
-
-        lines.append("")
-        lines.append(f"Total:    {_fmt_money(total)}")
-        if invested is not None:
-            profit = total - invested
-            arrow = "⬆️" if profit >= 0 else "⬇️"
-            pct = (abs(profit) / invested * Decimal(100)).quantize(Decimal('0.1'), rounding=ROUND_DOWN) if invested > 0 else Decimal("0.0")
-            sign = "" if profit >= 0 else "-"
-            lines.append(f"Invested: {_fmt_money(invested)}")
-            lines.append(f"Profit:   {sign}{_fmt_money(abs(profit))}{arrow}{sign}{pct}%")
+    def left_label(asset: str, amt: float) -> str:
+        if asset in {"USDT", "USDC"}:
+            qty = f"{amt:.6f}"
         else:
-            lines.append("Invested: n/a")
-            lines.append("Profit:   n/a")
+            qty = f"{amt:.7f}"
+        return f"{qty} {asset}"
 
-        return "\n".join(lines)
+    
+    # Build Spot rows and compute percent allocation among core coins (BTC & ETH) only
+    spot_items = []  # (asset, amount, usd)
+    stables = {"USDT","USDC","BUSD","FDUSD"}
+    spot_rows, spot_total = [], 0.0
+    for a, amt in sorted(spot.items()):
+        price = prices.get(a, 0.0)
+        usd = amt * price if price > 0 else (amt if a in stables else 0.0)
+        if usd >= 1.0:
+            spot_items.append((a, amt, usd))
+            spot_total += usd
+
+    # Percent denominator = BTC+ETH only
+    core = _get_core_assets(storage_dir)
+    denom = sum(usd for (a, _, usd) in spot_items if a in core)
+
+    # Append % only for BTC/ETH; BNB & USDC shown without %
+    def _cat(sym: str) -> int:
+        if sym in core:
+            return 0
+        if sym in stables:
+            return 2
+        return 1
+    ordered = sorted(spot_items, key=lambda x: (_cat(x[0]), -x[2], x[0]))
+    spot_rows = []
+    for a, amt, usd in ordered:
+        left = left_label(a, amt)
+        if denom > 0 and a in core:
+            pct = (usd / denom) * 100.0
+            left = f"{left} {pct:.0f}%"
+        spot_rows.append((left, usd))
+
+# Continue with Earn computation
+    earn_rows, earn_total = [], 0.0
+
+    for a, amt in sorted(earn.items()):
+        price = prices.get(a, 0.0)
+        usd = amt * price if price > 0 else (amt if a in {"USDT","USDC","BUSD","FDUSD"} else 0.0)
+        if usd >= 1.0:
+            earn_rows.append((left_label(a, amt), usd))
+            earn_total += usd
+
+    total = spot_total + earn_total
+    state = _load_state(storage_dir)
+    invested = float(state.get("invested_total", 0.0))
+    profit = total - invested
+    arrow = "⬆️" if profit > 0.01 else ("⬇️" if profit < -0.01 else "➖")
+    profit_text = f"+{profit:.2f}$" if profit > 0 else f"{profit:.2f}$"
+
+    lines: List[str] = []
+    if spot_rows:
+        lines += _format_block("Spot", spot_rows)
+    if earn_rows:
+        lines += _format_block("Earn", earn_rows)
+
+    profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
+    pct_part = f" {profit_pct:.1f}%" if invested > 0 else ""
+    summary = [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}"]
+    return "```\n" + "\n".join(lines + [""] + summary) + "\n```"
