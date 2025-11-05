@@ -3,13 +3,14 @@ import os
 import time
 import hmac
 import hashlib
+import json
 from datetime import datetime, timezone
 
 import requests
 from fastapi import FastAPI, Response, Request
 
 # FastAPI application
-app = FastAPI(title="Trader Bot", version="0.2.0")
+app = FastAPI(title="Trader Bot", version="0.2.1")
 
 # ------------- helpers -------------
 def utc_now_label() -> str:
