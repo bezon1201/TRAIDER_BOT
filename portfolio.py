@@ -1,137 +1,133 @@
-# portfolio.py
+
+import os
 import time
 import hmac
 import hashlib
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple
 
 import httpx
 
-STABLES = {"USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD", "USDP"}
-EARN_ALIASES = {"LDUSDC": "USDC"}  # normalize LDUSDC -> USDC
+BINANCE_API = "https://api.binance.com"
 
-PRICES_ENDPOINT = "https://api.binance.com/api/v3/ticker/price"
-ACCOUNT_ENDPOINT = "https://api.binance.com/api/v3/account"
+STABLES = {"USDT","USDC","FDUSD","TUSD","BUSD","DAI"}
+FIATS   = {"EUR","AEUR"}
 
-def _sign(secret: str, qs: str) -> str:
-    return hmac.new(secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
+# Some assets come with prefixes (e.g. LDUSDC from Earn). Normalize to spot tickers.
+NORM = {
+    "LDUSDC": "USDC",
+    "USDSB": "USDT",  # legacy
+}
 
-async def _get_account(client: httpx.AsyncClient, key: str, secret: str) -> Dict[str, Any]:
-    ts = int(time.time() * 1000)
-    qs = f"timestamp={ts}&recvWindow=60000"
-    sig = _sign(secret, qs)
-    headers = {"X-MBX-APIKEY": key}
-    url = f"{ACCOUNT_ENDPOINT}?{qs}&signature={sig}"
-    r = await client.get(url, headers=headers)
-    r.raise_for_status()
-    return r.json()
+def _sign(query: str, secret: str) -> str:
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
-async def _get_prices(client: httpx.AsyncClient) -> Dict[str, float]:
-    r = await client.get(PRICES_ENDPOINT)
-    r.raise_for_status()
-    data = r.json()
-    prices = {}
-    for item in data:
-        s = item.get("symbol")
-        p = float(item.get("price"))
-        prices[s] = p
-    return prices
+async def _signed_get(client: httpx.AsyncClient, path: str, key: str, secret: str, params: Dict | None = None):
+    if params is None:
+        params = {}
+    params["timestamp"] = int(time.time() * 1000)
+    params["recvWindow"] = 60_000
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign(q, secret)
+    return await client.get(f"{BINANCE_API}{path}?{q}&signature={sig}", headers={"X-MBX-APIKEY": key})
 
-def _is_stable(asset: str) -> bool:
-    a = EARN_ALIASES.get(asset, asset)
-    return a in STABLES
-
-def _spot_groups(balances: List[Dict[str, str]]) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]], List[Tuple[str, float]]]:
-    """Return (bluechips, others, stables) as (asset, amount) with zeroes removed."""
-    blue = []
-    others = []
-    stables = []
-    for b in balances:
-        asset = b.get("asset")
-        free = float(b.get("free", "0") or 0)
-        locked = float(b.get("locked", "0") or 0)
-        amt = free + locked
-        if amt <= 0:
-            continue
-        asset_norm = EARN_ALIASES.get(asset, asset)
-        if asset_norm in {"BTC", "ETH"}:
-            blue.append((asset_norm, amt))
-        elif _is_stable(asset_norm):
-            stables.append((asset_norm, amt))
-        else:
-            others.append((asset_norm, amt))
-    # merge duplicates after aliasing
-    def merge(items):
-        acc = {}
-        for a, v in items:
-            acc[a] = acc.get(a, 0.0) + v
-        # keep deterministic ordering: BTC, ETH already grouped; others by name
-        return [(k, acc[k]) for k in sorted(acc.keys(), key=lambda x: (x != "BTC", x != "ETH", x))]
-    return merge(blue), merge(others), merge(stables)
-
-def _value_usd(asset: str, amt: float, prices: Dict[str, float]) -> float:
+async def _price_usd(client: httpx.AsyncClient, asset: str) -> float:
+    # Return price in USDT (≈USD). For stables price≈1, for EUR ask EURUSDT.
     if asset in STABLES:
-        return amt  # ~1 USD
-    sym = f"{asset}USDT"
-    return amt * prices.get(sym, 0.0)
+        return 1.0
+    if asset in FIATS:
+        sym = f"{asset}USDT"
+    else:
+        sym = f"{asset}USDT"
+    r = await client.get(f"{BINANCE_API}/api/v3/ticker/price", params={"symbol": sym})
+    if r.status_code != 200:
+        return 0.0
+    return float(r.json().get("price", 0.0))
 
-def _fmt_rows(rows: List[Tuple[str, float]], prices: Dict[str, float], with_pct: bool, denom: float) -> Tuple[List[str], float]:
-    out = []
-    total = 0.0
-    for asset, amt in rows:
-        usd = _value_usd(asset, amt, prices)
-        total += usd
-        pct = (usd / denom * 100.0) if (with_pct and denom > 0) else None
-        out.append((asset, amt, usd, pct))
-    if not out:
-        return [], 0.0
-    # width calc
-    name_w = max([len(r[0]) for r in out] + [3])
-    amt_w  = max([len(f"{r[1]:.8f}".rstrip('0').rstrip('.')) for r in out] + [5])
-    usd_w  = max([len(f"{r[2]:,.2f}") for r in out] + [7])
-    lines = []
-    for asset, amt, usd, pct in out:
-        amt_s = f"{amt:.8f}".rstrip('0').rstrip('.')
-        usd_s = f"{usd:,.2f}"
-        if pct is None:
-            lines.append(f"{asset:<{name_w}}  {amt_s:>{amt_w}}  $ {usd_s:>{usd_w}}")
-        else:
-            pct_s = f"{pct:5.1f}%"
-            lines.append(f"{asset:<{name_w}}  {amt_s:>{amt_w}}  $ {usd_s:>{usd_w}}  {pct_s:>6}")
-    return lines, total
+def _trim_amount(x: float) -> str:
+    # show up to 8 decimals, strip zeros
+    s = f"{x:.8f}".rstrip("0").rstrip(".")
+    return s if s else "0"
 
-async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: str, proxy_url: Optional[str] = None) -> str:
-    acct = await _get_account(client, key, secret)
-    balances = acct.get("balances", [])
-    prices = await _get_prices(client)
+def _fmt_row(qty: float, sym: str, usd: float, pct: float | None, width: int) -> str:
+    qty_s = _trim_amount(qty)
+    usd_s = f"{usd:,.2f}$".replace(",", " ")
+    if pct is None:
+        pct_s = "    "  # 4 spaces align with "41.9%"
+    else:
+        pct_s = f"{pct:>4.1f}%"
+    return f"{qty_s:>12} {sym:<5} {pct_s}  | {usd_s:>{width}}"
 
-    blue, others, stables = _spot_groups(balances)
+async def build_portfolio_card(client: httpx.AsyncClient, key: str, secret: str) -> str:
+    # 1) balances
+    acc = await _signed_get(client, "/api/v3/account", key, secret)
+    acc.raise_for_status()
+    balances = acc.json().get("balances", [])
 
-    # totals excluding stables for %
-    tmp_lines, blue_total = _fmt_rows(blue, prices, with_pct=False, denom=1.0)
-    tmp_lines, other_total = _fmt_rows(others, prices, with_pct=False, denom=1.0)
-    non_stable_total = blue_total + other_total
+    # 2) aggregate and normalize
+    amounts: Dict[str, float] = {}
+    for b in balances:
+        free = float(b.get("free", "0"))
+        locked = float(b.get("locked", "0"))
+        total = free + locked
+        if total <= 0:
+            continue
+        a = b["asset"]
+        a = NORM.get(a, a)
+        amounts[a] = amounts.get(a, 0.0) + total
 
-    blue_lines, _ = _fmt_rows(blue, prices, with_pct=True, denom=non_stable_total)
-    other_lines, _ = _fmt_rows(others, prices, with_pct=True, denom=non_stable_total)
-    st_lines, st_total = _fmt_rows(stables, prices, with_pct=False, denom=1.0)
+    # 3) compute USD values, drop dust (<$1)
+    usd_by_asset: Dict[str, float] = {}
+    for a, q in list(amounts.items()):
+        p = await _price_usd(client, a)
+        usd = q * p if a not in STABLES else q  # for stables p≈1
+        if usd < 1.0:
+            continue
+        usd_by_asset[a] = usd
+        amounts[a] = q
 
-    lines = []
-    if blue_lines:
-        lines.append("BLUE-CHIPS")
-        lines.extend(blue_lines)
-        lines.append("")
-    if other_lines:
-        lines.append("ALTS")
-        lines.extend(other_lines)
-        lines.append("")
-    if st_lines:
-        lines.append("STABLES / EARN")
-        lines.extend(st_lines)
-        lines.append("")
+    # split categories
+    non_stables = [(a, amounts[a], usd_by_asset[a]) for a in usd_by_asset if a not in STABLES | FIATS]
+    stables     = [(a, amounts[a], usd_by_asset[a]) for a in usd_by_asset if a in STABLES]
+    fiats       = [(a, amounts[a], usd_by_asset[a]) for a in usd_by_asset if a in FIATS]
 
-    # Totals
-    lines.append(f"Total (non-stables): $ {non_stable_total:,.2f}")
-    lines.append(f"Stables total:       $ {st_total:,.2f}")
-    lines.append(f"Portfolio total:     $ {non_stable_total + st_total:,.2f}")
+    non_stables.sort(key=lambda x: (x[0] not in {"BTC","ETH"}, -x[2]))  # BTC/ETH first, then by usd desc
+    stables.sort(key=lambda x: -x[2])
+    fiats.sort(key=lambda x: -x[2])
 
-    return "\\n".join(lines)
+    total_non_stables = sum(u for _,_,u in non_stables)
+    total_stables = sum(u for _,_,u in stables)
+    total_fiats = sum(u for _,_,u in fiats)
+    portfolio_total = total_non_stables + total_stables + total_fiats
+
+    # width for right column
+    right_width = max(8, len(f"{portfolio_total:,.2f}$".replace(",", " ")))
+
+    lines: List[str] = []
+    lines.append("Spot")
+
+    # non-stables with percentages
+    if non_stables:
+        for a, qty, usd in non_stables:
+            pct = (usd / total_non_stables * 100.0) if total_non_stables > 0 else None
+            lines.append(_fmt_row(qty, a, usd, pct, right_width))
+
+    # fiats (EUR etc.) as separate group if present
+    if fiats:
+        lines.append("\nFIAT")
+        for a, qty, usd in fiats:
+            lines.append(_fmt_row(qty, a, usd, None, right_width))
+
+    # stables in Spot
+    if stables:
+        lines.append("\nSTABLES / EARN")
+        for a, qty, usd in stables:
+            lines.append(_fmt_row(qty, a, usd, None, right_width))
+
+    lines.append("")
+    lines.append(f"Total (non-stables):   {total_non_stables:>{right_width}.2f}$")
+    lines.append(f"Stables total:         {total_stables:>{right_width}.2f}$")
+    if total_fiats:
+        lines.append(f"Fiats total:           {total_fiats:>{right_width}.2f}$")
+    lines.append(f"Portfolio total:       {portfolio_total:>{right_width}.2f}$")
+
+    return "\n".join(lines)

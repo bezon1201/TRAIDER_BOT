@@ -1,121 +1,73 @@
-# app.py
+
 import os
 import time
 import hmac
 import hashlib
-import json
-from typing import Optional
+from typing import Any, Dict
 
 import httpx
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request
 
-from portfolio import build_portfolio_message
+from portfolio import build_portfolio_card
 
-APP_URL = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-PROXY_URL = os.getenv("PROXY_URL")
-STICKER_PORTFOLIO_ID = os.getenv("STICKER_PORTFOLIO_ID")
 
-TIMEOUT = httpx.Timeout(15.0, connect=15.0)
+BINANCE_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+BINANCE_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 
-# httpx 0.27.x uses "proxies" kwarg
-client = httpx.AsyncClient(timeout=TIMEOUT, proxies=PROXY_URL if PROXY_URL else None)
+TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=None)
 
 app = FastAPI()
+client: httpx.AsyncClient | None = None
 
 @app.on_event("startup")
-async def on_startup():
-    # Ping Binance (signed /account) to check keys
-    binance_ok = False
-    detail = ""
-    try:
-        ts = int(time.time() * 1000)
-        q = f"timestamp={ts}&recvWindow=60000"
-        sig = hmac.new(
-            (BINANCE_API_SECRET or "").encode(),
-            q.encode(),
-            hashlib.sha256
-        ).hexdigest()
-        url = f"https://api.binance.com/api/v3/account?{q}&signature={sig}"
-        headers = {"X-MBX-APIKEY": BINANCE_API_KEY or ""}
-        r = await client.get(url, headers=headers)
-        binance_ok = r.status_code == 200
-        detail = "✅" if binance_ok else f"❌ {r.status_code} {r.text[:120]}"
-    except Exception as e:
-        detail = f"❌ {e.__class__.__name__}: {e}"
+async def _startup():
+    global client
+    # trust_env=True lets httpx pick HTTP(S)_PROXY from env (Tinyproxy)
+    client = httpx.AsyncClient(timeout=TIMEOUT, trust_env=True)
 
-    # Notify admin about start
-    if BOT_TOKEN and ADMIN_CHAT_ID:
-        now_utc = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
-        text = f"{now_utc} Бот запущен\nBinance connection: {detail}"
-        await send_telegram_message(ADMIN_CHAT_ID, text, parse_mode="HTML")
+@app.on_event("shutdown")
+async def _shutdown():
+    if client:
+        await client.aclose()
 
-    # Ensure webhook if APP_URL present
-    if APP_URL and BOT_TOKEN:
-        try:
-            wh_url = APP_URL.rstrip("/") + f"/webhook/{BOT_TOKEN}"
-            await client.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
-                             params={"url": wh_url, "drop_pending_updates": True})
-        except Exception:
-            pass
-
-
-async def send_telegram_message(chat_id: str, text: str, parse_mode: Optional[str] = None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        data["parse_mode"] = parse_mode
-        data["disable_web_page_preview"] = True
-    await client.post(url, data=data)
-
-@app.get("/", response_class=PlainTextResponse)
-@app.head("/", response_class=PlainTextResponse)
+@app.get("/")
 async def root():
-    return "ok"
+    return {"ok": True, "service": "TRAIDER_BOT"}
 
-@app.post("/webhook/{BOT_TOKEN}")
-async def tg_webhook(request: Request):
-    upd = await request.json()
-    msg = upd.get("message") or upd.get("edited_message")
-    cq = upd.get("callback_query")
-    chat_id = None
-    text = None
-    sticker_id = None
+async def _send_message(chat_id: int | str, text: str):
+    assert client is not None
+    payload = {
+        "chat_id": chat_id,
+        "text": f"```\n{text}\n```",
+        "parse_mode": "MarkdownV2",
+        "disable_web_page_preview": True,
+    }
+    await client.post(f"{TELEGRAM_API}/sendMessage", json=payload)
 
-    if msg:
-        chat = msg.get("chat") or {}
-        chat_id = str(chat.get("id"))
-        text = (msg.get("text") or "").strip()
-        sticker = msg.get("sticker")
-        if sticker:
-            sticker_id = sticker.get("file_unique_id")
-    elif cq:
-        chat = cq.get("message", {}).get("chat", {})
-        chat_id = str(chat.get("id"))
-        text = (cq.get("data") or "").strip()
+@app.post("/tg")
+async def telegram_webhook(update: Request):
+    data: Dict[str, Any] = await update.json()
+    msg = data.get("message") or data.get("edited_message") or {}
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    text = (msg.get("text") or "").strip()
 
-    # Trigger /portfolio by command, by emoji 💼, or by configured sticker id
-    need_portfolio = False
-    if text and text.startswith("/portfolio"):
-        need_portfolio = True
-    if not need_portfolio and text and "💼" in text:
-        need_portfolio = True
-    if not need_portfolio and STICKER_PORTFOLIO_ID and sticker_id == STICKER_PORTFOLIO_ID:
-        need_portfolio = True
+    if not text:
+        return {"ok": True}
 
-    if need_portfolio and chat_id:
-        try:
-            msg_text = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, PROXY_URL)
-            # Send as monospace block via HTML <pre>
-            await send_telegram_message(chat_id, f"<pre>{html_escape(msg_text)}</pre>", parse_mode="HTML")
-        except Exception as e:
-            await send_telegram_message(chat_id, f"Ошибка формирования портфеля: {e.__class__.__name__}: {e}")
+    if text.startswith("/start"):
+        await _send_message(chat_id, "Бот запущен. Отправь /portfolio")
+        return {"ok": True}
 
-    return Response(status_code=200)
+    if text.startswith("/portfolio"):
+        assert client is not None
+        card = await build_portfolio_card(client, BINANCE_KEY, BINANCE_SECRET)
+        await _send_message(chat_id, card)
+        return {"ok": True}
 
-def html_escape(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # echo unknown
+    await _send_message(chat_id, "Не знаю такую команду. Попробуй /portfolio")
+    return {"ok": True}

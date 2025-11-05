@@ -1,19 +1,10 @@
-Version: 1
-- Каркас FastAPI (app.py) с GET/HEAD для / и /health (для UptimeRobot).
-- На старте пинг Binance через /api/v3/account (HMAC) для проверки ключа.
-- Отправка в ADMIN_CHAT_ID: "<UTC> Бот запущен\nBinance connection: ✅/❌".
-- Используются переменные из Environment Variables.txt (прокси, токен, admin chat, ключи). Новых переменных не добавлял.
-- Совместимо с:
-  Build Command=pip install -r requirements.txt
-  Start Command=uvicorn app:app --host 0.0.0.0 --port $PORT
-
-Version: 2
-- Добавлен Telegram webhook: на старте сверяем getWebhookInfo и ставим setWebhook на WEBHOOK_BASE + '/tg'.
-- Обработчик /tg принимает POST от Telegram и отвечает на /start и любые тексты.
-- Уведомление админу теперь включает статус вебхука (Webhook: ✅/❌).
-- Прокси берутся из HTTP_PROXY/HTTPS_PROXY из окружения (как и раньше).
-- Остальное без изменений: HEAD для / и /health, Binance ping на старте.
-
-Version: 9
-- Сообщения-карточки теперь моноширинные: <pre> + parse_mode=HTML.
-- Убран вывод тройных кавычек из /portfolio.
+11
+- Исправлен формат карточки /portfolio: вывод строго моноширинным блоком с тройными апострофами (```).
+- Больше никаких литералов \n в тексте: отправляем реальные переводы строк.
+- Нормализация LDUSDC → USDC (суммируется к стейблам).
+- Игнор активов, суммарная стоимость которых < 1 USD.
+- BTC/ETH первыми, затем альты по убыванию USD.
+- Отдельные блоки: FIAT, STABLES / EARN.
+- Цифры выравнены: столбец с $ ровно под $.
+- httpx берёт proxy из переменных окружения (trust_env=True).
+- Добавлен requirements.txt (httpx, fastapi, uvicorn).
