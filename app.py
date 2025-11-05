@@ -10,6 +10,8 @@ from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
 
+
+
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
 WEBHOOK_BASE = os.getenv("TRAIDER_WEBHOOK_BASE") or os.getenv("WEBHOOK_BASE") or ""
@@ -17,6 +19,9 @@ METRIC_CHAT_ID = os.getenv("TRAIDER_METRIC_CHAT_ID", "").strip()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
+
+
+
 
 # --- bot mode helpers ---
 def _portfolio_path():
@@ -48,7 +53,161 @@ def _set_bot_mode(mode: str) -> None:
     j["bot_mode"] = mode.lower()
     j["updated_at"] = __import__("datetime").datetime.utcnow().isoformat()+"Z"
     _write_json(p, j)
+# --- budget helpers (/budget cancel & rolover) ---
+def _coin_json_path(symbol: str) -> str:
+    return os.path.join(STORAGE_DIR, f"{symbol}.json")
 
+def _load_json(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_json(path: str, data: dict) -> None:
+    tmp = path + ".tmp"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+def _extract_market_state(j: dict) -> str:
+    m = (j or {}).get("market_mode")
+    if isinstance(m, dict):
+        v = (m.get("12h") or m.get("6h") or m.get("4h") or m.get("2h") or "").upper()
+    else:
+        v = str(m or "").upper()
+    if "UP" in v: return "UP"
+    if "DOWN" in v: return "DOWN"
+    return "RANGE"
+
+_BASE_PCTS = {
+    "UP":    {"OCO":10, "L0":10, "L1":5, "L2":0, "L3":0},
+    "RANGE": {"OCO": 5, "L0": 5, "L1":10, "L2":5, "L3":0},
+    "DOWN":  {"OCO": 5, "L0": 0, "L1":5, "L2":10, "L3":5},
+}
+_KEYS = ("OCO","L0","L1","L2","L3")
+
+def _next_week(prev: int) -> int:
+    try:
+        p = int(prev or 0)
+    except Exception:
+        p = 0
+    p = ((p % 4) + 1) if p else 1
+    return p
+
+def _budget_rolover_all_pairs() -> int:
+    from metrics_runner import load_pairs
+    try:
+        pairs = load_pairs()
+    except Exception:
+        pairs = []
+    if not pairs:
+        try:
+            names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
+            for name in names:
+                base_name = name[:-5]
+                if base_name.lower() in ("pairs","portfolio"):
+                    continue
+                pairs.append(base_name.upper())
+        except Exception:
+            pairs = []
+
+    updated = 0
+    for sym in pairs:
+        path = _coin_json_path(sym)
+        data = _load_json(path)
+        if not isinstance(data, dict):
+            data = {}
+        budget = float(data.get("budget") or 0.0)
+        prev_pockets = (data.get("pockets") or {})
+        prev_amt = dict(prev_pockets.get("alloc_amt") or {})
+
+        state = _extract_market_state(data)
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
+        base_amt = {k: round(budget * (pct.get(k,0) / 100.0), 6) for k in _KEYS}
+
+        ov = dict((data.get("flag_overrides") or {}))
+        ov_up = {str(k).upper(): v for k, v in ov.items()}
+        new_amt = {}
+        for k in _KEYS:
+            if ov_up.get(k) == "fill":
+                new_amt[k] = base_amt.get(k, 0.0)  # executed → reset to base
+            else:
+                new_amt[k] = base_amt.get(k, 0.0) + float(prev_amt.get(k, 0.0))  # not executed → base + tail
+        week = _next_week(prev_pockets.get("week") or 0)
+        data["pockets"] = {
+            "state": state,
+            "week": week,
+            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
+            "alloc_amt": {k: round(float(new_amt.get(k,0.0)), 6) for k in _KEYS},
+        }
+        data.pop("flag_overrides", None)  # new week -> AUTO
+
+        data['reserve'] = {'total': 0.0,'by_order': {'OCO':0.0,'L0':0.0,'L1':0.0,'L2':0.0,'L3':0.0}}
+        _save_json(path, data)
+        updated += 1
+    return updated
+
+def _budget_cancel_all_pairs() -> int:
+    # End-of-month reset: budget=0, zero pockets, AUTO flags.
+    try:
+        from metrics_runner import load_pairs
+    except Exception:
+        load_pairs = None
+    try:
+        from auto_flags import compute_all_flags
+    except Exception:
+        compute_all_flags = None
+
+    pairs = []
+    if callable(load_pairs):
+        try: pairs = load_pairs()
+        except Exception: pairs = []
+    if not pairs:
+        try:
+            names = [p for p in os.listdir(STORAGE_DIR) if p.lower().endswith(".json")]
+            for name in names:
+                base_name = name[:-5]
+                if base_name.lower() in ("pairs","portfolio"):
+                    continue
+                pairs.append(base_name.upper())
+        except Exception:
+            pairs = []
+
+    updated = 0
+    for sym in pairs:
+        path = _coin_json_path(sym)
+        data = _load_json(path)
+        if not isinstance(data, dict): data = {}
+
+        data["budget"] = 0.0
+        state = _extract_market_state(data)
+        pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
+        week = (data.get("pockets") or {}).get("week") or 1
+        data["pockets"] = {
+            "state": state,
+            "week": week,
+            "alloc_pct": {k: pct.get(k,0) for k in _KEYS},
+            "alloc_amt": {k: 0.0 for k in _KEYS},
+        }
+        data['reserve'] = {'total': 0.0,'by_order': {'OCO':0.0,'L0':0.0,'L1':0.0,'L2':0.0,'L3':0.0}}
+        data['spent'] = {'total': 0.0,'by_order': {'OCO':0.0,'L0':0.0,'L1':0.0,'L2':0.0,'L3':0.0}}
+        data.pop("flag_overrides", None)
+
+        try:
+            if callable(compute_all_flags):
+                data["flags"] = compute_all_flags(data)
+            else:
+                data.pop("flags", None)
+        except Exception:
+            data.pop("flags", None)
+
+        _save_json(path, data)
+        updated += 1
+    return updated
 import json, re
 import asyncio
 from general_scheduler import start_collector, stop_collector, scheduler_get_state, scheduler_set_enabled, scheduler_set_timing, scheduler_tail
@@ -86,6 +245,7 @@ def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
     return []
 # === end helpers ===
 
+
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 app = FastAPI()
 client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
@@ -95,6 +255,7 @@ def _log(*args):
         print("[bot]", *args, flush=True)
     except Exception:
         pass
+
 
 async def tg_send(chat_id: str, text: str) -> None:
     if not TELEGRAM_API:
@@ -128,6 +289,7 @@ async def tg_send(chat_id: str, text: str) -> None:
             _log("tg_send ok:", r.status_code)
     except Exception as e:
         _log("tg_send exception:", e.__class__.__name__, str(e)[:240])
+
 
 async def _binance_ping() -> str:
     url = "https://api.binance.com/api/v3/ping"
@@ -244,6 +406,8 @@ async def telegram_webhook(update: Request):
                 pass
         return {"ok": True}
 
+
+
     
     if text_lower.startswith("/mode"):
         parts = text.split()
@@ -332,6 +496,7 @@ async def telegram_webhook(update: Request):
         await tg_send_file(chat_id, path, filename=name, caption=name)
         return {"ok": True}
 
+
     
     
     if text_lower.startswith("/sheduler"):
@@ -397,19 +562,24 @@ async def telegram_webhook(update: Request):
 
     return {"ok": True}
 
+
 @app.get("/")
 async def root():
     return {"ok": True, "service": "traider-bot"}
+
 
 @app.head("/")
 async def root_head():
     return {"ok": True}
 
+
 @app.head("/health")
 async def health_head():
     return {"ok": True}
 
+
 # metrics collector moved to metrics_runner.py
+
 
 @app.on_event("startup")
 async def _startup_metrics():
@@ -419,6 +589,7 @@ async def _startup_metrics():
 @app.on_event("shutdown")
 async def _shutdown_metrics():
     await stop_collector()
+
 
 def _load_json_safe(path: str):
     try:
@@ -437,10 +608,12 @@ def _market_line_for(symbol: str) -> str:
     tm_emoji = {"LONG":"📈","SHORT":"📉"}.get(trade_mode, "")
     return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
 
+
 def _code(msg: str) -> str:
-    return f"""```
-{msg}
-```"""
+    return "```\n" + str(msg) + "\n```"
+
+
+
 
 import glob
 
@@ -469,10 +642,10 @@ def _save_json_atomic(path: str, data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp, path)
 
-def read_pair_
+def read_pair_budget(symbol: str) -> float:
     try:
         data = _load_json_safe(os.path.join(STORAGE_DIR, f"{symbol}.json"))
-        v = data.get("
+        v = data.get("budget")
         if isinstance(v, (int, float)):
             return float(v)
         if isinstance(v, str) and v.strip():
@@ -481,35 +654,36 @@ def read_pair_
         pass
     return 0.0
 
-def write_pair_
+def write_pair_budget(symbol: str, value: float) -> float:
     path = os.path.join(STORAGE_DIR, f"{symbol}.json")
     data = _load_json_safe(path)
-    data["
+    data["budget"] = float(value)
     _save_json_atomic(path, data)
     return float(value)
 
-def _apply_
+def _apply_budget_header(symbol: str, msg: str) -> str:
     try:
-        
+        budget = read_pair_budget(symbol)
         lines = (msg or "").splitlines()
-        # find first non-empty line; replace pure symbol line with "SYMBOL 
+        # find first non-empty line; replace pure symbol line with "SYMBOL budget"
         for i, line in enumerate(lines):
             if line.strip() == "":
                 continue
             if line.strip().upper() == symbol.upper():
-                b = int(
+                b = int(budget) if abs(budget - int(budget)) < 1e-9 else round(budget, 6)
                 lines[i] = f"{symbol.upper()} {b}"
                 break
             else:
-                b = int(
+                b = int(budget) if abs(budget - int(budget)) < 1e-9 else round(budget, 6)
                 header = f"{symbol.upper()} {b}"
                 return "\n".join([header] + lines)
         return "\n".join(lines)
     except Exception:
         return msg or ""
 
-def _
-    """Recalculate pockets to BASE by current market using current 
+
+def _budget_start_all_pairs() -> int:
+    """Recalculate pockets to BASE by current market using current budget. Flags/overrides unchanged."""
     from metrics_runner import load_pairs
     try:
         pairs = load_pairs()
@@ -534,11 +708,11 @@ def _
                 data = json.load(f) or {}
         except Exception:
             data = {}
-        
+        budget = float(data.get("budget") or 0.0)
         state = _extract_market_state(data)
         pct = dict(_BASE_PCTS.get(state, _BASE_PCTS["RANGE"]))
         keys = ("OCO","L0","L1","L2","L3")
-        base_amt = {k: round(
+        base_amt = {k: round(budget * (pct.get(k,0)/100.0), 6) for k in keys}
         week = (data.get("pockets") or {}).get("week") or 1
         data["pockets"] = {
             "state": state,
@@ -552,6 +726,7 @@ def _
         os.replace(tmp, path)
         updated += 1
     return updated
+
 
 # --- Alias webhook compatible with Telegram default pattern (/webhook/<token>) ---
 # Some hosts (Render) are often configured with setWebhook pointing to /webhook/<TOKEN>.
