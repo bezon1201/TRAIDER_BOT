@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from portfolio import build_portfolio_message
 
 APP_START_TS = datetime.utcnow()
-app = FastAPI(title="Traider Bot", version="0.2.0")
+app = FastAPI(title="Traider Bot", version="0.2.1")
 
 
 async def _binance_check_credentials() -> bool:
@@ -51,7 +51,14 @@ async def _tg_reply(chat_id: int, text: str) -> None:
     if not token:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    # Wrap into MarkdownV2 code block for monospace
+    code_block = f"```\\n{text}\\n```"
+    payload = {
+        "chat_id": chat_id,
+        "text": code_block,
+        "parse_mode": "MarkdownV2",
+        "disable_web_page_preview": True,
+    }
     timeout = httpx.Timeout(20.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
         try:

@@ -1,8 +1,9 @@
+# portfolio.py
 import os
 import time
 import hmac
 import hashlib
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 from decimal import Decimal, ROUND_DOWN
 
 import httpx
@@ -11,11 +12,14 @@ STABLES = {"USDC", "USDT", "FDUSD", "TUSD", "DAI", "BUSD"}
 BINANCE_API_BASE = "https://api.binance.com"
 SAPI_BASE = "https://api.binance.com"
 
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
+
 def _sign(query: str, secret: str) -> str:
-    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+
 
 async def _signed_get(client: httpx.AsyncClient, path: str, api_key: str, api_secret: str, params: Optional[Dict[str, str]] = None):
     if params is None:
@@ -30,6 +34,7 @@ async def _signed_get(client: httpx.AsyncClient, path: str, api_key: str, api_se
         return await client.get(url, headers=headers)
     except Exception:
         return None
+
 
 async def fetch_spot_balances(client: httpx.AsyncClient, api_key: str, api_secret: str) -> Dict[str, Decimal]:
     try:
@@ -51,13 +56,14 @@ async def fetch_spot_balances(client: httpx.AsyncClient, api_key: str, api_secre
             amt = Decimal(b.get("free", "0")) + Decimal(b.get("locked", "0"))
         except Exception:
             continue
-        if amt > 0:
+        if amt > Decimal("0"):
             out[asset] = out.get(asset, Decimal("0")) + amt
     return out
 
+
 async def fetch_earn_balances(client: httpx.AsyncClient, api_key: str, api_secret: str) -> Dict[str, Decimal]:
     out: Dict[str, Decimal] = {}
-    # Simple Earn flexible
+    # Simple Earn Flexible
     r = await _signed_get(client, "/sapi/v1/simple-earn/flexible/positions", api_key, api_secret, params={"size": "100"})
     if r and r.status_code == 200:
         try:
@@ -71,7 +77,7 @@ async def fetch_earn_balances(client: httpx.AsyncClient, api_key: str, api_secre
                     out[asset] = out.get(asset, Decimal("0")) + amt
         except Exception:
             pass
-    # Simple Earn locked
+    # Simple Earn Locked
     r = await _signed_get(client, "/sapi/v1/simple-earn/locked/positions", api_key, api_secret, params={"size": "100"})
     if r and r.status_code == 200:
         try:
@@ -100,9 +106,11 @@ async def fetch_earn_balances(client: httpx.AsyncClient, api_key: str, api_secre
                 pass
     return out
 
+
 class PriceBook:
     def __init__(self) -> None:
         self.cache: Dict[str, Decimal] = {}
+
     async def get(self, client: httpx.AsyncClient, symbol: str):
         if symbol in self.cache:
             return self.cache[symbol]
@@ -116,6 +124,7 @@ class PriceBook:
             return px
         except Exception:
             return None
+
 
 async def price_in_usdc(client: httpx.AsyncClient, book: PriceBook, asset: str):
     if asset == "USDC":
@@ -138,6 +147,7 @@ async def price_in_usdc(client: httpx.AsyncClient, book: PriceBook, asset: str):
         return Decimal("1")
     return None
 
+
 def _fmt_amount(asset: str, amt: Decimal) -> str:
     if amt == 0:
         return "0"
@@ -145,22 +155,29 @@ def _fmt_amount(asset: str, amt: Decimal) -> str:
     quant = Decimal(f"1e-{places}")
     return (amt.quantize(quant, rounding=ROUND_DOWN).normalize()).to_eng_string()
 
+
 def _fmt_money(n: Decimal) -> str:
     return f"{n.quantize(Decimal('0.01'), rounding=ROUND_DOWN):f}$"
 
+
 def _is_stable(asset: str) -> bool:
     return asset in STABLES
+
 
 async def build_portfolio_message() -> str:
     api_key = os.environ.get("BINANCE_API_KEY")
     api_secret = os.environ.get("BINANCE_API_SECRET")
     storage_dir = os.environ.get("STORAGE_DIR", "/data")
+
     timeout = httpx.Timeout(20.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
         spot = await fetch_spot_balances(client, api_key, api_secret) if api_key and api_secret else {}
         earn = await fetch_earn_balances(client, api_key, api_secret) if api_key and api_secret else {}
+
         book = PriceBook()
-        spot_items = []
+
+        # Build Spot entries
+        spot_items: List[Tuple[str, Decimal, Decimal, bool]] = []
         spot_nonstable_sum = Decimal("0")
         for asset, amt in spot.items():
             pr = await price_in_usdc(client, book, asset)
@@ -173,6 +190,8 @@ async def build_portfolio_message() -> str:
             if not is_stable:
                 spot_nonstable_sum += val
             spot_items.append((asset, amt, val, is_stable))
+
+        # Order Spot
         btc = [x for x in spot_items if x[0] == "BTC"]
         eth = [x for x in spot_items if x[0] == "ETH"]
         rest_non = [x for x in spot_items if (not x[3] and x[0] not in {"BTC","ETH"})]
@@ -180,7 +199,9 @@ async def build_portfolio_message() -> str:
         rest_non.sort(key=lambda t: t[2], reverse=True)
         stables.sort(key=lambda t: t[2], reverse=True)
         ordered_spot = btc + eth + rest_non + stables
-        earn_items = []
+
+        # Earn
+        earn_items: List[Tuple[str, Decimal, Decimal]] = []
         for asset, amt in earn.items():
             pr = await price_in_usdc(client, book, asset)
             if pr is None:
@@ -190,23 +211,30 @@ async def build_portfolio_message() -> str:
                 continue
             earn_items.append((asset, amt, val))
         earn_items.sort(key=lambda t: t[2], reverse=True)
+
         total_spot = sum(v for (_a,_b,v,_s) in ordered_spot)
         total_earn = sum(v for (_a,_b,v) in earn_items)
         total = total_spot + total_earn
+
+        # Read invested
         invested = None
         try:
             os.makedirs(storage_dir, exist_ok=True)
             p = os.path.join(storage_dir, "portfolio.json")
             if os.path.exists(p):
                 import json
-                data = json.load(open(p, "r", encoding="utf-8"))
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
                 if isinstance(data, dict) and "invested_usdc" in data:
                     invested = Decimal(str(data["invested_usdc"]))
         except Exception:
             invested = None
+
+        # Format
         lines: List[str] = []
-        lines.append("Spot")
         amt_w, sym_w, pct_w = 14, 6, 4
+
+        lines.append("Spot")
         for asset, amt, val, is_stable in ordered_spot:
             amt_s = _fmt_amount(asset, amt).rjust(amt_w)
             sym_s = asset.ljust(sym_w)
@@ -217,6 +245,7 @@ async def build_portfolio_message() -> str:
                 pct_s = " " * pct_w
             val_s = _fmt_money(val)
             lines.append(f"{amt_s} {sym_s} {pct_s} | {val_s}")
+
         if earn_items:
             lines.append("Earn")
             for asset, amt, val in earn_items:
@@ -224,6 +253,7 @@ async def build_portfolio_message() -> str:
                 sym_s = asset.ljust(sym_w)
                 val_s = _fmt_money(val)
                 lines.append(f"{amt_s} {sym_s}     | {val_s}")
+
         lines.append("")
         lines.append(f"Total:    {_fmt_money(total)}")
         if invested is not None:
@@ -236,4 +266,5 @@ async def build_portfolio_message() -> str:
         else:
             lines.append("Invested: n/a")
             lines.append("Profit:   n/a")
-        return "```\n" + "\n".join(lines) + "\n```"
+
+        return "\n".join(lines)
