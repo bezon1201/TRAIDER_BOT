@@ -357,3 +357,14 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     except Exception:
         # silently ignore to avoid breaking webhook
         pass
+
+
+# --- Alias webhook compatible with Telegram default pattern (/webhook/<token>) ---
+# Keeps uptime HEAD/GET routes intact.
+@app.post("/webhook/{token}")
+async def telegram_webhook_alias(token: str, update: Request):
+    expected = os.getenv("TRAIDER_BOT_TOKEN") or ""
+    # Accept only correct token; otherwise ignore quietly (200 OK to avoid retries)
+    if expected and token != expected:
+        return {"ok": True, "description": "token mismatch"}
+    return await telegram_webhook(update)
