@@ -25,7 +25,7 @@ def build_long_card(data: dict) -> str:
     else:
         mtext = "RANGE🔄"
 
-    lines = [f"{sym}", f"Price {_i(price)}$ {mtext} {mode}"]
+    lines = [f"{sym} {data.get('budget', 0)}", f"Price {_i(price)}$ {mtext} {mode}"]
     oco = data.get("oco") or {}
     flags = data.get("flags") or {}
     pockets = (data.get("pockets") or {})

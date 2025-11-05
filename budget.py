@@ -52,7 +52,7 @@ def _fmt_budget(val: float) -> str:
 
 
 def apply_budget_header(symbol: str, card: str) -> str:
-    import os, json, re
+    import os, json
     STORAGE_DIR = os.getenv("STORAGE_DIR", "./storage")
     path = os.path.join(STORAGE_DIR, f"{symbol}.json")
     try:
@@ -71,30 +71,12 @@ def apply_budget_header(symbol: str, card: str) -> str:
     budget = j.get("budget", 0.0)
     reserve = (j.get("reserve") or {}).get("total", 0.0)
     spent = (j.get("spent") or {}).get("total", 0.0)
-    head = f"{symbol} 💰{_fmt_money(budget)} | ⏳{_fmt_money(reserve)} | 💸{_fmt_money(spent)}"
+    head = f"{symbol} {_fmt_money(budget)} | ⏳{_fmt_money(reserve)} | 💸{_fmt_money(spent)}"
     try:
         lines = (card or "").splitlines()
         if not lines:
             return head
-        # drop original first line (symbol) and align numbers so flags start in one column
-        lines = lines[1:]
-        order_idx = []
-        amts = []
-        for i, ln in enumerate(lines):
-            m = re.match(r'^\s*(\d{1,4})(.*)$', ln)
-            if m and ("TP" in m.group(2) or "L0" in m.group(2) or "L1" in m.group(2) or "L2" in m.group(2) or "L3" in m.group(2)):
-                order_idx.append(i)
-                amts.append(int(m.group(1)))
-        if amts:
-            maxd = max(len(str(a)) for a in amts)
-            def pad(n:int)->str:
-                d = len(str(n))
-                return ' ' * (2 * (maxd - d)) + str(n)
-            for i in order_idx:
-                m = re.match(r'^\s*(\d{1,4})(.*)$', lines[i])
-                n = int(m.group(1)); rest = m.group(2)
-                lines[i] = pad(n) + rest
-        return "\n".join([head] + lines)
+        return "\n".join([lines[0], head] + lines[1:])
     except Exception:
         return head
 
