@@ -1,0 +1,8 @@
+Version: 1
+- Каркас FastAPI (app.py) с GET/HEAD для / и /health (для UptimeRobot).
+- На старте пинг Binance через /api/v3/account (HMAC) для проверки ключа.
+- Отправка в ADMIN_CHAT_ID: "<UTC> Бот запущен\nBinance connection: ✅/❌".
+- Используются переменные из Environment Variables.txt (прокси, токен, admin chat, ключи). Новых переменных не добавлял.
+- Совместимо с:
+  Build Command=pip install -r requirements.txt
+  Start Command=uvicorn app:app --host 0.0.0.0 --port $PORT
