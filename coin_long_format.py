@@ -1,15 +1,9 @@
+
 def _i(x):
     try:
         return str(int(round(float(x))))
     except Exception:
         return "-"
-
-def _ia(x):
-    try:
-        v = float(x)
-        return str(int(round(v)))
-    except Exception:
-        return "0"
 
 def build_long_card(data: dict) -> str:
     sym = data.get("symbol", "")
@@ -26,13 +20,13 @@ def build_long_card(data: dict) -> str:
         mtext = "RANGE🔄"
 
     lines = [f"{sym}", f"Price {_i(price)}$ {mtext} {mode}"]
+
     oco = data.get("oco") or {}
     flags = data.get("flags") or {}
-    pockets = (data.get("pockets") or {})
     if all(k in oco for k in ("tp_limit","sl_trigger","sl_limit")):
         pf = flags.get("OCO","")
-    prefix = f"{pf}" if pf else ""
-    lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
+        prefix = f"{pf}" if pf else ""
+        lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
     grid = data.get("grid") or {}
     for k in ("L0","L1","L2","L3"):

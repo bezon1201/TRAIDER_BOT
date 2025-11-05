@@ -19,7 +19,7 @@ def build_symbol_message(symbol: str) -> str:
     sym = (symbol or "").upper().strip()
     data = _read_json(_coin_path(sym))
     data["symbol"] = sym
-        mode = (data.get("trade_mode") or "").upper()
+    mode = (data.get("trade_mode") or "").upper()
     if mode == "LONG":
         return build_long_card(data)
     elif mode == "SHORT":
