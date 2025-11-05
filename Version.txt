@@ -14,22 +14,7 @@ Version: 2
 - Прокси берутся из HTTP_PROXY/HTTPS_PROXY из окружения (как и раньше).
 - Остальное без изменений: HEAD для / и /health, Binance ping на старте.
 
-Version: 3
-- Команда /portfolio: первая реализация — спот+earn из Binance, цены через тикеры *USDT.
-- Формат ответа был в Markdown (```code```), сортировка по USD.
-
-Version: 4
-- Исправлен импорт json в app.py, добавлены таймауты httpx, мелкие правки логирования.
-- В /portfolio добавлены попытки резервного запроса цен, фильтрация балансов < 1$.
-
-Version: 5
-- Устранены ложные падения при разборе Markdown у Telegram (fallback в plain).
-- Мелкие правки обработки прокси и HEAD-ответов.
-
-Version: 6
-- Нормализация активов: LDUSDC→USDC, WBETH/BETH→ETH, WBTC/BTCB→BTC (и др.).
-- Стейблы расширены: USDT/USDC/BUSD/FDUSD/USDP/DAI/TUSD/AEUR/EUR и др. — показываются внизу.
-- % теперь считается от суммы всех НЕстейбл-активов (BTC+ETH+BNB+…).
-- Порядок: BTC, ETH сверху, далее альткоины по USD, затем стейблы, потом Earn.
-- Формат вывода строго как в примере и обёрнут в HTML <pre> (в app.py parse_mode=HTML) — Telegram больше не ругается на Markdown.
-- Код portfolio.py переписан без внешних зависимостей, только httpx. 
+Version: 7
+- Привязка стикеров к команде /portfolio через PORTFOLIO_STICKERS (file_unique_id, через запятую).
+- Если пришёл неизвестный стикер, бот шлёт в ADMIN_CHAT_ID его file_unique_id для добавления.
+- Антифлуд: не чаще 5 сек на чат для стикера и команды.
