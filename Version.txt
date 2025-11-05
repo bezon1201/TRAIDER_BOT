@@ -1,2 +1,0 @@
-1 2025-11-05 13:19 UTC Initial scaffold: app.py, requirements.txt; startup Binance check + admin notify; webhook endpoint.
-5 2025-11-05 14:46 UTC Telegram monospace: MarkdownV2 code blocks for replies; portfolio shows Earn; formatting per spec.
