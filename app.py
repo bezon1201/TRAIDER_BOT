@@ -858,13 +858,3 @@ def _budget_start_all_pairs() -> int:
         os.replace(tmp, path)
         updated += 1
     return updated
-
-
-if text_lower.strip() == "./budget start":
-    try:
-        count = _budget_start_all_pairs()
-        await asyncio.sleep(0.15)
-        await tg_send(chat_id, _code(f"Start: карманы выставлены по базе. Пары: {count}"))
-    except Exception as e:
-        await tg_send(chat_id, _code(f"Ошибка start: {e.__class__.__name__}"))
-    raise SystemExit  # ensure no further handling
