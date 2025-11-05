@@ -11,27 +11,7 @@ from fastapi import FastAPI, Request, Response
 
 APP_START_TS = datetime.utcnow()
 
-app = FastAPI(title="Traider Bot", version="0.1.1")
-
-
-def _get_proxies() -> Optional[dict]:
-    """
-    Build httpx proxies dict from env. Respects both upper and lower case.
-    Returns None if no proxies configured.
-    """
-    def g(k: str) -> Optional[str]:
-        v = os.environ.get(k) or os.environ.get(k.lower())
-        return v.strip() if v else None
-
-    http_proxy = g("HTTP_PROXY")
-    https_proxy = g("HTTPS_PROXY")
-    proxies = {}
-    if http_proxy:
-        proxies["http://"] = http_proxy
-    if https_proxy:
-        proxies["https://"] = https_proxy
-
-    return proxies or None
+app = FastAPI(title="Traider Bot", version="0.1.2")
 
 
 async def _binance_check_credentials() -> bool:
@@ -50,10 +30,10 @@ async def _binance_check_credentials() -> bool:
     url = f"https://api.binance.com/api/v3/account?{query}&signature={signature}"
     headers = {"X-MBX-APIKEY": api_key}
 
-    proxies = _get_proxies()
     timeout = httpx.Timeout(20.0)
 
-    async with httpx.AsyncClient(proxies=proxies, timeout=timeout, trust_env=True) as client:
+    # Rely on trust_env=True so HTTP(S)_PROXY and NO_PROXY are honored by httpx/httpcore
+    async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
         try:
             r = await client.get(url, headers=headers)
             return r.status_code == 200
@@ -73,9 +53,9 @@ async def _tg_send_admin(text: str) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
 
-    proxies = _get_proxies()
     timeout = httpx.Timeout(20.0)
-    async with httpx.AsyncClient(proxies=proxies, timeout=timeout, trust_env=True) as client:
+    # trust_env=True will honor proxies from env
+    async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
         try:
             await client.post(url, json=payload)
         except Exception:
@@ -111,20 +91,35 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
     Minimal webhook handler (legacy path). Echoes OK.
     """
     try:
-        _ = await req.json()
+        payload = await req.json()
     except Exception:
-        pass
+        payload = None
+    print("Webhook /telegram hit", {"has_json": payload is not None})
     return {"ok": True}
 
 
-@app.post("/webhook/{token}")
+@app.post("/webhook")
+async def telegram_webhook_plain(req: Request) -> Dict[str, Any]:
+    """
+    Fallback webhook without token in path (some setups use querystring).
+    """
+    try:
+        payload = await req.json()
+    except Exception:
+        payload = None
+    print("Webhook /webhook hit", {"has_json": payload is not None})
+    return {"ok": True}
+
+
+@app.post("/webhook/{token:path}")
 async def telegram_webhook_token(token: str, req: Request) -> Dict[str, Any]:
     """
-    Webhook path that includes the Bot token, as Telegram often uses.
+    Webhook path that includes the Bot token (arbitrary characters).
     We don't validate here yet; just return ok.
     """
     try:
-        _ = await req.json()
+        payload = await req.json()
     except Exception:
-        pass
+        payload = None
+    print("Webhook /webhook/{token} hit", {"token_len": len(token), "has_json": payload is not None})
     return {"ok": True}

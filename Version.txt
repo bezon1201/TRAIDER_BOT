@@ -1,2 +1,3 @@
 1 2025-11-05 13:19 UTC Initial scaffold: app.py, requirements.txt; startup Binance check + admin notify; webhook endpoint.
 2 2025-11-05 13:27 UTC Fix HEAD 405 by explicit methods; add /webhook/{token} endpoint; keep proxy usage.
+3 2025-11-05 13:33 UTC Remove httpx 'proxies' kw (use trust_env for HTTP(S)_PROXY/NO_PROXY); add /webhook fallback and token path matcher {token:path}.
