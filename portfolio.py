@@ -2,7 +2,6 @@
 import os, json, time, hmac, hashlib, tempfile
 from typing import Dict, List, Tuple
 import httpx
-from metrics_runner import load_pairs
 
 BINANCE_API = "https://api.binance.com"
 
