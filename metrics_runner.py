@@ -42,18 +42,9 @@ def _read_json(path: str) -> dict:
         return {}
 
 def _write_json_atomic(path: str, data: dict) -> None:
-    # (preserve removed: budget/reserve/spent/overrides)
-    if isinstance(_live, dict):
-        # budget
-        if "budget" in _live:
-            try:
-                data["budget"] = float(_live.get("budget", 0.0))
-            except Exception:
-                data["budget"] = _live.get("budget")
-        # manual flag overrides
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, separators=(",", ":" ))
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp, path)
 
 
