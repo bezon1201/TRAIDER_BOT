@@ -25,24 +25,29 @@ def build_long_card(data: dict) -> str:
     else:
         mtext = "RANGE🔄"
 
-    lines = [f"{sym} {data.get('budget', 0)}", f"Price {_i(price)}$ {mtext} {mode}"]
+    lines = [f"{sym}", f"Price {_i(price)}$ {mtext} {mode}"]
     oco = data.get("oco") or {}
     flags = data.get("flags") or {}
     pockets = (data.get("pockets") or {})
     alloc_amt = (pockets.get("alloc_amt") or {})
-
+    # compute padding width based on all pocket amounts
+    _vals = [int(float(alloc_amt.get(k, 0) or 0)) for k in ("OCO","L0","L1","L2","L3")]
+    _maxd = max(len(str(v)) for v in _vals) if _vals else 1
+    def _pad(n:int)->str:
+        d = len(str(n))
+        return " " * (2 * (_maxd - d)) + str(n)
     if all(k in oco for k in ("tp_limit","sl_trigger","sl_limit")):
         pf = flags.get("OCO","")
-        amt = _ia(alloc_amt.get("OCO", 0))
-        prefix = f"{amt}{pf}" if pf else f"{amt}"
+        amt = int(float(alloc_amt.get("OCO", 0) or 0))
+        prefix = f"{_pad(amt)}{pf}" if pf else f"{_pad(amt)}"
         lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
     grid = data.get("grid") or {}
     for k in ("L0","L1","L2","L3"):
         if k in grid and grid[k] is not None:
             pf = (flags or {}).get(k,"")
-            amt = _ia(alloc_amt.get(k, 0))
-            prefix = f"{amt}{pf}" if pf else f"{amt}"
+            amt = int(float(alloc_amt.get(k, 0) or 0))
+            prefix = f"{_pad(amt)}{pf}" if pf else f"{_pad(amt)}"
             lines.append(f"{prefix}{k} {_i(grid[k])}$")
 
     return "\n".join(lines)
