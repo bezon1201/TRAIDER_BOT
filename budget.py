@@ -50,17 +50,35 @@ def adjust_pair_budget(symbol: str, delta: float) -> float:
 def _fmt_budget(val: float) -> str:
     return str(int(val)) if abs(val - int(val)) < 1e-9 else str(round(val, 6))
 
-def apply_budget_header(symbol: str, msg: str) -> str:
-    """Ensure first non-empty line is 'SYMBOL <budget>'."""
-    budget = read_pair_budget(symbol)
-    lines = (msg or "").splitlines()
-    # Find first non-empty line and insert/replace
-    for i, line in enumerate(lines):
-        if line.strip() == "":
-            continue
-        if line.strip().upper() == symbol.upper():
-            lines[i] = f"{symbol.upper()} {_fmt_budget(budget)}"
-            return "\n".join(lines)
+def apply_budget_header(symbol: str, card: str) -> str:
+    import os, json
+    STORAGE_DIR = os.getenv("STORAGE_DIR", "./storage")
+    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            j = json.load(f) or {}
+    except Exception:
+        j = {}
+    j = _ensure_spent_reserve(j)
+    def _fmt_money(x):
+        try:
+            v = float(x)
+        except Exception:
+            return "0"
+        iv = int(round(v))
+        return str(iv) if abs(v - iv) < 0.05 else f"{v:.1f}"
+    budget = j.get("budget", 0.0)
+    reserve = (j.get("reserve") or {}).get("total", 0.0)
+    spent = (j.get("spent") or {}).get("total", 0.0)
+    head = f"{symbol} {_fmt_money(budget)} | ⏳{_fmt_money(reserve)} | 💸{_fmt_money(spent)}"
+    try:
+        lines = (card or "").splitlines()
+        if not lines:
+            return head
+        return "
+".join([lines[0], head] + lines[1:])
+    except Exception:
+        return head
         else:
             header = f"{symbol.upper()} {_fmt_budget(budget)}"
             return "\n".join([header] + lines)
@@ -145,3 +163,85 @@ def apply_flags_overrides(symbol: str, flags: dict) -> dict:
         elif st == "open":
             out[k_up if k_up in out else k] = "⚠️"
     return out
+
+
+def _ensure_spent_reserve(j: dict) -> dict:
+    j = j or {}
+    if not isinstance(j.get("spent"), dict):
+        j["spent"] = {"total": 0.0, "by_order": {"OCO":0.0,"L0":0.0,"L1":0.0,"L2":0.0,"L3":0.0}}
+    else:
+        j["spent"].setdefault("total", 0.0)
+        j["spent"].setdefault("by_order", {"OCO":0.0,"L0":0.0,"L1":0.0,"L2":0.0,"L3":0.0})
+        for k in ("OCO","L0","L1","L2","L3"):
+            j["spent"]["by_order"].setdefault(k, 0.0)
+    if not isinstance(j.get("reserve"), dict):
+        j["reserve"] = {"total": 0.0, "by_order": {"OCO":0.0,"L0":0.0,"L1":0.0,"L2":0.0,"L3":0.0}}
+    else:
+        j["reserve"].setdefault("total", 0.0)
+        j["reserve"].setdefault("by_order", {"OCO":0.0,"L0":0.0,"L1":0.0,"L2":0.0,"L3":0.0})
+        for k in ("OCO","L0","L1","L2","L3"):
+            j["reserve"]["by_order"].setdefault(k, 0.0)
+    return j
+
+
+def get_pocket_amount(j: dict, order_key: str) -> float:
+    try:
+        k = str(order_key).upper()
+        return float(((j or {}).get("pockets") or {}).get("alloc_amt", {}).get(k, 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def transition_open(j: dict, order_key: str) -> (dict, str):
+    j = _ensure_spent_reserve(j or {})
+    k = str(order_key).upper()
+    ov = dict((j.get("flag_overrides") or {}))
+    state = ov.get(k)
+    if state == "open":
+        cur = float(j["reserve"]["by_order"].get(k, 0.0) or 0.0)
+        return j, f"Уже ⚠️, резерв {int(round(cur))}."
+    budget = float(j.get("budget") or 0.0)
+    spent_total = float(j["spent"]["total"] or 0.0)
+    reserve_total = float(j["reserve"]["total"] or 0.0)
+    amt = float(get_pocket_amount(j, k))
+    if spent_total + reserve_total + amt > budget + 1e-9:
+        return j, "Отказ: недостаточно бюджета для OPEN."
+    j["reserve"]["by_order"][k] = float(j["reserve"]["by_order"].get(k, 0.0) or 0.0) + amt
+    j["reserve"]["total"] = float(j["reserve"]["total"] or 0.0) + amt
+    ov[k] = "open"
+    j["flag_overrides"] = ov
+    return j, None
+
+def transition_fill(j: dict, order_key: str) -> (dict, str):
+    j = _ensure_spent_reserve(j or {})
+    k = str(order_key).upper()
+    ov = dict((j.get("flag_overrides") or {}))
+    state = ov.get(k)
+    if state != "open":
+        return j, "Отказ: сначала OPEN."
+    amt = float(j["reserve"]["by_order"].get(k, 0.0) or 0.0)
+    if amt <= 0.0:
+        amt = get_pocket_amount(j, k)
+    j["spent"]["by_order"][k] = float(j["spent"]["by_order"].get(k, 0.0) or 0.0) + amt
+    j["spent"]["total"] = float(j["spent"]["total"] or 0.0) + amt
+    j["reserve"]["total"] = max(0.0, float(j["reserve"]["total"] or 0.0) - amt)
+    j["reserve"]["by_order"][k] = 0.0
+    ov[k] = "fill"
+    j["flag_overrides"] = ov
+    return j, None
+
+def transition_cancel_open(j: dict, order_key: str) -> (dict, str):
+    j = _ensure_spent_reserve(j or {})
+    k = str(order_key).upper()
+    ov = dict((j.get("flag_overrides") or {}))
+    state = ov.get(k)
+    if state != "open":
+        if state == "fill":
+            return j, "Уже ✅, отмена не требуется."
+        return j, "Нет открытого ордера."
+    amt = float(j["reserve"]["by_order"].get(k, 0.0) or 0.0)
+    j["reserve"]["total"] = max(0.0, float(j["reserve"]["total"] or 0.0) - amt)
+    j["reserve"]["by_order"][k] = 0.0
+    if k in ov: del ov[k]
+    j["flag_overrides"] = ov if ov else {}
+    return j, None
