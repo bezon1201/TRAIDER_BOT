@@ -50,6 +50,7 @@ def adjust_pair_budget(symbol: str, delta: float) -> float:
 def _fmt_budget(val: float) -> str:
     return str(int(val)) if abs(val - int(val)) < 1e-9 else str(round(val, 6))
 
+
 def apply_budget_header(symbol: str, card: str) -> str:
     import os, json
     STORAGE_DIR = os.getenv("STORAGE_DIR", "./storage")
@@ -75,20 +76,10 @@ def apply_budget_header(symbol: str, card: str) -> str:
         lines = (card or "").splitlines()
         if not lines:
             return head
-        return "
-".join([lines[0], head] + lines[1:])
+        return "\n".join([lines[0], head] + lines[1:])
     except Exception:
         return head
-        else:
-            header = f"{symbol.upper()} {_fmt_budget(budget)}"
-            return "\n".join([header] + lines)
-    # message empty: just header
-    return f"{symbol.upper()} {_fmt_budget(budget)}"
 
-
-# ---------- flag overrides (for LONG) ----------
-# States per key: 'open' -> ⚠️, 'fill' -> ✅
-# Stored under JSON key 'flag_overrides': {"oco": "open", "L0": "fill", ...}
 
 def _pair_json_path(symbol: str) -> str:
     return os.path.join(STORAGE_DIR, f"{symbol.upper()}.json")
