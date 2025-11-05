@@ -236,3 +236,33 @@ def transition_cancel_open(j: dict, order_key: str) -> (dict, str):
     if k in ov: del ov[k]
     j["flag_overrides"] = ov if ov else {}
     return j, None
+
+
+def _align_pockets(card: str) -> str:
+    if not card:
+        return card
+    lines = card.splitlines()
+    # collect amounts at start of order lines (e.g., '5🟢TP ...', '25🟢L0 ...')
+    order_idx = []
+    amt_vals = []
+    for i, ln in enumerate(lines):
+        m = __import__('re').match(r'^\s*(\d{1,4})[^\d]', ln)
+        if m:
+            order_idx.append(i)
+            amt_vals.append(int(m.group(1)))
+    if not amt_vals:
+        return card
+    max_digits = max(len(str(v)) for v in amt_vals)
+    def pad_amt(n: int) -> str:
+        d = len(str(n))
+        spaces = 2 * (max_digits - d)
+        return ' ' * spaces + str(n)
+    for i in order_idx:
+        ln = lines[i]
+        m = __import__('re').match(r'\s*(\d{1,4})(.*)', ln)
+        if not m:
+            continue
+        n = int(m.group(1))
+        rest = m.group(2)
+        lines[i] = pad_amt(n) + rest
+    return '\n'.join(lines)
