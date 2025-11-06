@@ -30,6 +30,7 @@ from budget import (
     clear_budget_input,
     get_pair_levels,
     recompute_pair_aggregates,
+    save_pair_levels,
 )
 
 
@@ -636,7 +637,7 @@ async def _answer_callback(callback: dict) -> dict:
             "reserved": new_reserved,
             "spent": int(lvl_state.get("spent") or 0),
         }
-        _save_pair_levels(symbol, month, levels)
+        save_pair_levels(symbol, month, levels)
         info2 = recompute_pair_aggregates(symbol, month)
 
         # отправляем обновлённую карточку
