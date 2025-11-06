@@ -9,8 +9,9 @@ import httpx
 # Sticker → Command mapping
 STICKER_TO_COMMAND = {
     # Oleg sticker
-    "AgADXXoAAmI4WEg": "/now btcusdc",
-    "CAACAgIAAxkBAAE9cZBpC455Ia8n2PR-BoR6niG4gykRTAACXXoAAmI4WEg5O5Gu6FBfMzYE": "/now btcusdc",
+    "AgADJogAAtfnYUg": "/now btcusdc",
+    "CAACAgIAAxkBAAE9dPtpDAnY_j75m55h8ctPgwzLP4fy8gACJogAAtfnYUiiLR_pVyWZPTYE": "/now btcusdc",
+    
 }
 from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
