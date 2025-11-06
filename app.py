@@ -1,4 +1,3 @@
-
 import os
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
@@ -15,7 +14,12 @@ STICKER_TO_COMMAND: Dict[str, str] = {
     # BTC стикер (из пака traider_crypto_bot / недавние)
     "AgADJogAAtfnYUg": "/now btcusdc",
     "CAACAgIAAxkBAAE9dPtpDAnY_j75m55h8ctPgwzLP4fy8gACJogAAtfnYUiiLR_pVyWZPTYE": "/now btcusdc",
+
+    # ETH стикер (новый маппинг)
+    "AgADxokAAv_wWEg": "/now ethusdc",
+    "CAACAgIAAxkBAAE9ddhpDCyOcuY8oEj0_mPe_E1zbEa-ogACxokAAv_wWEir8uUsEqgkvDYE": "/now ethusdc",
 }
+
 from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
@@ -30,7 +34,7 @@ BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
-import json, re
+import json as _json, re
 from general_scheduler import start_collector, stop_collector, scheduler_get_state, scheduler_set_enabled, scheduler_set_timing, scheduler_tail
 
 # === Coins config helpers ===
@@ -51,7 +55,7 @@ def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
     path = os.path.join(storage_dir, "pairs.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            data = _json.load(f)
         if isinstance(data, list):
             res=[]; seen=set()
             for x in data:
@@ -332,7 +336,7 @@ async def telegram_webhook(update: Request):
         # /sheduler config
         if len(parts) >= 2 and parts[1].lower() == "config":
             st = scheduler_get_state()
-            await tg_send(chat_id, _code(json.dumps(st, ensure_ascii=False, indent=2)))
+            await tg_send(chat_id, _code(_json.dumps(st, ensure_ascii=False, indent=2)))
             return {"ok": True}
         # /sheduler on|off
         if len(parts) >= 2 and parts[1].lower() in ("on","off"):
@@ -422,7 +426,7 @@ async def _shutdown_metrics():
 def _load_json_safe(path: str):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            return _json.load(f)
     except Exception:
         return {}
 
@@ -450,14 +454,14 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
     _log("tg_send_file", filepath, "caption_len=", len(caption or ""))
     fn = filename or os.path.basename(filepath)
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=20.0) as _client:
             with open(filepath, "rb") as f:
                 form = {"chat_id": str(chat_id)}
                 files = {"document": (fn, f, "application/json")}
                 if caption:
                     form["caption"] = caption
-                r = await client.post(api_url, data=form, files=files)
+                r = await _client.post(api_url, data=form, files=files)
                 r.raise_for_status()
     except Exception:
         # silently ignore to avoid breaking webhook
