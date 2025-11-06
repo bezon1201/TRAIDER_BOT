@@ -24,7 +24,7 @@ def build_long_card(data: dict) -> str:
     else:
         mtext = "RANGE🔄"
 
-    # Budget/header line
+    # Budget/header lines
     month = datetime.now().strftime("%Y-%m")
     info = get_pair_budget(sym, month)
     budget = int(info.get("budget", 0) or 0)
@@ -33,9 +33,10 @@ def build_long_card(data: dict) -> str:
     free = int(info.get("free", budget - reserve - spent) or 0)
     if free < 0:
         free = 0
-    header = f"{sym} 💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
+    header1 = f"{sym}"
+    header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
 
-    lines = [header, f"Price {_i(price)}$ {mtext} {mode}"]
+    lines = [header1, header2, f"Price {_i(price)}$ {mtext} {mode}"]
 
     oco = data.get("oco") or {}
     flags = data.get("flags") or {}

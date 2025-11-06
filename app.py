@@ -255,9 +255,9 @@ async def _answer_callback(callback: dict) -> dict:
             kb = {
                 "inline_keyboard": [
                     [
-                        {"text": "SET BUDGET", "callback_data": f"BUDGET_SET:{symbol}"},
-                        {"text": "VIEW BUDGET", "callback_data": f"BUDGET_VIEW:{symbol}"},
-                        {"text": "BUDGET CANCEL", "callback_data": f"BUDGET_CLEAR:{symbol}"},
+                        {"text": "SET", "callback_data": f"BUDGET_SET:{symbol}"},
+                        {"text": "VIEW", "callback_data": f"BUDGET_VIEW:{symbol}"},
+                        {"text": "CANCEL", "callback_data": f"BUDGET_CLEAR:{symbol}"},
                     ]
                 ]
             }
@@ -281,10 +281,10 @@ async def _answer_callback(callback: dict) -> dict:
                 free = 0
             msg = (
                 f"{info['symbol']} {mon_disp}\n"
-                f"💰 {budget}\n"
-                f"⏳ {reserve}\n"
-                f"💸 {spent}\n"
-                f"🎯 {free}"
+                f"💰 Budget {budget}\n"
+                f"⏳ Reserved {reserve}\n"
+                f"💸 Spent {spent}\n"
+                f"🎯 Free {free}"
             )
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
@@ -322,10 +322,10 @@ async def _answer_callback(callback: dict) -> dict:
                 free = 0
             msg = (
                 f"{info['symbol']} {mon_disp}\n"
-                f"💰 {budget}\n"
-                f"⏳ {reserve}\n"
-                f"💸 {spent}\n"
-                f"🎯 {free}"
+                f"💰 Budget {budget}\n"
+                f"⏳ Reserved {reserve}\n"
+                f"💸 Spent {spent}\n"
+                f"🎯 Free {free}"
             )
             await tg_send(chat_id, _code(msg))
             kb = {
@@ -442,10 +442,10 @@ async def telegram_webhook(update: Request):
             free = 0
         msg = (
             f"{info['symbol']} {mon_disp}\n"
-            f"💰 {budget}\n"
-            f"⏳ {reserve}\n"
-            f"💸 {spent}\n"
-            f"🎯 {free}"
+            f"💰 Budget {budget}\n"
+            f"⏳ Reserved {reserve}\n"
+            f"💸 Spent {spent}\n"
+            f"🎯 Free {free}"
         )
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
