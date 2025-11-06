@@ -1,11 +1,9 @@
-# app.py — v13 + ETH/BNB sticker mappings
-
 import os
 import glob
 import re
 import json
-from typing import Dict
 from datetime import datetime, timezone
+from typing import Dict
 
 import httpx
 from fastapi import FastAPI, Request
@@ -23,14 +21,15 @@ from general_scheduler import (
     scheduler_tail,
 )
 
-# === Sticker → Command mapping =================================================
-# Поддерживаем и file_unique_id, и file_id для одного и того же стикера.
+# =========================
+# Sticker → Command mapping
+# =========================
 STICKER_TO_COMMAND: Dict[str, str] = {
-    # BTC (из избранного)
+    # BTC (из «избранного» / классический)
     "AgADXXoAAmI4WEg": "/now btcusdc",
     "CAACAgIAAxkBAAE9cZBpC455Ia8n2PR-BoR6niG4gykRTAACXXoAAmI4WEg5O5Gu6FBfMzYE": "/now btcusdc",
 
-    # BTC (из пака traider_crypto_bot / недавние)
+    # BTC (из пака traider_crypto_bot / «недавние»)
     "AgADJogAAtfnYUg": "/now btcusdc",
     "CAACAgIAAxkBAAE9dPtpDAnY_j75m55h8ctPgwzLP4fy8gACJogAAtfnYUiiLR_pVyWZPTYE": "/now btcusdc",
 
@@ -38,14 +37,17 @@ STICKER_TO_COMMAND: Dict[str, str] = {
     "AgADxokAAv_wWEg": "/now ethusdc",
     "CAACAgIAAxkBAAE9ddhpDCyOcuY8oEj0_mPe_E1zbEa-ogACxokAAv_wWEir8uUsEqgkvDYE": "/now ethusdc",
 
-    # BNB
-    "AgADJocAAka7YUg": "/now bnbusdc",
-    "CAACAgIAAxkBAAE9djtpDD842Hiibb4OWsspe5QgYvQsgwACJocAAka7YUijem2oBO1AazYE": "/now bnbusdc",
+    # BNB — ВСТАВЬ свои ID (file_unique_id и/или file_id) ниже и раскомментируй строки:
+    # "PUT_BNB_FILE_UNIQUE_ID_HERE": "/now bnbusdc",
+    # "PUT_BNB_FILE_ID_HERE": "/now bnbusdc",
+
+    # Portfolio (твои 2 ID из сообщения)
+    "AgADDX0AAm5wYUg": "/portfolio",
+    "CAACAgIAAxkBAAE9dm5pDEOSIjmsFXzC5bwkdNhHG_GJ7wACDX0AAm5wYUhMMGz5tJzGITYE": "/portfolio",
 }
-# ==============================================================================
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
-ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()   # оставляем как в окружении
+ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
 WEBHOOK_BASE = os.getenv("TRAIDER_WEBHOOK_BASE") or os.getenv("WEBHOOK_BASE") or ""
 METRIC_CHAT_ID = os.getenv("TRAIDER_METRIC_CHAT_ID", "").strip()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
@@ -78,17 +80,6 @@ def _load_json_safe(path: str):
         return {}
 
 
-def _market_line_for(symbol: str) -> str:
-    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
-    data = _load_json_safe(path)
-    trade_mode = str((data.get("trade_mode") or "SHORT")).upper()
-    market_mode = str((data.get("market_mode") or "RANGE")).upper()
-    mm_emoji = {"UP": "⬆️", "DOWN": "⬇️", "RANGE": "🔄"}.get(market_mode, "🔄")
-    tm_emoji = {"LONG": "📈", "SHORT": "📉"}.get(trade_mode, "")
-    return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
-
-
-# === Coins config helpers ======================================================
 def _pairs_env() -> list[str]:
     raw = os.getenv("PAIRS", "") or ""
     raw = raw.strip()
@@ -96,7 +87,7 @@ def _pairs_env() -> list[str]:
         return []
     parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
     seen = set()
-    out = []
+    out: list[str] = []
     for s in parts:
         if s not in seen:
             seen.add(s)
@@ -110,7 +101,7 @@ def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list):
-            res = []
+            res: list[str] = []
             seen = set()
             for x in data:
                 s = str(x).strip().upper()
@@ -123,7 +114,6 @@ def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
     except Exception:
         return []
     return []
-# ==============================================================================
 
 
 async def tg_send(chat_id: str, text: str) -> None:
@@ -148,6 +138,7 @@ async def tg_send(chat_id: str, text: str) -> None:
             j = None
         if r.status_code != 200 or (j and not j.get("ok", True)):
             _log("tg_send markdown resp:", r.status_code, j or r.text[:200])
+            # Fallback: plain text
             _log("tg_send fallback: plain text")
             r2 = await client.post(
                 f"{TELEGRAM_API}/sendMessage",
@@ -204,11 +195,6 @@ async def health():
     return {"ok": True}
 
 
-@app.head("/")
-async def root_head():
-    return {"ok": True}
-
-
 @app.head("/health")
 async def health_head():
     return {"ok": True}
@@ -219,7 +205,11 @@ async def root():
     return {"ok": True, "service": "traider-bot"}
 
 
-# --- Telegram webhook (основной) ---------------------------------------------
+@app.head("/")
+async def root_head():
+    return {"ok": True}
+
+
 @app.post("/telegram")
 async def telegram_webhook(update: Request):
     try:
@@ -230,7 +220,7 @@ async def telegram_webhook(update: Request):
     message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or message.get("caption") or "").strip()
 
-    # Если это стикер — маппим в команду
+    # Стикер → команда
     if not text and message.get("sticker"):
         st = message["sticker"]
         text = (
@@ -246,7 +236,7 @@ async def telegram_webhook(update: Request):
     if not chat_id:
         return {"ok": True}
 
-    # /invested | /invest
+    # /invested <delta>  |  /invest <delta>
     if text_lower.startswith("/invested") or text_lower.startswith("/invest "):
         parts = text.split(maxsplit=1)
         if len(parts) == 2:
@@ -263,7 +253,7 @@ async def telegram_webhook(update: Request):
         await tg_send(chat_id, _code(reply))
         return {"ok": True}
 
-    # /coins
+    # /coins [SYMBOLS...] (только показать/валидировать; без сохранения)
     if text_lower.startswith("/coins"):
         parts = text.split(maxsplit=1)
         if len(parts) == 1:
@@ -283,7 +273,8 @@ async def telegram_webhook(update: Request):
             if invalids:
                 await tg_send(chat_id, _code("Некорректные тикеры: " + ", ".join(invalids)))
                 return {"ok": True}
-            seen, filtered = set(), []
+            seen = set()
+            filtered = []
             for s in valids:
                 if s not in seen:
                     seen.add(s)
@@ -291,14 +282,14 @@ async def telegram_webhook(update: Request):
             await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
             return {"ok": True}
 
-    # /now [<SYMBOL>] | /now long|short
+    # /now [<SYMBOL>|long|short]
     if text_lower.startswith("/now"):
         parts = text.strip().split()
-
         symbol_arg = None
         if len(parts) >= 2 and parts[1].lower() not in ("long", "short"):
             symbol_arg = parts[1].upper()
 
+        parts = (text or "").strip().split()
         mode_arg = None
         if len(parts) >= 2 and parts[1].strip().lower() in ("long", "short"):
             mode_arg = parts[1].strip().upper()
@@ -306,18 +297,20 @@ async def telegram_webhook(update: Request):
         count, msg = await run_now(symbol_arg)
         _log("/now result:", count)
 
-        # Если указан тикер — отвечаем одной карточкой и выходим
+        # Если указан символ — одна карточка
         if symbol_arg:
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
 
-        # Иначе — общий апдейт + карточки по всем парам (с фильтром по режиму)
+        # Иначе: summary + по каждой паре
         await tg_send(chat_id, _code(msg))
+
         try:
             pairs = load_pairs()
         except Exception:
             pairs = []
 
+        # Фильтр по LONG/SHORT если задан
         if mode_arg:
             try:
                 filtered = []
@@ -362,17 +355,7 @@ async def telegram_webhook(update: Request):
                 await tg_send(chat_id, _code("Некорректный режим"))
             return {"ok": True}
 
-    # /PORTFOLIO
-    if text_lower.startswith("/portfolio"):
-        try:
-            reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
-            _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
-        except Exception as e:
-            reply = f"Ошибка портфеля: {e}"
-        await tg_send(chat_id, reply or "Нет данных.")
-        return {"ok": True}
-
-    # Символьные шорткаты: /ETHUSDC, /BTCUSDC и т.п.
+    # Шорткаты вида /BTCUSDC /ETHUSDC ...
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
         if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "DATA", "JSON", "INVESTED", "INVEST", "MARKET", "SHEDULER"):
@@ -380,7 +363,7 @@ async def telegram_webhook(update: Request):
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
 
-    # /market
+    # /market [SYMBOL]
     if text_lower.startswith("/market"):
         parts = text.split()
         if len(parts) == 1:
@@ -395,7 +378,7 @@ async def telegram_webhook(update: Request):
         await tg_send(chat_id, _code(_market_line_for(sym)))
         return {"ok": True}
 
-    # /data — список/удаление/отправка файла
+    # /data ...
     if text_lower.startswith("/data"):
         parts = text.split()
         if len(parts) == 1:
@@ -405,6 +388,7 @@ async def telegram_webhook(update: Request):
             msg = "Файлы: " + (", ".join(files) if files else "—")
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
+
         if len(parts) >= 3 and parts[1].strip().lower() == "delete":
             name = os.path.basename(parts[2].strip())
             files = sorted(
@@ -420,6 +404,7 @@ async def telegram_webhook(update: Request):
             except Exception as e:
                 await tg_send(chat_id, _code(f"Ошибка удаления: {name}: {e.__class__.__name__}"))
             return {"ok": True}
+
         name = os.path.basename(parts[1].strip())
         path = os.path.join(STORAGE_DIR, name)
         if not (os.path.exists(path) and os.path.isfile(path)):
@@ -428,20 +413,92 @@ async def telegram_webhook(update: Request):
         await tg_send_file(chat_id, path, filename=name, caption=name)
         return {"ok": True}
 
+    # /sheduler ...
+    if text_lower.startswith("/sheduler"):
+        parts = (text or "").strip().split()
+        if len(parts) >= 2 and parts[1].lower() == "config":
+            st = scheduler_get_state()
+            await tg_send(chat_id, _code(json.dumps(st, ensure_ascii=False, indent=2)))
+            return {"ok": True}
+
+        if len(parts) >= 2 and parts[1].lower() in ("on", "off"):
+            on = parts[1].lower() == "on"
+            scheduler_set_enabled(on)
+            if on:
+                await start_collector()
+            else:
+                await stop_collector()
+            await tg_send(chat_id, _code(f"Scheduler: {'ON' if on else 'OFF'}"))
+            return {"ok": True}
+
+        if len(parts) >= 3 and parts[1].lower() == "tail":
+            try:
+                n = int(parts[2])
+            except Exception:
+                n = 100
+            n = max(1, min(5000, n))
+            tail_text = scheduler_tail(n)
+            tmp_path = os.path.join(STORAGE_DIR, "scheduler_tail.txt")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(tail_text or "")
+                await tg_send_file(chat_id, tmp_path, filename="scheduler_tail.txt", caption="scheduler_tail.txt")
+            except Exception:
+                await tg_send(chat_id, _code(tail_text or "—"))
+            return {"ok": True}
+
+        if len(parts) >= 2 and parts[1].isdigit():
+            interval = int(parts[1])
+            jitter = None
+            if len(parts) >= 3 and parts[2].isdigit():
+                jitter = int(parts[2])
+            interval = max(15, min(43200, interval))
+            if jitter is not None:
+                jitter = max(1, min(5, jitter))
+            st = scheduler_set_timing(interval, jitter)
+            await tg_send(chat_id, _code("OK"))
+            if st.get("enabled"):
+                await stop_collector()
+                await start_collector()
+            return {"ok": True}
+
+        await tg_send(chat_id, _code("Команды: /sheduler on|off | config | <sec> [jitter] | tail <N>"))
+        return {"ok": True}
+
+    # /portfolio
+    if text_lower.startswith("/portfolio"):
+        try:
+            reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
+            _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
+        except Exception as e:
+            reply = f"Ошибка портфеля: {e}"
+        await tg_send(chat_id, reply or "Нет данных.")
+        return {"ok": True}
+
     return {"ok": True}
 
 
-# --- Alias webhook совместимый с /webhook/<token> -----------------------------
+def _market_line_for(symbol: str) -> str:
+    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
+    data = _load_json_safe(path)
+    trade_mode = str((data.get("trade_mode") or "SHORT")).upper()
+    market_mode = str((data.get("market_mode") or "RANGE")).upper()
+    mm_emoji = {"UP": "⬆️", "DOWN": "⬇️", "RANGE": "🔄"}.get(market_mode, "🔄")
+    tm_emoji = {"LONG": "📈", "SHORT": "📉"}.get(trade_mode, "")
+    return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
+
+
+# --- Telegram-compatible alias: /webhook/<token> ---
 @app.post("/webhook/{token}")
 async def telegram_webhook_alias(token: str, update: Request):
     expected = os.getenv("TRAIDER_BOT_TOKEN") or ""
     if expected and token != expected:
-        # тихо подтверждаем, чтобы TG не спамил ретраями
+        # тихо подтверждаем, чтобы TG не долбил ретраями
         return {"ok": True, "description": "token mismatch"}
     return await telegram_webhook(update)
 
 
-# --- Метрики (фоновый сборщик) -----------------------------------------------
+# === Metrics lifecycle ===
 @app.on_event("startup")
 async def _startup_metrics():
     await start_collector()
