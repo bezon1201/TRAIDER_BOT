@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from budget import get_pair_budget, get_pair_levels
+from budget import get_pair_budget
 
 # Процентное распределение бюджета по режимам рынка (на одну неделю)
 WEEKLY_PERCENT = {
@@ -75,27 +75,21 @@ def build_long_card(data: dict) -> str:
     header1 = f"{sym} {mon_disp} Wk{week}"
     header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
 
-    # расчёт сумм по уровням
+    # расчёт сумм по уровням (пока только базовая неделя; week влияет только на отображение)
     perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
-    levels = get_pair_levels(sym, month)
 
-    def _amount_available(level: str) -> int:
+    def _amount(level: str) -> int:
         if week <= 0 or budget <= 0:
             return 0
         p = int(perc.get(level, 0) or 0)
         if p <= 0:
             return 0
-        quota = int(round(budget * p / 100.0))
-        lvl_state = (levels or {}).get(level) or {}
-        used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
-        avail = quota - used
-        if avail < 0:
-            avail = 0
-        return avail
+        val = int(round(budget * p / 100.0))
+        return max(val, 0)
 
     def _amt_prefix(level: str, flag: str) -> str:
         """Префикс перед уровнем: либо просто флаг, либо 3-значная сумма + флаг."""
-        amt = _amount_available(level)
+        amt = _amount(level)
         if week > 0 and budget > 0:
             # показываем сумму даже если флаг пустой
             return f"{amt:03d}{flag or ''}"
