@@ -276,6 +276,7 @@ async def _answer_callback(callback: dict) -> dict:
                 "inline_keyboard": [
                     [
                         {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol}"},
                     ]
                 ]
             }
@@ -294,6 +295,7 @@ async def _answer_callback(callback: dict) -> dict:
                     "inline_keyboard": [
                         [
                             {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                            {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
                         ]
                     ]
                 }
@@ -305,6 +307,7 @@ async def _answer_callback(callback: dict) -> dict:
                 "inline_keyboard": [
                     [
                         {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol}"},
                     ]
                 ]
             }
@@ -322,6 +325,7 @@ async def _answer_callback(callback: dict) -> dict:
                     "inline_keyboard": [
                         [
                             {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                            {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
                         ]
                     ]
                 }
@@ -333,6 +337,7 @@ async def _answer_callback(callback: dict) -> dict:
                 "inline_keyboard": [
                     [
                         {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol}"},
                     ]
                 ]
             }
@@ -340,6 +345,53 @@ async def _answer_callback(callback: dict) -> dict:
             # also clear any pending input for this chat
             clear_budget_input(chat_id)
             return {"ok": True}
+
+
+    # ORDERS submenu
+    if data.startswith("ORDERS:"):
+        # Extract symbol
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OPEN", "callback_data": f"ORDERS_OPEN:{symbol}"},
+                    {"text": "CANCEL", "callback_data": f"ORDERS_CANCEL:{symbol}"},
+                    {"text": "FILL", "callback_data": f"ORDERS_FILL:{symbol}"},
+                ]
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
+    # ORDERS → OPEN → подуровни OCO / L0-3 (пока только кнопки)
+    if data.startswith("ORDERS_OPEN:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
+                ]
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
 
     return {"ok": True}
 
@@ -437,6 +489,7 @@ async def telegram_webhook(update: Request):
                 "inline_keyboard": [
                     [
                         {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
                     ]
                 ]
             }
@@ -513,6 +566,7 @@ async def telegram_webhook(update: Request):
                 "inline_keyboard": [
                     [
                         {"text": "BUDGET", "callback_data": f"BUDGET:{symbol_arg.upper()}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol_arg.upper()}"},
                     ]
                 ]
             }
@@ -547,6 +601,7 @@ async def telegram_webhook(update: Request):
                     "inline_keyboard": [
                         [
                             {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                            {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
                         ]
                     ]
                 }
