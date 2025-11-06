@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 BUDGET_FILE = os.path.join(STORAGE_DIR, "budget.json")
@@ -36,6 +36,7 @@ def _norm_symbol(symbol: str) -> str:
 
 # -------- Budget core --------
 
+
 def _load_budget() -> Dict[str, Any]:
     data = _load_json(BUDGET_FILE, {"version": 1, "pairs": {}})
     if not isinstance(data, dict):
@@ -51,17 +52,52 @@ def _save_budget(data: Dict[str, Any]) -> None:
     _save_json(BUDGET_FILE, data)
 
 
+def _normalize_entry(raw: Dict[str, Any]) -> Dict[str, int]:
+    """Upgrade legacy structure.
+
+    Legacy: {"budget": X, "spent": Y} where spent = reserve, no real spent.
+    New:    {"budget": X, "reserve": R, "spent": S}
+    """
+    raw = raw or {}
+    budget = int(raw.get("budget") or 0)
+    if "reserve" in raw:
+        reserve = int(raw.get("reserve") or 0)
+        spent = int(raw.get("spent") or 0)
+    else:
+        # legacy "spent" treated as reserve
+        reserve = int(raw.get("spent") or 0)
+        spent = 0
+    if budget < 0:
+        budget = 0
+    if reserve < 0:
+        reserve = 0
+    if spent < 0:
+        spent = 0
+    free = budget - reserve - spent
+    if free < 0:
+        free = 0
+    return {
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+        "free": free,
+    }
+
+
 def get_pair_budget(symbol: str, month: str) -> Dict[str, int]:
     sym = _norm_symbol(symbol)
     mkey = str(month)
     data = _load_budget()
     pairs = data.get("pairs") or {}
-    p = pairs.get(sym, {})
+    p = pairs.get(sym) or {}
     monthly = p.get("monthly") or {}
-    cur = monthly.get(mkey) or {}
-    budget = int(cur.get("budget") or 0)
-    spent = int(cur.get("spent") or 0)
-    return {"symbol": sym, "month": mkey, "budget": max(budget, 0), "spent": max(spent, 0)}
+    cur_raw = monthly.get(mkey) or {}
+    norm = _normalize_entry(cur_raw)
+    return {
+        "symbol": sym,
+        "month": mkey,
+        **norm,
+    }
 
 
 def set_pair_budget(symbol: str, month: str, budget: int) -> Dict[str, int]:
@@ -70,32 +106,74 @@ def set_pair_budget(symbol: str, month: str, budget: int) -> Dict[str, int]:
     bval = int(budget)
     if bval < 0:
         bval = 0
+
     data = _load_budget()
     pairs = data.setdefault("pairs", {})
     p = pairs.setdefault(sym, {})
     monthly = p.setdefault("monthly", {})
-    cur = monthly.get(mkey) or {}
-    spent = int(cur.get("spent") or 0)
-    if spent < 0:
-        spent = 0
-    monthly[mkey] = {"budget": bval, "spent": spent}
+
+    cur_raw = monthly.get(mkey) or {}
+    norm = _normalize_entry(cur_raw)
+    # update only budget, keep reserve/spent
+    norm["budget"] = bval
+    free = bval - norm["reserve"] - norm["spent"]
+    if free < 0:
+        free = 0
+    norm["free"] = free
+
+    monthly[mkey] = {
+        "budget": norm["budget"],
+        "reserve": norm["reserve"],
+        "spent": norm["spent"],
+    }
     _save_budget(data)
-    return {"symbol": sym, "month": mkey, "budget": bval, "spent": spent}
+
+    return {
+        "symbol": sym,
+        "month": mkey,
+        "budget": norm["budget"],
+        "reserve": norm["reserve"],
+        "spent": norm["spent"],
+        "free": norm["free"],
+    }
 
 
 def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
+    """Budget CANCEL semantics: keep budget, reset reserve and spent to 0."""
     sym = _norm_symbol(symbol)
     mkey = str(month)
     data = _load_budget()
     pairs = data.setdefault("pairs", {})
     p = pairs.setdefault(sym, {})
     monthly = p.setdefault("monthly", {})
-    monthly[mkey] = {"budget": 0, "spent": 0}
+
+    cur_raw = monthly.get(mkey) or {}
+    norm = _normalize_entry(cur_raw)
+    # keep budget as-is, drop reserve and spent
+    budget = norm["budget"]
+    reserve = 0
+    spent = 0
+    free = budget
+
+    monthly[mkey] = {
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+    }
     _save_budget(data)
-    return {"symbol": sym, "month": mkey, "budget": 0, "spent": 0}
+
+    return {
+        "symbol": sym,
+        "month": mkey,
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+        "free": free,
+    }
 
 
 # -------- Input state (waiting for user budget value) --------
+
 
 def _load_state() -> Dict[str, Any]:
     data = _load_json(BUDGET_STATE_FILE, {})
@@ -114,11 +192,10 @@ def get_budget_input(chat_id: str) -> Optional[Dict[str, str]]:
     entry = data.get(cid)
     if not isinstance(entry, dict):
         return None
-    # expect keys: mode, symbol, month
     sym = _norm_symbol(entry.get("symbol", ""))
     month = str(entry.get("month") or "")
     mode = str(entry.get("mode") or "").upper()
-    if not sym or not month or mode not in ("SET",):
+    if not sym or not month or mode != "SET":
         return None
     return {"mode": mode, "symbol": sym, "month": month}
 

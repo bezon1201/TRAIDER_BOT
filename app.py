@@ -236,7 +236,7 @@ async def _answer_callback(callback: dict) -> dict:
             pass
 
     # Parse commands
-    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET:"):
+    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_VIEW:") or data.startswith("BUDGET:"):
         # Extract symbol
         try:
             _, sym_raw = data.split(":", 1)
@@ -256,11 +256,37 @@ async def _answer_callback(callback: dict) -> dict:
                 "inline_keyboard": [
                     [
                         {"text": "SET BUDGET", "callback_data": f"BUDGET_SET:{symbol}"},
-                        {"text": "CLEAR BUDGET", "callback_data": f"BUDGET_CLEAR:{symbol}"},
+                        {"text": "VIEW BUDGET", "callback_data": f"BUDGET_VIEW:{symbol}"},
+                        {"text": "BUDGET CANCEL", "callback_data": f"BUDGET_CLEAR:{symbol}"},
                     ]
                 ]
             }
             await _edit_markup(kb)
+            return {"ok": True}
+
+        # VIEW BUDGET → show compact month summary
+        if data.startswith("BUDGET_VIEW:"):
+            info = get_pair_budget(symbol, month)
+            mon = info.get("month", "")
+            # Month as MM-YYYY for display if in YYYY-MM format
+            if isinstance(mon, str) and len(mon) == 7 and mon[4] == "-":
+                mon_disp = f"{mon[5:]}-{mon[:4]}"
+            else:
+                mon_disp = str(mon)
+            budget = int(info.get("budget", 0) or 0)
+            reserve = int(info.get("reserve", 0) or 0)
+            spent = int(info.get("spent", 0) or 0)
+            free = int(info.get("free", budget - reserve - spent) or 0)
+            if free < 0:
+                free = 0
+            msg = (
+                f"{info['symbol']} {mon_disp}\n"
+                f"💰 {budget}\n"
+                f"⏳ {reserve}\n"
+                f"💸 {spent}\n"
+                f"🎯 {free}"
+            )
+            await tg_send(chat_id, _code(msg))
             return {"ok": True}
 
         # SET BUDGET → ask for value and restore single BUDGET button
@@ -280,10 +306,27 @@ async def _answer_callback(callback: dict) -> dict:
             await _edit_markup(kb)
             return {"ok": True}
 
-        # CLEAR BUDGET → set budget=0, spent=0 and restore single BUDGET button
+        # BUDGET CANCEL → reset reserve and spent, keep budget, restore single BUDGET button
         if data.startswith("BUDGET_CLEAR:"):
-            res = clear_pair_budget(symbol, month)
-            msg = f"{res['symbol']}\nБюджет на месяц {res['month']} обнулён."
+            info = clear_pair_budget(symbol, month)
+            mon = info.get("month", "")
+            if isinstance(mon, str) and len(mon) == 7 and mon[4] == "-":
+                mon_disp = f"{mon[5:]}-{mon[:4]}"
+            else:
+                mon_disp = str(mon)
+            budget = int(info.get("budget", 0) or 0)
+            reserve = int(info.get("reserve", 0) or 0)
+            spent = int(info.get("spent", 0) or 0)
+            free = int(info.get("free", budget - reserve - spent) or 0)
+            if free < 0:
+                free = 0
+            msg = (
+                f"{info['symbol']} {mon_disp}\n"
+                f"💰 {budget}\n"
+                f"⏳ {reserve}\n"
+                f"💸 {spent}\n"
+                f"🎯 {free}"
+            )
             await tg_send(chat_id, _code(msg))
             kb = {
                 "inline_keyboard": [
@@ -383,9 +426,27 @@ async def telegram_webhook(update: Request):
             msg = f"{pending['symbol']}\nНужно ввести целое число ≥ 0 в USDC. Попробуй ещё раз:"
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
-        res = set_pair_budget(pending["symbol"], pending["month"], val)
+        info = set_pair_budget(pending["symbol"], pending["month"], val)
         clear_budget_input(chat_id)
-        msg = f"{res['symbol']}\nБюджет на месяц {res['month']} установлен: {res['budget']} USDC\nУже потрачено: {res['spent']} USDC"
+        mon = info.get("month", "")
+        # Печать месяца как MM-YYYY, если храним в формате YYYY-MM
+        if isinstance(mon, str) and len(mon) == 7 and mon[4] == "-":
+            mon_disp = f"{mon[5:]}-{mon[:4]}"
+        else:
+            mon_disp = str(mon)
+        budget = int(info.get("budget", 0) or 0)
+        reserve = int(info.get("reserve", 0) or 0)
+        spent = int(info.get("spent", 0) or 0)
+        free = int(info.get("free", budget - reserve - spent) or 0)
+        if free < 0:
+            free = 0
+        msg = (
+            f"{info['symbol']} {mon_disp}\n"
+            f"💰 {budget}\n"
+            f"⏳ {reserve}\n"
+            f"💸 {spent}\n"
+            f"🎯 {free}"
+        )
         await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
