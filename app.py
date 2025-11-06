@@ -135,12 +135,6 @@ async def telegram_webhook(update: Request):
         data = {}
     message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or "").strip()
-    # sticker → command fallback
-    if not text and message.get("sticker"):
-        st = message["sticker"]
-        text = (STICKER_TO_COMMAND.get(st.get("file_unique_id")) or
-                STICKER_TO_COMMAND.get(st.get("file_id")) or "")
-        text = text.strip()
     text_norm = text
     text_lower = text_norm.lower()
     text_upper = text_norm.upper()
@@ -190,7 +184,6 @@ async def telegram_webhook(update: Request):
             for s in valids:
                 if s not in seen:
                     seen.add(s); filtered.append(s)
-            save_pairs(filtered)
             await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
             return {"ok": True}
 
@@ -205,7 +198,6 @@ async def telegram_webhook(update: Request):
             mode_arg = parts[1].strip().upper()
         count, msg = await run_now(symbol_arg)
         _log("/now result:", count)
-        # if specific symbol requested — send only one card and return
         if symbol_arg:
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
