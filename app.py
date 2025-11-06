@@ -413,8 +413,8 @@ async def telegram_webhook(update: Request):
         await tg_send_file(chat_id, path, filename=name, caption=name)
         return {"ok": True}
 
-    # /sheduler ...
-    if text_lower.startswith("/sheduler"):
+    # /scheduler ...
+    if text_lower.startswith("/scheduler"):
         parts = (text or "").strip().split()
         if len(parts) >= 2 and parts[1].lower() == "config":
             st = scheduler_get_state()
@@ -462,7 +462,7 @@ async def telegram_webhook(update: Request):
                 await start_collector()
             return {"ok": True}
 
-        await tg_send(chat_id, _code("Команды: /sheduler on|off | config | <sec> [jitter] | tail <N>"))
+        await tg_send(chat_id, _code("Команды: /scheduler on|off | config | <sec> [jitter] | tail <N>"))
         return {"ok": True}
 
     # /portfolio
