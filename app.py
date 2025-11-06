@@ -9,9 +9,8 @@ import httpx
 # Sticker → Command mapping
 STICKER_TO_COMMAND = {
     # Oleg sticker
-    "AgADJogAAtfnYUg": "/now btcusdc",
-    "CAACAgIAAxkBAAE9dPtpDAnY_j75m55h8ctPgwzLP4fy8gACJogAAtfnYUiiLR_pVyWZPTYE": "/now btcusdc",
-    
+    "AgADXXoAAmI4WEg": "/now btcusdc",
+    "CAACAgIAAxkBAAE9cZBpC455Ia8n2PR-BoR6niG4gykRTAACXXoAAmI4WEg5O5Gu6FBfMzYE": "/now btcusdc",
 }
 from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
@@ -135,7 +134,10 @@ async def telegram_webhook(update: Request):
     except Exception:
         data = {}
     message = data.get("message") or data.get("edited_message") or {}
-    text = (message.get("text") or "").strip()
+    text = (message.get("text") or message.get("caption") or "").strip()
+    if not text and message.get('sticker'):
+        st = message['sticker']
+        text = (STICKER_TO_COMMAND.get(st.get('file_unique_id')) or STICKER_TO_COMMAND.get(st.get('file_id')) or '').strip()
     text_norm = text
     text_lower = text_norm.lower()
     text_upper = text_norm.upper()
@@ -202,6 +204,7 @@ async def telegram_webhook(update: Request):
         if symbol_arg:
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
+        await tg_send(chat_id, _code(msg))
         # After update, send per-symbol messages (one message per ticker)
         try:
             pairs = load_pairs()
