@@ -5,33 +5,13 @@ from fastapi import FastAPI, Request
 import json
 import httpx
 
-# ==== Sticker → Command mapping ===============================================
 
-# Используем сначала file_unique_id (стабильный), при необходимости — file_id.
-STICKER_TO_COMMAND: Dict[str, str] = {
-    # BTC стикер (из «избранного»)
+# Sticker → Command mapping
+STICKER_TO_COMMAND = {
+    # Oleg sticker
     "AgADXXoAAmI4WEg": "/now btcusdc",
     "CAACAgIAAxkBAAE9cZBpC455Ia8n2PR-BoR6niG4gykRTAACXXoAAmI4WEg5O5Gu6FBfMzYE": "/now btcusdc",
-
-    # BTC стикер (из пака traider_crypto_bot / недавние)
-    "AgADJogAAtfnYUg": "/now btcusdc",
-    "CAACAgIAAxkBAAE9dPtpDAnY_j75m55h8ctPgwzLP4fy8gACJogAAtfnYUiiLR_pVyWZPTYE": "/now btcusdc",
 }
-
-
-def _resolve_text_from_message(message: Dict[str, Any]) -> str:
-    # обычный текст/подпись
-    text = (message.get("text") or message.get("caption") or "").strip()
-    if text:
-        return text
-
-    # если это стикер — маппим в команду
-    st = message.get("sticker")
-    if not st:
-        return ""
-    mapped = STICKER_TO_COMMAND.get(st.get("file_unique_id")) or STICKER_TO_COMMAND.get(st.get("file_id"))
-    return (mapped or "").strip()
-
 from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
