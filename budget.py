@@ -139,7 +139,12 @@ def set_pair_budget(symbol: str, month: str, budget: int) -> Dict[str, int]:
 
 
 def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
-    """Budget CANCEL semantics: keep budget, reset reserve and spent to 0."""
+    """Budget CANCEL: полностью очистить состояние пары/месяца до нулей.
+
+    - budget = 0
+    - reserve = 0
+    - spent = 0
+    """
     sym = _norm_symbol(symbol)
     mkey = str(month)
     data = _load_budget()
@@ -147,13 +152,11 @@ def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
     p = pairs.setdefault(sym, {})
     monthly = p.setdefault("monthly", {})
 
-    cur_raw = monthly.get(mkey) or {}
-    norm = _normalize_entry(cur_raw)
-    # keep budget as-is, drop reserve and spent
-    budget = norm["budget"]
+    # Полный сброс для указанного месяца
+    budget = 0
     reserve = 0
     spent = 0
-    free = budget
+    free = 0
 
     monthly[mkey] = {
         "budget": budget,
@@ -170,7 +173,6 @@ def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
         "spent": spent,
         "free": free,
     }
-
 
 # -------- Input state (waiting for user budget value) --------
 
