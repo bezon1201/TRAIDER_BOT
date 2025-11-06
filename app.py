@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 import json
 import httpx
-
+from typing import Dict
 
 # Sticker → Command mapping
 STICKER_TO_COMMAND: Dict[str, str] = {
@@ -20,7 +20,7 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
-from typing import Dict
+
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
