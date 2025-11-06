@@ -862,12 +862,12 @@ async def _answer_callback(callback: dict) -> dict:
         recompute_pair_aggregates(symbol, month)
 
         # собираем карточку и показываем пользователю
-        sdata = _load_symbol_data(symbol)
-        msg = build_symbol_message(
-            symbol=symbol,
-            month=month,
-            info=get_pair_budget(symbol, month),
-            symbol_data=sdata,
+        msg = build_symbol_message(symbol)
+
+
+
+
+
         )
         kb = build_budget_keyboard(symbol, month)
         await tg_send(chat_id, msg, reply_markup=kb)
