@@ -237,7 +237,7 @@ async def _answer_callback(callback: dict) -> dict:
             pass
 
     # Parse commands
-    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET:"):
+    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET:") or data.startswith("ORDERS"):
         # Extract symbol
         try:
             _, sym_raw = data.split(":", 1)
@@ -337,7 +337,6 @@ async def _answer_callback(callback: dict) -> dict:
                 "inline_keyboard": [
                     [
                         {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
-                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol}"},
                     ]
                 ]
             }
@@ -347,9 +346,8 @@ async def _answer_callback(callback: dict) -> dict:
             return {"ok": True}
 
 
-    # ORDERS submenu
+    # ORDERS submenu: show OPEN / CANCEL / FILL and back to root
     if data.startswith("ORDERS:"):
-        # Extract symbol
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
@@ -363,7 +361,10 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "OPEN", "callback_data": f"ORDERS_OPEN:{symbol}"},
                     {"text": "CANCEL", "callback_data": f"ORDERS_CANCEL:{symbol}"},
                     {"text": "FILL", "callback_data": f"ORDERS_FILL:{symbol}"},
-                ]
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_ROOT:{symbol}"},
+                ],
             ]
         }
         await _edit_markup(kb)
@@ -386,12 +387,58 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{symbol}"},
                     {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{symbol}"},
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
+    # ORDERS back from submenu to root BUDGET/ORDERS row
+    if data.startswith("ORDERS_BACK_ROOT:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                    {"text": "ORDERS", "callback_data": f"ORDERS:{symbol}"},
                 ]
             ]
         }
         await _edit_markup(kb)
         return {"ok": True}
 
+    # ORDERS back from OPEN submenu to ORDERS menu
+    if data.startswith("ORDERS_BACK_MENU:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OPEN", "callback_data": f"ORDERS_OPEN:{symbol}"},
+                    {"text": "CANCEL", "callback_data": f"ORDERS_CANCEL:{symbol}"},
+                    {"text": "FILL", "callback_data": f"ORDERS_FILL:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_ROOT:{symbol}"},
+                ],
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
 
     return {"ok": True}
 
