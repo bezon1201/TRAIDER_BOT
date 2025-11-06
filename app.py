@@ -20,6 +20,15 @@ from general_scheduler import (
     scheduler_set_timing,
     scheduler_tail,
 )
+from budget import (
+    get_pair_budget,
+    set_pair_budget,
+    clear_pair_budget,
+    get_budget_input,
+    set_budget_input,
+    clear_budget_input,
+)
+
 
 # =========================
 # Sticker → Command mapping
@@ -116,21 +125,24 @@ def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
     return []
 
 
-async def tg_send(chat_id: str, text: str) -> None:
+async def tg_send(chat_id: str, text: str, reply_markup: dict | None = None) -> None:
     if not TELEGRAM_API:
         _log("tg_send SKIP: TELEGRAM_API missing")
         return
     head = (text or "").splitlines()[0] if text else ""
     _log("tg_send try: len=", len(text or ""), "parse=Markdown", "head=", head[:140])
     try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         r = await client.post(
             f"{TELEGRAM_API}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": True,
-            },
+            json=payload,
         )
         try:
             j = r.json()
@@ -140,9 +152,16 @@ async def tg_send(chat_id: str, text: str) -> None:
             _log("tg_send markdown resp:", r.status_code, j or r.text[:200])
             # Fallback: plain text
             _log("tg_send fallback: plain text")
+            payload2 = {
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": True,
+            }
+            if reply_markup is not None:
+                payload2["reply_markup"] = reply_markup
             r2 = await client.post(
                 f"{TELEGRAM_API}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+                json=payload2,
             )
             try:
                 j2 = r2.json()
@@ -153,6 +172,7 @@ async def tg_send(chat_id: str, text: str) -> None:
             _log("tg_send ok:", r.status_code)
     except Exception as e:
         _log("tg_send exception:", e.__class__.__name__, str(e)[:240])
+
 
 
 async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None, caption: str | None = None):
@@ -170,6 +190,115 @@ async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None,
                 r.raise_for_status()
     except Exception:
         pass
+
+async def _answer_callback(callback: dict) -> dict:
+    """
+    Handle inline keyboard callbacks for budget management.
+    """
+    data = str(callback.get("data") or "")
+    message = callback.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id") or "")
+    if not chat_id:
+        return {"ok": True}
+
+    # Stop Telegram's loading spinner (best-effort)
+    cb_id = callback.get("id")
+    if TELEGRAM_API and cb_id:
+        try:
+            await client.post(
+                f"{TELEGRAM_API}/answerCallbackQuery",
+                json={"callback_query_id": cb_id},
+            )
+        except Exception:
+            pass
+
+    data = data.strip()
+    if not data:
+        return {"ok": True}
+
+    # Helper to edit reply markup on the original message
+    async def _edit_markup(reply_markup: dict | None) -> None:
+        msg_id = message.get("message_id")
+        if not msg_id or not TELEGRAM_API:
+            return
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "reply_markup": reply_markup,
+            }
+            await client.post(
+                f"{TELEGRAM_API}/editMessageReplyMarkup",
+                json=payload,
+            )
+        except Exception:
+            pass
+
+    # Parse commands
+    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET:"):
+        # Extract symbol
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+
+        # Current month key YYYY-MM
+        from datetime import datetime
+        month = datetime.now().strftime("%Y-%m")
+
+        # Main "BUDGET" button → show submenu
+        if data.startswith("BUDGET:"):
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "SET BUDGET", "callback_data": f"BUDGET_SET:{symbol}"},
+                        {"text": "CLEAR BUDGET", "callback_data": f"BUDGET_CLEAR:{symbol}"},
+                    ]
+                ]
+            }
+            await _edit_markup(kb)
+            return {"ok": True}
+
+        # SET BUDGET → ask for value and restore single BUDGET button
+        if data.startswith("BUDGET_SET:"):
+            # store state: this chat is entering budget for this symbol/month
+            set_budget_input(chat_id, symbol, month)
+            msg = f"{symbol}\nВведите бюджет на месяц {month} в USDC (целым числом ≥ 0):"
+            await tg_send(chat_id, _code(msg))
+            # restore single BUDGET button on the card
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                    ]
+                ]
+            }
+            await _edit_markup(kb)
+            return {"ok": True}
+
+        # CLEAR BUDGET → set budget=0, spent=0 and restore single BUDGET button
+        if data.startswith("BUDGET_CLEAR:"):
+            res = clear_pair_budget(symbol, month)
+            msg = f"{res['symbol']}\nБюджет на месяц {res['month']} обнулён."
+            await tg_send(chat_id, _code(msg))
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                    ]
+                ]
+            }
+            await _edit_markup(kb)
+            # also clear any pending input for this chat
+            clear_budget_input(chat_id)
+            return {"ok": True}
+
+    return {"ok": True}
+
 
 
 async def _binance_ping() -> str:
@@ -217,6 +346,11 @@ async def telegram_webhook(update: Request):
     except Exception:
         data = {}
 
+    # inline keyboard callbacks
+    callback = data.get("callback_query")
+    if callback:
+        return await _answer_callback(callback)
+
     message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or message.get("caption") or "").strip()
 
@@ -234,6 +368,25 @@ async def telegram_webhook(update: Request):
     text_upper = text_norm.upper()
     chat_id = str((message.get("chat") or {}).get("id") or "")
     if not chat_id:
+        return {"ok": True}
+
+    # Budget input mode: if this chat is expected to send a budget value
+    pending = get_budget_input(chat_id)
+    if pending and not text_lower.startswith("/"):
+        raw = (text or "").strip()
+        try:
+            # Только целые числа >= 0
+            val = int(raw)
+            if val < 0:
+                raise ValueError()
+        except Exception:
+            msg = f"{pending['symbol']}\nНужно ввести целое число ≥ 0 в USDC. Попробуй ещё раз:"
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+        res = set_pair_budget(pending["symbol"], pending["month"], val)
+        clear_budget_input(chat_id)
+        msg = f"{res['symbol']}\nБюджет на месяц {res['month']} установлен: {res['budget']} USDC\nУже потрачено: {res['spent']} USDC"
+        await tg_send(chat_id, _code(msg))
         return {"ok": True}
 
     # /invested <delta>  |  /invest <delta>
@@ -297,9 +450,16 @@ async def telegram_webhook(update: Request):
         count, msg = await run_now(symbol_arg)
         _log("/now result:", count)
 
-        # Если указан символ — одна карточка
+        # Если указан символ — одна карточка с кнопкой BUDGET
         if symbol_arg:
-            await tg_send(chat_id, _code(msg))
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{symbol_arg.upper()}"},
+                    ]
+                ]
+            }
+            await tg_send(chat_id, _code(msg), reply_markup=kb)
             return {"ok": True}
 
         # Иначе: summary + по каждой паре
@@ -326,7 +486,14 @@ async def telegram_webhook(update: Request):
             try:
                 smsg = build_symbol_message(sym)
                 _log("/now symbol", sym, "len=", len(smsg or ""))
-                await tg_send(chat_id, _code(smsg))
+                kb = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                        ]
+                    ]
+                }
+                await tg_send(chat_id, _code(smsg), reply_markup=kb)
             except Exception:
                 pass
         return {"ok": True}
