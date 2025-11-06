@@ -33,7 +33,13 @@ def build_long_card(data: dict) -> str:
     free = int(info.get("free", budget - reserve - spent) or 0)
     if free < 0:
         free = 0
-    header1 = f"{sym}"
+    # display month as MM-YYYY
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+    else:
+        mon_disp = month
+    header1 = f"{sym} {mon_disp}"
+    header2 = f"💰100 | ⏳0 | 💸0 | 🎯100"
     header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
 
     lines = [header1, header2, f"Price {_i(price)}$ {mtext} {mode}"]

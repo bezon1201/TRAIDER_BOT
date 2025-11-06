@@ -283,25 +283,21 @@ async def _answer_callback(callback: dict) -> dict:
         # BUDGET CANCEL → reset reserve and spent, keep budget, restore single BUDGET button
         if data.startswith("BUDGET_CLEAR:"):
             info = clear_pair_budget(symbol, month)
-            mon = info.get("month", "")
-            if isinstance(mon, str) and len(mon) == 7 and mon[4] == "-":
-                mon_disp = f"{mon[5:]}-{mon[:4]}"
-            else:
-                mon_disp = str(mon)
-            budget = int(info.get("budget", 0) or 0)
-            reserve = int(info.get("reserve", 0) or 0)
-            spent = int(info.get("spent", 0) or 0)
-            free = int(info.get("free", budget - reserve - spent) or 0)
-            if free < 0:
-                free = 0
-            msg = (
-                f"{info['symbol']} {mon_disp}\n"
-                f"💰 Budget {budget}\n"
-                f"⏳ Reserved {reserve}\n"
-                f"💸 Spent {spent}\n"
-                f"🎯 Free {free}"
-            )
-            await tg_send(chat_id, _code(msg))
+            # отправляем обновлённую карточку по символу
+            try:
+                sym = info.get("symbol") or symbol
+                card = build_symbol_message(sym)
+                kb = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                        ]
+                    ]
+                }
+                await tg_send(chat_id, _code(card), reply_markup=kb)
+            except Exception:
+                pass
+            # обновляем клавиатуру на исходном сообщении
             kb = {
                 "inline_keyboard": [
                     [
@@ -402,26 +398,21 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
         info = set_pair_budget(pending["symbol"], pending["month"], val)
         clear_budget_input(chat_id)
-        mon = info.get("month", "")
-        # Печать месяца как MM-YYYY, если храним в формате YYYY-MM
-        if isinstance(mon, str) and len(mon) == 7 and mon[4] == "-":
-            mon_disp = f"{mon[5:]}-{mon[:4]}"
-        else:
-            mon_disp = str(mon)
-        budget = int(info.get("budget", 0) or 0)
-        reserve = int(info.get("reserve", 0) or 0)
-        spent = int(info.get("spent", 0) or 0)
-        free = int(info.get("free", budget - reserve - spent) or 0)
-        if free < 0:
-            free = 0
-        msg = (
-            f"{info['symbol']} {mon_disp}\n"
-            f"💰 Budget {budget}\n"
-            f"⏳ Reserved {reserve}\n"
-            f"💸 Spent {spent}\n"
-            f"🎯 Free {free}"
-        )
-        await tg_send(chat_id, _code(msg))
+        # После установки бюджета сразу отправляем карточку по символу
+        try:
+            sym = info.get("symbol") or pending["symbol"]
+            card = build_symbol_message(sym)
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                    ]
+                ]
+            }
+            await tg_send(chat_id, _code(card), reply_markup=kb)
+        except Exception:
+            # если что-то пошло не так, просто молча выходим
+            pass
         return {"ok": True}
 
     # /invested <delta>  |  /invest <delta>
