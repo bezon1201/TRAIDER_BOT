@@ -237,7 +237,7 @@ async def _answer_callback(callback: dict) -> dict:
             pass
 
     # Parse commands
-    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET:") or data.startswith("ORDERS"):
+    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET:") or data.startswith("BUDGET_BACK_ROOT:") or data.startswith("ORDERS"):
         # Extract symbol
         try:
             _, sym_raw = data.split(":", 1)
@@ -259,12 +259,35 @@ async def _answer_callback(callback: dict) -> dict:
                         {"text": "SET", "callback_data": f"BUDGET_SET:{symbol}"},
                         {"text": "CANCEL", "callback_data": f"BUDGET_CLEAR:{symbol}"},
                         {"text": "START", "callback_data": f"BUDGET_START:{symbol}"},
-                    ]
+                    ],
+                    [
+                        {"text": "↩️", "callback_data": f"BUDGET_BACK_ROOT:{symbol}"},
+                    ],
                 ]
             }
             await _edit_markup(kb)
             return {"ok": True}
 
+
+        # BUDGET back → восстановить корневое меню BUDGET / ORDERS
+        if data.startswith("BUDGET_BACK_ROOT:"):
+            try:
+                _, sym_raw = data.split(":", 1)
+            except ValueError:
+                return {"ok": True}
+            symbol = (sym_raw or "").upper().strip()
+            if not symbol:
+                return {"ok": True}
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol}"},
+                    ]
+                ]
+            }
+            await _edit_markup(kb)
+            return {"ok": True}
         # SET BUDGET → ask for value and restore single BUDGET button
         if data.startswith("BUDGET_SET:"):
             # store state: this chat is entering budget for this symbol/month
