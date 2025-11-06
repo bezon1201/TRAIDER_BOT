@@ -358,7 +358,7 @@ async def telegram_webhook(update: Request):
     # Шорткаты вида /BTCUSDC /ETHUSDC ...
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
-        if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "DATA", "JSON", "INVESTED", "INVEST", "MARKET", "SHEDULER"):
+        if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "DATA", "JSON", "INVESTED", "INVEST", "MARKET", "SCHEDULER"):
             msg = build_symbol_message(sym)
             await tg_send(chat_id, _code(msg))
             return {"ok": True}
