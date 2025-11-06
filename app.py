@@ -37,9 +37,9 @@ STICKER_TO_COMMAND: Dict[str, str] = {
     "AgADxokAAv_wWEg": "/now ethusdc",
     "CAACAgIAAxkBAAE9ddhpDCyOcuY8oEj0_mPe_E1zbEa-ogACxokAAv_wWEir8uUsEqgkvDYE": "/now ethusdc",
 
-    # BNB — ВСТАВЬ свои ID (file_unique_id и/или file_id) ниже и раскомментируй строки:
-    # "PUT_BNB_FILE_UNIQUE_ID_HERE": "/now bnbusdc",
-    # "PUT_BNB_FILE_ID_HERE": "/now bnbusdc",
+    # BNB
+    "AgADJocAAka7YUg": "/now bnbusdc",
+    "CAACAgIAAxkBAAE9djtpDD842Hiibb4OWsspe5QgYvQsgwACJocAAka7YUijem2oBO1AazYE": "/now bnbusdc",
 
     # Portfolio (твои 2 ID из сообщения)
     "AgADDX0AAm5wYUg": "/portfolio",
