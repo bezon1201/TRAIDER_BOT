@@ -2,6 +2,31 @@ from datetime import datetime
 
 from budget import get_pair_budget
 
+# Процентное распределение бюджета по режимам рынка (на одну неделю)
+WEEKLY_PERCENT = {
+    "UP": {
+        "OCO": 10,
+        "L0": 10,
+        "L1": 5,
+        "L2": 0,
+        "L3": 0,
+    },
+    "RANGE": {
+        "OCO": 5,
+        "L0": 5,
+        "L1": 10,
+        "L2": 5,
+        "L3": 0,
+    },
+    "DOWN": {
+        "OCO": 5,
+        "L0": 0,
+        "L1": 5,
+        "L2": 10,
+        "L3": 5,
+    },
+}
+
 
 def _i(x):
     try:
@@ -15,14 +40,19 @@ def build_long_card(data: dict) -> str:
     price = data.get("price") or (data.get("tf") or {}).get("12h", {}).get("close_last")
     market_mode = data.get("market_mode")
     mode = "LONG📈"
-    mtext = market_mode.get("12h") if isinstance(market_mode, dict) else market_mode
-    mtext = str(mtext or "").upper()
-    if "UP" in mtext:
+
+    # режим рынка как текст и как ключ UP/RANGE/DOWN
+    raw_mode = market_mode.get("12h") if isinstance(market_mode, dict) else market_mode
+    raw_mode_str = str(raw_mode or "").upper()
+    if "UP" in raw_mode_str:
         mtext = "UP⬆️"
-    elif "DOWN" in mtext:
+        mode_key = "UP"
+    elif "DOWN" in raw_mode_str:
         mtext = "DOWN⬇️"
+        mode_key = "DOWN"
     else:
         mtext = "RANGE🔄"
+        mode_key = "RANGE"
 
     # Budget/header lines
     month = datetime.now().strftime("%Y-%m")
@@ -33,14 +63,38 @@ def build_long_card(data: dict) -> str:
     free = int(info.get("free", budget - reserve - spent) or 0)
     if free < 0:
         free = 0
+
+    week = int(info.get("week", 0) or 0)
+
     # display month as MM-YYYY
     if len(month) == 7 and month[4] == "-":
         mon_disp = f"{month[5:]}-{month[:4]}"
     else:
         mon_disp = month
-    header1 = f"{sym} {mon_disp}"
-    header2 = f"💰100 | ⏳0 | 💸0 | 🎯100"
+
+    header1 = f"{sym} {mon_disp} Wk{week}"
     header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
+
+    # расчёт сумм по уровням (пока только базовая неделя; week влияет только на отображение)
+    perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
+
+    def _amount(level: str) -> int:
+        if week <= 0 or budget <= 0:
+            return 0
+        p = int(perc.get(level, 0) or 0)
+        if p <= 0:
+            return 0
+        val = int(round(budget * p / 100.0))
+        return max(val, 0)
+
+    def _amt_prefix(level: str, flag: str) -> str:
+        """Префикс перед уровнем: либо просто флаг, либо 3-значная сумма + флаг."""
+        amt = _amount(level)
+        if week > 0 and budget > 0:
+            # показываем сумму даже если флаг пустой
+            return f"{amt:03d}{flag or ''}"
+        else:
+            return flag or ""
 
     lines = [header1, header2, f"Price {_i(price)}$ {mtext} {mode}"]
 
@@ -48,14 +102,14 @@ def build_long_card(data: dict) -> str:
     flags = data.get("flags") or {}
     if all(k in oco for k in ("tp_limit", "sl_trigger", "sl_limit")):
         pf = flags.get("OCO", "")
-        prefix = f"{pf}" if pf else ""
+        prefix = _amt_prefix("OCO", pf)
         lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
     grid = data.get("grid") or {}
     for k in ("L0", "L1", "L2", "L3"):
         if k in grid and grid[k] is not None:
             pf = (flags or {}).get(k, "")
-            prefix = f"{pf}" if pf else ""
+            prefix = _amt_prefix(k, pf)
             lines.append(f"{prefix}{k} {_i(grid[k])}$")
 
     return "\n".join(lines)

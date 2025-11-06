@@ -93,9 +93,12 @@ def get_pair_budget(symbol: str, month: str) -> Dict[str, int]:
     monthly = p.get("monthly") or {}
     cur_raw = monthly.get(mkey) or {}
     norm = _normalize_entry(cur_raw)
+    # неделя цикла (0 = не запущен)
+    week = int(cur_raw.get("week") or 0)
     return {
         "symbol": sym,
         "month": mkey,
+        "week": week,
         **norm,
     }
 
@@ -114,7 +117,10 @@ def set_pair_budget(symbol: str, month: str, budget: int) -> Dict[str, int]:
 
     cur_raw = monthly.get(mkey) or {}
     norm = _normalize_entry(cur_raw)
-    # update only budget, keep reserve/spent
+    # сохраняем текущую неделю цикла (по умолчанию 0)
+    week = int(cur_raw.get("week") or 0)
+
+    # обновляем только бюджет, reserve/spent не трогаем
     norm["budget"] = bval
     free = bval - norm["reserve"] - norm["spent"]
     if free < 0:
@@ -125,16 +131,60 @@ def set_pair_budget(symbol: str, month: str, budget: int) -> Dict[str, int]:
         "budget": norm["budget"],
         "reserve": norm["reserve"],
         "spent": norm["spent"],
+        "week": week,
     }
     _save_budget(data)
 
     return {
         "symbol": sym,
         "month": mkey,
+        "week": week,
         "budget": norm["budget"],
         "reserve": norm["reserve"],
         "spent": norm["spent"],
         "free": norm["free"],
+    }
+
+
+def set_pair_week(symbol: str, month: str, week: int) -> Dict[str, int]:
+    """Установить номер недели цикла для пары/месяца, не меняя бюджет/резервы."""
+    sym = _norm_symbol(symbol)
+    mkey = str(month)
+    wval = int(week)
+    if wval < 0:
+        wval = 0
+
+    data = _load_budget()
+    pairs = data.setdefault("pairs", {})
+    p = pairs.setdefault(sym, {})
+    monthly = p.setdefault("monthly", {})
+
+    cur_raw = monthly.get(mkey) or {}
+    norm = _normalize_entry(cur_raw)
+
+    budget = norm["budget"]
+    reserve = norm["reserve"]
+    spent = norm["spent"]
+    free = budget - reserve - spent
+    if free < 0:
+        free = 0
+
+    monthly[mkey] = {
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+        "week": wval,
+    }
+    _save_budget(data)
+
+    return {
+        "symbol": sym,
+        "month": mkey,
+        "week": wval,
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+        "free": free,
     }
 
 
@@ -144,6 +194,7 @@ def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
     - budget = 0
     - reserve = 0
     - spent = 0
+    - week = 0
     """
     sym = _norm_symbol(symbol)
     mkey = str(month)
@@ -156,23 +207,27 @@ def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
     budget = 0
     reserve = 0
     spent = 0
+    week = 0
     free = 0
 
     monthly[mkey] = {
         "budget": budget,
         "reserve": reserve,
         "spent": spent,
+        "week": week,
     }
     _save_budget(data)
 
     return {
         "symbol": sym,
         "month": mkey,
+        "week": week,
         "budget": budget,
         "reserve": reserve,
         "spent": spent,
         "free": free,
     }
+
 
 # -------- Input state (waiting for user budget value) --------
 

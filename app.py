@@ -24,6 +24,7 @@ from budget import (
     get_pair_budget,
     set_pair_budget,
     clear_pair_budget,
+    set_pair_week,
     get_budget_input,
     set_budget_input,
     clear_budget_input,
@@ -236,7 +237,7 @@ async def _answer_callback(callback: dict) -> dict:
             pass
 
     # Parse commands
-    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET:"):
+    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET:"):
         # Extract symbol
         try:
             _, sym_raw = data.split(":", 1)
@@ -257,6 +258,7 @@ async def _answer_callback(callback: dict) -> dict:
                     [
                         {"text": "SET", "callback_data": f"BUDGET_SET:{symbol}"},
                         {"text": "CANCEL", "callback_data": f"BUDGET_CLEAR:{symbol}"},
+                        {"text": "START", "callback_data": f"BUDGET_START:{symbol}"},
                     ]
                 ]
             }
@@ -270,6 +272,35 @@ async def _answer_callback(callback: dict) -> dict:
             msg = f"{symbol}\nВведите бюджет на месяц {month} в USDC (целым числом ≥ 0):"
             await tg_send(chat_id, _code(msg))
             # restore single BUDGET button on the card
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{symbol}"},
+                    ]
+                ]
+            }
+            await _edit_markup(kb)
+            return {"ok": True}
+
+
+        # BUDGET START → установить неделю цикла = 1 и показать карточку
+        if data.startswith("BUDGET_START:"):
+            info = set_pair_week(symbol, month, 1)
+            # отправляем обновлённую карточку по символу
+            try:
+                sym = info.get("symbol") or symbol
+                card = build_symbol_message(sym)
+                kb = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                        ]
+                    ]
+                }
+                await tg_send(chat_id, _code(card), reply_markup=kb)
+            except Exception:
+                pass
+            # обновляем клавиатуру на исходном сообщении
             kb = {
                 "inline_keyboard": [
                     [
