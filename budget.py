@@ -92,11 +92,6 @@ def _save_pair_levels(symbol: str, month: str, levels: Dict[str, Dict[str, int]]
     _save_levels(data)
 
 
-def save_pair_levels(symbol: str, month: str, levels: Dict[str, Dict[str, int]]) -> None:
-    """Public wrapper around _save_pair_levels for external modules (app.py)."""
-    _save_pair_levels(symbol, month, levels)
-
-
 def clear_pair_levels(symbol: str, month: str) -> None:
     """Reset per-level state for a pair/month (used by BUDGET CANCEL)."""
     sym = _norm_symbol(symbol)
