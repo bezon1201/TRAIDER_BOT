@@ -859,20 +859,34 @@ async def _answer_callback(callback: dict) -> dict:
         save_pair_levels(symbol, month, levels)
 
         # пересчёт агрегатов по паре (budget.json и budget_state.json)
-        recompute_pair_aggregates(symbol, month)
+        info2 = recompute_pair_aggregates(symbol, month)
 
-        # собираем карточку и показываем пользователю
-        msg = build_symbol_message(symbol)
+        # обновлённая карточка по символу + кнопки BUDGET / ORDERS
+        try:
+            card = build_symbol_message(symbol)
+            sym = (symbol or "").upper()
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                        {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
+                    ]
+                ]
+            }
+            await tg_send(chat_id, _code(card), reply_markup=kb)
+        except Exception:
+            # fallback, если build_symbol_message вдруг упадёт
+            msg = (
+                f"{symbol} {month}\n"
+                f"LIMIT 0: виртуальный ордер на {actual} USDC учтён в резерве.\n"
+                f"Бюджет: {info2.get('budget')} | "
+                f"⏳ {info2.get('reserve')} | "
+                f"💸 {info2.get('spent')} | "
+                f"🎯 {info2.get('free')}"
+            )
+            await tg_send(chat_id, _code(msg))
 
-
-
-
-
-        
-        kb = build_budget_keyboard(symbol, month)
-        await tg_send(chat_id, msg, reply_markup=kb)
-
-        # отдельное уведомление о действии
+        # отдельное уведомление о действии (опционально)
         note = (
             f"LIMIT 0 для {symbol} {month}: зарезервировано {actual} USDC.\n"
             f"Всего занято по уровню: {new_reserved} USDC (квота {quota} USDC)."
@@ -880,6 +894,7 @@ async def _answer_callback(callback: dict) -> dict:
         await tg_send(chat_id, _code(note))
 
         return {"ok": True}
+
 
 
 
