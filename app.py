@@ -418,6 +418,59 @@ async def _answer_callback(callback: dict) -> dict:
         }
         await _edit_markup(kb)
         return {"ok": True}
+    # ORDERS → CANCEL → выбор уровня для отмены (пока только кнопки)
+    if data.startswith("ORDERS_CANCEL:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
+    # ORDERS → FILL → выбор уровня для пометки исполненным (пока только кнопки)
+    if data.startswith("ORDERS_FILL:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
+
 
     # ORDERS back from submenu to root BUDGET/ORDERS row
     if data.startswith("ORDERS_BACK_ROOT:"):
