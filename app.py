@@ -23,6 +23,11 @@ from orders import (
     prepare_cancel_l1, confirm_cancel_l1,
     prepare_cancel_l2, confirm_cancel_l2,
     prepare_cancel_l3, confirm_cancel_l3,
+    prepare_fill_oco, confirm_fill_oco,
+    prepare_fill_l0, confirm_fill_l0,
+    prepare_fill_l1, confirm_fill_l1,
+    prepare_fill_l2, confirm_fill_l2,
+    prepare_fill_l3, confirm_fill_l3,
 )
 from general_scheduler import (
     start_collector,
