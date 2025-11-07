@@ -6,6 +6,7 @@ import os, json
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates
 from symbol_info import build_symbol_message
 
+# Распределение недельного бюджета, синхронизировано с app.py
 WEEKLY_PERCENT = {
     "UP":   {"OCO": 10, "L0": 10, "L1": 5,  "L2": 0,  "L3": 0},
     "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
@@ -34,7 +35,7 @@ def _mode_key_from_symbol(symbol: str) -> str:
         return "DOWN"
     return "RANGE"
 
-def _flag_desc_common(flag: str) -> str:
+def _flag_desc(flag: str) -> str:
     if flag == "🟢":
         return "цена ниже / внизу коридора — можно брать по рынку"
     if flag == "🟡":
@@ -43,82 +44,105 @@ def _flag_desc_common(flag: str) -> str:
         return "цена высока — ордер ставить рискованно"
     return "нет автофлага"
 
-def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+def prepare_open_oco(symbol: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "Некорректный символ.", {}
+
     month = datetime.now().strftime("%Y-%m")
     info = get_pair_budget(symbol, month)
     budget = int(info.get("budget") or 0)
     free = int(info.get("free") or 0)
     week = int(info.get("week") or 0)
+
     if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл ещё не запущен (Wk{week}) или бюджет 0 — {title} недоступен.", {}
+        return f"{symbol} {month}\nЦикл ещё не запущен (Wk{week}) или бюджет 0 — OCO недоступен.", {}
+
     mode_key = _mode_key_from_symbol(symbol)
     perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
-    p = int(perc.get(lvl) or 0)
-    if p <= 0:
-        return f"{symbol} {month}\nДля уровня {title} в режиме {mode_key} доля бюджета 0% — {title} не используется.", {}
-    quota = int(round(budget * p / 100.0))
+    p_oco = int(perc.get("OCO") or 0)
+    if p_oco <= 0:
+        return f"{symbol} {month}\nДля уровня OCO в режиме {mode_key} доля бюджета 0% — OCO не используется.", {}
+
+    quota = int(round(budget * p_oco / 100.0))
     levels = get_pair_levels(symbol, month) or {}
-    lvl_state = levels.get(lvl) or {}
+    lvl_state = levels.get("OCO") or {}
     used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
     available = quota - used
     if available <= 0:
-        return f"{symbol} {month}\nЛимит по {title} уже исчерпан (доступно 0 USDC).", {}
+        return f"{symbol} {month}\nЛимит по OCO уже исчерпан (доступно 0 USDC).", {}
     if free <= 0:
         return f"{symbol} {month}\nСвободный бюджет 0 USDC — сначала освободите бюджет.", {}
+
     if available > free:
-        return (f"{symbol} {month}\n"
-                f"По уровню {title} доступно {available} USDC, но свободно в бюджете только {free} USDC.\n"
-                f"Сначала освободите бюджет или уменьшите другие уровни.", {})
+        return (
+            f"{symbol} {month}\n"
+            f"По уровню OCO доступно {available} USDC, но свободно в бюджете только {free} USDC.\n"
+            f"Сначала освободите бюджет или уменьшите другие уровни.",
+            {}
+        )
+
     sdata = _load_symbol_data(symbol)
     flags = sdata.get("flags") or {}
-    flag = flags.get(lvl) or ""
-    flag_desc = _flag_desc_common(flag)
-    mon_disp = f"{month[5:]}-{month[:4]}" if (len(month)==7 and month[4]=="-") else month
-    msg = (f"{symbol} {mon_disp} Wk{week}\n"
-           f"{title} OPEN\n\n"
-           f"Сумма: {available} USDC\n"
-           f"Флаг: {flag or '-'} ({flag_desc})\n"
-           f"Поставить виртуальный {title} на {available} USDC?")
-    cb = f"ORDERS_OPEN_{lvl}_CONFIRM"
-    kb = { "inline_keyboard": [[
-        {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{available}"},
-        {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-    ]]}
+    flag_oco = flags.get("OCO") or ""
+    flag_desc = _flag_desc(flag_oco)
+
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+
+    msg = (
+        f"{symbol} {mon_disp} Wk{week}\n"
+        f"OCO OPEN\n\n"
+        f"Сумма: {available} USDC\n"
+        f"Флаг: {flag_oco or '-'} ({flag_desc})\n"
+        f"Поставить виртуальный OCO-ордер на {available} USDC?"
+    )
+    kb = {
+        "inline_keyboard": [[
+            {"text": "CONFIRM", "callback_data": f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"},
+            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+        ]]
+    }
     return msg, kb
 
-def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+def confirm_open_oco(symbol: str, amount: int) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol or int(amount) <= 0:
         return "Некорректные параметры операции.", {}
+
     month = datetime.now().strftime("%Y-%m")
     info = get_pair_budget(symbol, month)
     budget = int(info.get("budget") or 0)
     free = int(info.get("free") or 0)
     week = int(info.get("week") or 0)
+
     if week <= 0 or budget <= 0:
         return f"{symbol} {month}\nЦикл не запущен или бюджет 0 — операция отклонена.", {}
+
     mode_key = _mode_key_from_symbol(symbol)
     perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
-    p = int(perc.get(lvl) or 0)
-    if p <= 0:
-        return f"{symbol} {month}\nДля уровня {title} в режиме {mode_key} доля бюджета 0% — операция отменена.", {}
-    quota = int(round(budget * p / 100.0))
+    p_oco = int(perc.get("OCO") or 0)
+    if p_oco <= 0:
+        return f"{symbol} {month}\nДля уровня OCO в режиме {mode_key} доля бюджета 0% — операция отменена.", {}
+
+    quota = int(round(budget * p_oco / 100.0))
     levels = get_pair_levels(symbol, month) or {}
-    lvl_state = levels.get(lvl) or {}
+    lvl_state = levels.get("OCO") or {}
     used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
     available = quota - used
     if available <= 0 or free <= 0:
-        return f"{symbol} {month}\nЛимит по {title} или свободный бюджет уже исчерпаны — операция отменена.", {}
+        return f"{symbol} {month}\nЛимит по OCO или свободный бюджет уже исчерпаны — операция отменена.", {}
+
     actual = min(int(amount), available, free)
     if actual <= 0:
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
+
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
-    levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
+    levels["OCO"] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
+
     try:
         card = build_symbol_message(symbol)
         sym = (symbol or "").upper()
@@ -128,16 +152,12 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         ]]}
         return card, kb
     except Exception:
-        msg = (f"{symbol} {month}\n"
-               f"{title}: виртуальный ордер на {actual} USDC учтён в резерве.\n"
-               f"Бюджет: {info2.get('budget')} | "
-               f"⏳ {info2.get('reserve')} | "
-               f"💸 {info2.get('spent')} | "
-               f"🎯 {info2.get('free')}")
+        msg = (
+            f"{symbol} {month}\n"
+            f"OCO: виртуальный ордер на {actual} USDC учтён в резерве.\n"
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
         return msg, {}
-
-# Public API for OCO and L0
-def prepare_open_oco(symbol: str):  return _prepare_open_level(symbol, "OCO", "OCO")
-def confirm_open_oco(symbol: str, amount: int):  return _confirm_open_level(symbol, amount, "OCO", "OCO")
-def prepare_open_l0(symbol: str):   return _prepare_open_level(symbol, "L0", "LIMIT 0")
-def confirm_open_l0(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L0", "LIMIT 0")

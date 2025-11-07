@@ -12,7 +12,7 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
-from orders import prepare_open_oco, confirm_open_oco, prepare_open_l0, confirm_open_l0, prepare_open_l0, confirm_open_l0
+from orders import prepare_open_oco, confirm_open_oco
 from general_scheduler import (
     start_collector,
     stop_collector,
@@ -474,43 +474,14 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = prepare_open_oco(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-        # ORDERS → OPEN → подтверждение OCO
+
+    # ORDERS → OPEN → подтверждение OCO
     if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
         try:
             _, payload = data.split(":", 1)
             sym_raw, amount_raw = payload.split(":", 1)
         except ValueError:
             return {"ok": True}
-    # ORDERS → OPEN → LIMIT 0 (подтверждение виртуального ордера)
-    if data.startswith("ORDERS_OPEN_L0:"):
-        try:
-            _, sym_raw = data.split(":", 1)
-        except ValueError:
-            return {"ok": True}
-        symbol = (sym_raw or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        msg, kb = prepare_open_l0(symbol)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
-        return {"ok": True}
-
-    # ORDERS → OPEN → подтверждение LIMIT 0
-    if data.startswith("ORDERS_OPEN_L0_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-            return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, kb = confirm_open_l0(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
-        return {"ok": True}
-
         symbol = (sym_raw or "").upper().strip()
         try:
             amount = int(amount_raw)
@@ -521,23 +492,14 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = confirm_open_oco(symbol, amount)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-    # ORDERS → OPEN → подтверждение LIMIT 0
-    if data.startswith("ORDERS_OPEN_L0_CONFIRM:"):
+
+   # ORDERS → OPEN → подтверждение OCO
+    if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
         try:
-            _, sym, amount_str = data.split(":", 2)
+            _, payload = data.split(":", 1)
+            sym_raw, amount_raw = payload.split(":", 1)
         except ValueError:
             return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, kb = confirm_open_l0(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
-        return {"ok": True}
-
         symbol = (sym_raw or "").upper().strip()
         try:
             amount = int(amount_raw)
