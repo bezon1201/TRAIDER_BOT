@@ -474,104 +474,24 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = prepare_open_oco(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-        symbol = (sym_raw or "").upper().strip()
-        if not symbol:
+
+    # ORDERS → OPEN → подтверждение OCO
+    if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
             return {"ok": True}
-        month = datetime.now().strftime("%Y-%m")
-
-        info = get_pair_budget(symbol, month)
-        budget = int(info.get("budget") or 0)
-        reserve = int(info.get("reserve") or 0)
-        spent = int(info.get("spent") or 0)
-        free = int(info.get("free") or 0)
-        week = int(info.get("week") or 0)
-
-        if week <= 0 or budget <= 0:
-            msg = f"{symbol} {month}\nЦикл ещё не запущен (Wk{week}) или бюджет 0 — OCO недоступен."
-            await tg_send(chat_id, _code(msg))
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol or amount <= 0:
             return {"ok": True}
-
-        # режим рынка и автофлаг для OCO
-        sdata = _load_symbol_data(symbol)
-        market_mode = sdata.get("market_mode")
-        raw_mode = market_mode.get("12h") if isinstance(market_mode, dict) else market_mode
-        raw_mode_str = str(raw_mode or "").upper()
-        if "UP" in raw_mode_str:
-            mode_key = "UP"
-        elif "DOWN" in raw_mode_str:
-            mode_key = "DOWN"
-        else:
-            mode_key = "RANGE"
-
-        perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
-        p_oco = int(perc.get("OCO") or 0)
-        if p_oco <= 0:
-            msg = f"{symbol} {month}\nДля уровня OCO в режиме {mode_key} доля бюджета 0% — OCO не используется."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        # квота на OCO по бюджету (одна неделя)
-        quota = int(round(budget * p_oco / 100.0))
-
-        levels = get_pair_levels(symbol, month)
-        lvl_state = (levels or {}).get("OCO") or {}
-        used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
-
-        available = quota - used
-        if available <= 0:
-            msg = f"{symbol} {month}\nЛимит по OCO уже исчерпан (доступно 0 USDC)."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        if free <= 0:
-            msg = f"{symbol} {month}\nСвободных средств по бюджету 0 USDC — открыть OCO нельзя."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        if free < available:
-            msg = (
-                f"{symbol} {month}\n"
-                f"По уровню OCO доступно {available} USDC, но свободно в бюджете только {free} USDC.\n"
-                "Сначала освободите бюджет или уменьшите другие уровни."
-            )
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        # автофлаг OCO для текста
-        flags = sdata.get("flags") or {}
-        flag_oco = flags.get("OCO") or ""
-        # описание флага для человека
-        if flag_oco == "🟢":
-            flag_desc = "цена ниже / внизу коридора — можно брать по рынку"
-        elif flag_oco == "🟡":
-            flag_desc = "можно открыть по рекомендациям"
-        elif flag_oco == "🔴":
-            flag_desc = "цена высока — ордер ставить рискованно"
-        else:
-            flag_desc = "нет автофлага"
-
-        # красивый месяц
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-
-        msg = (
-            f"{symbol} {mon_disp} Wk{week}\n"
-            f"OCO OPEN\n\n"
-            f"Сумма: {available} USDC\n"
-            f"Флаг: {flag_oco or '-'} ({flag_desc})\n"
-            f"Поставить виртуальный OCO-ордер на {available} USDC?"
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "CONFIRM", "callback_data": f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ]
-            ]
-        }
-        await tg_send(chat_id, _code(msg), reply_markup=kb)
+        msg, kb = confirm_open_oco(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
+
     # ORDERS → OPEN → LIMIT 0 (подтверждение виртуального ордера)
     if data.startswith("ORDERS_OPEN_L0:"):
         try:
@@ -680,116 +600,6 @@ async def _answer_callback(callback: dict) -> dict:
 
 
 
-    # ORDERS → OPEN → подтверждение OCO
-        if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-            return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, kb = confirm_open_oco(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
-        return {"ok": True}
-        symbol = (sym_raw or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        try:
-            amount = int(amount_raw)
-        except Exception:
-            amount = 0
-        if amount <= 0:
-            return {"ok": True}
-
-        month = datetime.now().strftime("%Y-%m")
-        info = get_pair_budget(symbol, month)
-        budget = int(info.get("budget") or 0)
-        reserve = int(info.get("reserve") or 0)
-        spent = int(info.get("spent") or 0)
-        free = int(info.get("free") or 0)
-        week = int(info.get("week") or 0)
-
-        if week <= 0 or budget <= 0:
-            msg = f"{symbol} {month}\nЦикл не запущен или бюджет 0 — операция отклонена."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        # пересчитываем фактический доступный лимит и free на момент подтверждения
-        sdata = _load_symbol_data(symbol)
-        market_mode = sdata.get("market_mode")
-        raw_mode = market_mode.get("12h") if isinstance(market_mode, dict) else market_mode
-        raw_mode_str = str(raw_mode or "").upper()
-        if "UP" in raw_mode_str:
-            mode_key = "UP"
-        elif "DOWN" in raw_mode_str:
-            mode_key = "DOWN"
-        else:
-            mode_key = "RANGE"
-
-        perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
-        p_oco = int(perc.get("OCO") or 0)
-        if p_oco <= 0:
-            msg = f"{symbol} {month}\nДля уровня OCO в режиме {mode_key} доля бюджета 0% — операция отменена."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        quota = int(round(budget * p_oco / 100.0))
-        levels = get_pair_levels(symbol, month)
-        lvl_state = (levels or {}).get("OCO") or {}
-        used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
-        available = quota - used
-        if available <= 0 or free <= 0:
-            msg = f"{symbol} {month}\nЛимит по OCO или свободный бюджет уже исчерпаны — операция отменена."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        actual = min(amount, available, free)
-        if actual <= 0:
-            msg = f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена."
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
-
-        # обновляем per-level состояние
-        new_reserved = int(lvl_state.get("reserved") or 0) + actual
-        levels["OCO"] = {
-            "reserved": new_reserved,
-            "spent": int(lvl_state.get("spent") or 0),
-        }
-        save_pair_levels(symbol, month, levels)
-        info2 = recompute_pair_aggregates(symbol, month)
-
-        # отправляем обновлённую карточку
-        try:
-            card = build_symbol_message(symbol)
-            sym = (symbol or "").upper()
-            kb = {
-                "inline_keyboard": [
-                    [
-                        {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
-                        {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
-                    ]
-                ]
-            }
-            await tg_send(chat_id, _code(card), reply_markup=kb)
-        except Exception:
-            # если не удалось построить карточку, хотя бы текст
-            msg = (
-                f"{symbol} {month}\n"
-                f"OCO: виртуальный ордер на {actual} USDC учтён в резерве.\n"
-                f"Бюджет: {info2.get('budget')} | "
-                f"⏳ {info2.get('reserve')} | "
-                f"💸 {info2.get('spent')} | "
-                f"🎯 {info2.get('free')}"
-            )
-            await tg_send(chat_id, _code(msg))
-
-        return {"ok": True}
-    # ORDERS → OPEN → подтверждение LIMIT 0
     if data.startswith("ORDERS_OPEN_L0_CONFIRM:"):
         try:
             _, sym, amount_str = data.split(":", 2)
