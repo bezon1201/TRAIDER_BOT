@@ -1,6 +1,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from budget import get_pair_levels
+
 def _pick(obj: dict, *keys, default=None):
     for k in keys:
         if isinstance(obj, dict) and (k in obj) and obj[k] is not None:
@@ -20,7 +23,39 @@ def _mode_alpha_delta(mode: str) -> tuple[float, float]:
     if m == "DOWN": return (0.3, 0.2)
     return (0.5, 0.3)
 
+
+def _budget_flag_for_level(data: dict, level_key: str) -> str | None:
+    """Дополнительные флаги на основе бюджета: ✅ если spent>0, ⚠️ если reserved>0."""
+    symbol = (data.get("symbol") or "").upper().strip()
+    if not symbol:
+        return None
+    month = datetime.now().strftime("%Y-%m")
+    try:
+        levels = get_pair_levels(symbol, month)
+    except Exception:
+        return None
+    st = (levels.get(level_key) or {}) if isinstance(levels, dict) else {}
+    try:
+        reserved = int(st.get("reserved") or 0)
+    except Exception:
+        reserved = 0
+    try:
+        spent = int(st.get("spent") or 0)
+    except Exception:
+        spent = 0
+    if spent > 0:
+        return "✅"
+    if reserved > 0:
+        return "⚠️"
+    return None
+
+
 def compute_oco_flag(data: dict) -> str:
+    # Сначала смотрим на состояние бюджета: ✅/⚠️ имеют приоритет над автофлагами.
+    manual = _budget_flag_for_level(data, "OCO")
+    if manual:
+        return manual
+
     tf12 = (data.get("tf") or {}).get("12h") or {}
     P = float(_pick(data, "price") or _pick(tf12, "close_last") or 0.0)
     TP = float(_pick(data.get("oco") or {}, "tp_limit", default=0.0) or 0.0)
@@ -40,6 +75,11 @@ def compute_oco_flag(data: dict) -> str:
     return "🟡"
 
 def compute_L_flag(data: dict, level_key: str) -> str:
+    # Приоритет бюджетных флагов: ✅ (spent>0), ⚠️ (reserved>0).
+    manual = _budget_flag_for_level(data, level_key)
+    if manual:
+        return manual
+
     tf12 = (data.get("tf") or {}).get("12h") or {}
     P = float(_pick(data, "price") or _pick(tf12, "close_last") or 0.0)
     grid = data.get("grid") or {}

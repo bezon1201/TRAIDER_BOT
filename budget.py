@@ -155,18 +155,6 @@ def recompute_pair_aggregates(symbol: str, month: str) -> Dict[str, int]:
     }
     _save_budget(data)
 
-    # Также очищаем ручные флаги (⚠️/✅) в JSON монеты, чтобы карточка
-    # вернулась к автофлагам.
-    try:
-        coin_path = os.path.join(STORAGE_DIR, f"{sym}.json")
-        coin_data = _load_json(coin_path, {})
-        if isinstance(coin_data, dict) and coin_data.get("flags_manual"):
-            coin_data.pop("flags_manual", None)
-            _save_json(coin_path, coin_data)
-    except Exception:
-        # best-effort: не ломаем CANCEL, если не удалось обновить файл монеты
-        pass
-
     return {
         "symbol": sym,
         "month": mkey,

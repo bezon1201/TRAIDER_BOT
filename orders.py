@@ -4,6 +4,7 @@ from typing import Tuple, Dict, Any
 import os, json
 
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates
+from auto_flags import compute_all_flags
 from symbol_info import build_symbol_message
 
 # Недельные доли по режиму рынка
@@ -24,12 +25,9 @@ def _load_symbol_data(symbol: str) -> dict:
     except Exception:
         return {}
 
-def _save_symbol_data(symbol: str, data: dict) -> None:
-    """Persist symbol JSON alongside auto flags and other metrics.
 
-    Best-effort write: errors are silently ignored so that trading logic
-    is not broken by filesystem issues.
-    """
+def _save_symbol_data(symbol: str, data: dict) -> None:
+    """Безопасная запись JSON по монете (best-effort)."""
     path = _symbol_data_path(symbol)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -38,7 +36,29 @@ def _save_symbol_data(symbol: str, data: dict) -> None:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, path)
     except Exception:
-        # best-effort; ignore write errors
+        # best-effort: не ломаем бот из-за ошибок диска
+        pass
+
+
+def _recompute_symbol_flags(symbol: str) -> None:
+    """Пересчитать автофлаги (включая ⚠️/✅) после изменения budget-levels.
+
+    Используется после OPEN/CANCEL/FILL, чтобы карточка сразу показывала
+    актуальные флаги, не ждя следующего прохода metrics_runner.
+    """
+    try:
+        sdata = _load_symbol_data(symbol)
+        if not isinstance(sdata, dict):
+            return
+        # trade_mode нужен, чтобы понять, что монета вообще торгуется
+        mode = str(sdata.get("trade_mode") or "").upper()
+        if mode != "LONG":
+            # пока флаги считаем только для LONG-карточек
+            pass
+        sdata["flags"] = compute_all_flags(sdata)
+        _save_symbol_data(symbol, sdata)
+    except Exception:
+        # не критично, просто не обновим флаги немедленно
         pass
 
 
@@ -60,11 +80,7 @@ def _flag_desc(flag: str) -> str:
         return "можно открыть по рекомендациям"
     if flag == "🔴":
         return "цена высока — ордер ставить рискованно"
-    if flag == "⚠️":
-        return "есть виртуальный ордер на этом уровне"
-    if flag == "✅":
-        return "уровень уже отработан"
-    return "нет флага"
+    return "нет автофлага"
 
 def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
@@ -105,11 +121,8 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         )
 
     sdata = _load_symbol_data(symbol)
-    auto_flags = sdata.get("flags") or {}
-    manual_flags = sdata.get("flags_manual") or {}
-    flag_val = (manual_flags.get(lvl)
-                or auto_flags.get(lvl)
-                or "")
+    flags = sdata.get("flags") or {}
+    flag_val = flags.get(lvl) or ""
     flag_desc = _flag_desc(flag_val)
 
     mon_disp = month
@@ -169,17 +182,8 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    # После открытия виртуального ордера помечаем уровень ручным флагом ⚠️,
-    # чтобы он имел приоритет над автофлагами при построении карточки.
-    try:
-        sdata = _load_symbol_data(symbol)
-        mflags = sdata.get("flags_manual") or {}
-        mflags[lvl] = "⚠️"
-        sdata["flags_manual"] = mflags
-        _save_symbol_data(symbol, sdata)
-    except Exception:
-        # не мешаем основной логике, если не удалось обновить флаги
-        pass
+    # После изменения резервов обновляем автофлаги (включая ⚠️/✅).
+    _recompute_symbol_flags(symbol)
 
     try:
         card = build_symbol_message(symbol)
@@ -214,15 +218,6 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
     lvl_state = levels.get(lvl) or {}
     reserved = int(lvl_state.get("reserved") or 0)
 
-    # Подтягиваем флаг (ручной имеет приоритет над авто)
-    sdata = _load_symbol_data(symbol)
-    auto_flags = sdata.get("flags") or {}
-    manual_flags = sdata.get("flags_manual") or {}
-    flag_val = (manual_flags.get(lvl)
-                or auto_flags.get(lvl)
-                or "")
-    flag_desc = _flag_desc(flag_val)
-
     mon_disp = month
     if len(month) == 7 and month[4] == "-":
         mon_disp = f"{month[5:]}-{month[:4]}"
@@ -254,7 +249,6 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
         f"{title} CANCEL\n\n"
         f"Сейчас в резерве: {reserved} USDC\n"
         f"Вернуть в free:   {reserved} USDC\n\n"
-        f"Флаг: {flag_val or '-'} ({flag_desc})\n"
         f"Отменить виртуальный {title} на {reserved} USDC?"
     )
     cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
@@ -268,7 +262,7 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
 
 
 def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подтверждение отмены: возвращаем резерв в free и снимаем ручной флаг."""
+    """Подтверждение отмены: возвращаем резерв в free."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "Некорректные параметры операции.", {}
@@ -287,7 +281,6 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
             f"{title} CANCEL\n\n"
             f"Нечего отменять: резерв уже 0 USDC."
         )
-        # остаёмся в меню CANCEL
         sym = symbol
         kb = {
             "inline_keyboard": [
@@ -323,18 +316,8 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    # Если резерв на уровне обнулился — снимаем ручной флаг ⚠️/✅,
-    # чтобы карточка вернулась к автофлагам.
-    try:
-        if new_reserved <= 0:
-            sdata = _load_symbol_data(symbol)
-            mflags = sdata.get("flags_manual") or {}
-            if lvl in mflags:
-                mflags.pop(lvl, None)
-            sdata["flags_manual"] = mflags
-            _save_symbol_data(symbol, sdata)
-    except Exception:
-        pass
+    # После изменения резервов обновляем автофлаги (⚠️/✅/авто).
+    _recompute_symbol_flags(symbol)
 
     try:
         card = build_symbol_message(symbol)

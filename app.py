@@ -687,7 +687,7 @@ async def _answer_callback(callback: dict) -> dict:
         if not symbol:
             return {"ok": True}
         msg, kb = prepare_cancel_oco(symbol)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подготовка отмены LIMIT 0
@@ -700,7 +700,7 @@ async def _answer_callback(callback: dict) -> dict:
         if not symbol:
             return {"ok": True}
         msg, kb = prepare_cancel_l0(symbol)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подготовка отмены LIMIT 1
@@ -713,7 +713,7 @@ async def _answer_callback(callback: dict) -> dict:
         if not symbol:
             return {"ok": True}
         msg, kb = prepare_cancel_l1(symbol)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подготовка отмены LIMIT 2
@@ -726,7 +726,7 @@ async def _answer_callback(callback: dict) -> dict:
         if not symbol:
             return {"ok": True}
         msg, kb = prepare_cancel_l2(symbol)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подготовка отмены LIMIT 3
@@ -739,7 +739,7 @@ async def _answer_callback(callback: dict) -> dict:
         if not symbol:
             return {"ok": True}
         msg, kb = prepare_cancel_l3(symbol)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подтверждение OCO
@@ -749,14 +749,14 @@ async def _answer_callback(callback: dict) -> dict:
         except ValueError:
             return {"ok": True}
         symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
         try:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        if not symbol:
-            return {"ok": True}
         msg, kb = confirm_cancel_oco(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подтверждение LIMIT 0
@@ -766,14 +766,14 @@ async def _answer_callback(callback: dict) -> dict:
         except ValueError:
             return {"ok": True}
         symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
         try:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        if not symbol:
-            return {"ok": True}
         msg, kb = confirm_cancel_l0(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подтверждение LIMIT 1
@@ -783,14 +783,14 @@ async def _answer_callback(callback: dict) -> dict:
         except ValueError:
             return {"ok": True}
         symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
         try:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        if not symbol:
-            return {"ok": True}
         msg, kb = confirm_cancel_l1(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подтверждение LIMIT 2
@@ -800,14 +800,14 @@ async def _answer_callback(callback: dict) -> dict:
         except ValueError:
             return {"ok": True}
         symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
         try:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        if not symbol:
-            return {"ok": True}
         msg, kb = confirm_cancel_l2(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → CANCEL → подтверждение LIMIT 3
@@ -817,14 +817,14 @@ async def _answer_callback(callback: dict) -> dict:
         except ValueError:
             return {"ok": True}
         symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
         try:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        if not symbol:
-            return {"ok": True}
         msg, kb = confirm_cancel_l3(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
     # ORDERS → FILL → выбор уровня для пометки исполненным (пока только кнопки)
