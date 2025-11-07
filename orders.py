@@ -139,6 +139,13 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
     recompute_pair_aggregates(symbol, month)
+    # Override flag: set BLOCK (⚠️) for this level until fill/rollover
+    levels = get_pair_levels(symbol, month) or {}
+    st2 = levels.get(lvl) or {}
+    st2["override"] = "BLOCK"
+    levels[lvl] = st2
+    save_pair_levels(symbol, month, levels)
+    recompute_pair_aggregates(symbol, month)
 
     card = build_symbol_message(symbol)
     sym = (symbol or "").upper()
