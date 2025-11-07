@@ -139,24 +139,6 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
     recompute_pair_aggregates(symbol, month)
-    # Override flag: set BLOCK (⚠️) for this level until fill/rollover
-    levels = get_pair_levels(symbol, month) or {}
-    st2 = levels.get(lvl) or {}
-    st2["override"] = "BLOCK"
-    levels[lvl] = st2
-    save_pair_levels(symbol, month, levels)
-    recompute_pair_aggregates(symbol, month)
-
-    # Update /data JSON flags for visual card: set current level to ⚠️
-    try:
-        sdata = _load_symbol_data(symbol)
-        flags = sdata.get('flags') or {}
-        flags[lvl] = '⚠️'
-        sdata['flags'] = flags
-        with open(_symbol_data_path(symbol), 'w', encoding='utf-8') as f:
-            json.dump(sdata, f, ensure_ascii=False)
-    except Exception:
-        pass
 
     card = build_symbol_message(symbol)
     sym = (symbol or "").upper()
