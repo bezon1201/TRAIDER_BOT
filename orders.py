@@ -398,3 +398,8 @@ def confirm_cancel_l2(symbol: str, amount: int):   return _confirm_cancel_level(
 
 def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
 def confirm_cancel_l3(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
+
+
+def recompute_flags_for_symbol(symbol: str) -> None:
+    """Публичный помощник для пересчёта флагов по монете."""
+    _recompute_symbol_flags(symbol)

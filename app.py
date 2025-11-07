@@ -33,6 +33,7 @@ from orders import (
     confirm_cancel_l2,
     prepare_cancel_l3,
     confirm_cancel_l3,
+    recompute_flags_for_symbol,
 )
 from general_scheduler import (
     start_collector,
