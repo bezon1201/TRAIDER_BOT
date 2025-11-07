@@ -106,6 +106,24 @@ def build_long_card(data: dict) -> str:
 
     oco = data.get("oco") or {}
     flags = data.get("flags") or {}
+    # Overlay manual overrides from budget levels (persist across ops)
+    try:
+        symbol = data.get("symbol")
+        month = get_pair_budget(symbol, None).get("month") if hasattr(get_pair_budget, "__call__") else None
+    except Exception:
+        symbol = data.get("symbol")
+        month = None
+    try:
+        # we know our budget module uses current month internally if None
+        lvl_states = get_pair_levels(symbol, month) or {}
+        for _k, _st in (lvl_states or {}).items():
+            ov = (_st or {}).get("override")
+            if ov == "BLOCK":  # ⚠️
+                flags[_k] = "⚠️"
+            elif ov == "ALLOW":  # future ✅
+                flags[_k] = "✅"
+    except Exception:
+        pass
     if all(k in oco for k in ("tp_limit", "sl_trigger", "sl_limit")):
         pf = flags.get("OCO", "")
         prefix = _amt_prefix("OCO", pf)
