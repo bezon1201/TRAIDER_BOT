@@ -474,28 +474,23 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = prepare_open_oco(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-    # ORDERS → OPEN → подтверждение OCO
+        # ORDERS → OPEN → подтверждение OCO
     if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
         try:
-            parts = data.split(":")
-            # ["ORDERS_OPEN_OCO_CONFIRM", SYMBOL, AMOUNT]
-            sym_raw = parts[1]
-            amount_raw = parts[2]
-        except Exception:
-            return {"ok": True}
-# ORDERS → OPEN → LIMIT 0 (подтверждение виртуального ордера)
-    if data.startswith("ORDERS_OPEN_L0:"):
-        try:
-            _, sym_raw = data.split(":", 1)
+            _, payload = data.split(":", 1)
+            sym_raw, amount_raw = payload.split(":", 1)
         except ValueError:
             return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
-        if not symbol:
+        try:
+            amount = int(amount_raw)
+        except Exception:
+            amount = 0
+        if not symbol or amount <= 0:
             return {"ok": True}
-        msg, kb = prepare_open_l0(symbol)
+        msg, kb = confirm_open_oco(symbol, amount)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-
     # ORDERS → OPEN → подтверждение LIMIT 0
     if data.startswith("ORDERS_OPEN_L0_CONFIRM:"):
         try:
