@@ -395,21 +395,6 @@ async def _answer_callback(callback: dict) -> dict:
         # BUDGET CANCEL → reset reserve and spent, keep budget, restore single BUDGET button
         if data.startswith("BUDGET_CLEAR:"):
             info = clear_pair_budget(symbol, month)
-
-            # also reset manual flags in /data JSON to auto (🟢/🟡/🔴)
-            try:
-                from symbol_info import _read_json, _coin_path
-                from auto_flags import compute_all_flags
-                path = _coin_path(symbol)
-                sdata = _read_json(path) or {}
-                auto = compute_all_flags(sdata)
-                sdata["flags"] = auto
-                with open(path, "w", encoding="utf-8") as f:
-                    import json as _json
-                    _json.dump(sdata, f, ensure_ascii=False)
-            except Exception:
-                pass
-
             # отправляем обновлённую карточку по символу
             try:
                 sym = info.get("symbol") or symbol

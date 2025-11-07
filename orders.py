@@ -135,21 +135,10 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     actual = min(int(amount), available, free)
     if actual <= 0:
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
-
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
     levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
-
-    # Пишем ручной флаг ⚠️ для уровня в /data JSON (только это изменение)
-    try:
-        sdata = _load_symbol_data(symbol) or {}
-        flags = sdata.get("flags") or {}
-        flags[lvl] = "⚠️"
-        sdata["flags"] = flags
-        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
-            json.dump(sdata, f, ensure_ascii=False)
-    except Exception:
-        pass
+    recompute_pair_aggregates(symbol, month)
 
     card = build_symbol_message(symbol)
     sym = (symbol or "").upper()
@@ -172,7 +161,6 @@ def prepare_open_l3(symbol: str):   return _prepare_open_level(symbol, "L3", "LI
 def confirm_open_l3(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L3", "LIMIT 3")
 
 # ---------- CANCEL (с подтверждением) ----------
-# (флаги не трогаем на этом этапе — только деньги/квоты)
 
 def _prepare_cancel_level(symbol: str, lvl: str, title: str):
     symbol = (symbol or "").upper().strip()
@@ -219,6 +207,7 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str):
 
     levels[lvl] = {"reserved": current - actual, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
+    recompute_pair_aggregates(symbol, month)
 
     card = build_symbol_message(symbol)
     return card, {}
@@ -236,7 +225,6 @@ def prepare_cancel_l3(symbol: str): return _prepare_cancel_level(symbol, "L3", "
 def confirm_cancel_l3(symbol: str, amount: int): return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
 
 # ====== FILL (виртуальное исполнение) ======
-# (флаги не трогаем на этом этапе — только деньги/квоты)
 
 from datetime import datetime as _dt
 
@@ -285,7 +273,6 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str):
     levels[lvl] = {"reserved": current_reserved - actual, "spent": current_spent + actual}
     save_pair_levels(symbol, month, levels)
     recompute_pair_aggregates(symbol, month)
-
     card = build_symbol_message(symbol)
     return card, {}
 

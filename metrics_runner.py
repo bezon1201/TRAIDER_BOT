@@ -272,12 +272,7 @@ async def _collect_one_stub(symbol: str):
                 data.pop("grid", None)
             # auto flags (OCO and L0-L3)
             try:
-                auto = compute_all_flags(data)
-                existing_flags = (existing.get("flags") or {})
-                for _k, _v in (existing_flags or {}).items():
-                    if _v in ("⚠️","✅"):
-                        auto[_k] = _v
-                data["flags"] = auto
+                data["flags"] = compute_all_flags(data)
             except Exception:
                 data.pop("flags", None)
         else:
