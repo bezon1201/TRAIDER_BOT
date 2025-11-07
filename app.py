@@ -12,6 +12,7 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
+from orders import prepare_open_oco, confirm_open_oco
 from general_scheduler import (
     start_collector,
     stop_collector,
@@ -470,6 +471,12 @@ async def _answer_callback(callback: dict) -> dict:
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
+        msg, kb = prepare_open_oco(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
         month = datetime.now().strftime("%Y-%m")
 
         info = get_pair_budget(symbol, month)
@@ -674,12 +681,21 @@ async def _answer_callback(callback: dict) -> dict:
 
 
     # ORDERS → OPEN → подтверждение OCO
-    if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
+        if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
         try:
-            _, payload = data.split(":", 1)
-            sym_raw, amount_raw = payload.split(":", 1)
+            _, sym, amount_str = data.split(":", 2)
         except ValueError:
             return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol or amount <= 0:
+            return {"ok": True}
+        msg, kb = confirm_open_oco(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -862,13 +878,13 @@ async def _answer_callback(callback: dict) -> dict:
         recompute_pair_aggregates(symbol, month)
 
         # собираем карточку и показываем пользователю
-        msg = build_symbol_message(symbol)
-
-
-
-
-
-        
+        sdata = _load_symbol_data(symbol)
+        msg = build_symbol_message(
+            symbol=symbol,
+            month=month,
+            info=get_pair_budget(symbol, month),
+            symbol_data=sdata,
+        )
         kb = build_budget_keyboard(symbol, month)
         await tg_send(chat_id, msg, reply_markup=kb)
 

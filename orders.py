@@ -1,144 +1,183 @@
-"""
-orders.py — логика ордеров для бота (v17)
-
-В ЭТОЙ ВЕРСИИ:
-- Файл пока содержит только структуры данных и вспомогательные функции.
-- Весь существующий рабочий код из app.py *НЕ* тронут.
-- В следующих версиях будем переносить обработчики ORDERS_* из app.py сюда.
-
-Идея:
-  app.py отвечает только за Telegram / FastAPI.
-  orders.py отвечает за расчёты: виртуальные ордера, бюджеты, статусы.
-"""
-
 from __future__ import annotations
+from datetime import datetime
+from typing import Tuple, Dict, Any
 
-from dataclasses import dataclass
-from typing import Literal, Optional, Dict, Any
+import os, json
 
+from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates
+from symbol_info import build_symbol_message
 
-Side = Literal["BUY", "SELL"]
+# локальные константы распределения недельного бюджета — копия из app.py
+WEEKLY_PERCENT = {
+    "UP":   {"OCO": 10, "L0": 10, "L1": 5,  "L2": 0,  "L3": 0},
+    "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
+    "DOWN": {"OCO": 0,  "L0": 0,  "L1": 10, "L2": 10, "L3": 5},
+}
 
+def _symbol_data_path(symbol: str) -> str:
+    storage_dir = os.getenv("STORAGE_DIR", "/data")
+    return os.path.join(storage_dir, f"{symbol}.json")
 
-@dataclass
-class BudgetPosition:
+def _load_symbol_data(symbol: str) -> dict:
+    try:
+        with open(_symbol_data_path(symbol), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _mode_key_from_symbol(symbol: str) -> str:
+    sdata = _load_symbol_data(symbol)
+    market_mode = sdata.get("market_mode")
+    raw_mode = market_mode.get("12h") if isinstance(market_mode, dict) else market_mode
+    raw_mode_str = str(raw_mode or "").upper()
+    if "UP" in raw_mode_str:
+        return "UP"
+    elif "DOWN" in raw_mode_str:
+        return "DOWN"
+    return "RANGE"
+
+def _flag_desc(flag: str) -> str:
+    if flag == "🟢":
+        return "цена ниже / внизу коридора — можно брать по рынку"
+    if flag == "🟡":
+        return "можно открыть по рекомендациям"
+    if flag == "🔴":
+        return "цена высока — ордер ставить рискованно"
+    return "нет автофлага"
+
+def prepare_open_oco(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    """Подготовить текст и клавиатуру подтверждения 'OCO OPEN'.
+    Возвращает (message_text, reply_markup). Исключения не бросает, сообщения об ошибке возвращаются как текст.
     """
-    Срез бюджета по конкретному символу и месяцу.
-    Сейчас это просто оболочка над dict, чтобы было удобнее работать.
-    """
-    free: float
-    reserve: float
-    spent: float
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
 
-    @property
-    def total(self) -> float:
-        return self.free + self.reserve + self.spent
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    budget = int(info.get("budget") or 0)
+    free = int(info.get("free") or 0)
+    week = int(info.get("week") or 0)
 
+    if week <= 0 or budget <= 0:
+        return f"{symbol} {month}\nЦикл ещё не запущен (Wk{week}) или бюджет 0 — OCO недоступен.", {}
 
-@dataclass
-class VirtualOrder:
-    """
-    Виртуальный ордер, который мы показываем в карточке перед отправкой на биржу.
+    mode_key = _mode_key_from_symbol(symbol)
+    perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
+    p_oco = int(perc.get("OCO") or 0)
+    if p_oco <= 0:
+        return f"{symbol} {month}\nДля уровня OCO в режиме {mode_key} доля бюджета 0% — OCO не используется.", {}
 
-    Пока что здесь только минимально необходимое; по мере переноса логики
-    из app.py можно будет расширять (стопы, тейки и т.п.).
-    """
-    symbol: str
-    side: Side
-    price: float
-    amount: float
-    comment: str | None = None
+    quota = int(round(budget * p_oco / 100.0))
+    levels = get_pair_levels(symbol, month) or {}
+    lvl_state = levels.get("OCO") or {}
+    used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
+    available = quota - used
+    if available <= 0:
+        return f"{symbol} {month}\nЛимит по OCO уже исчерпан (доступно 0 USDC).", {}
+    if free <= 0:
+        return f"{symbol} {month}\nСвободный бюджет 0 USDC — сначала освободите бюджет.", {}
 
-    def as_dict(self) -> Dict[str, Any]:
-        return {
-            "symbol": self.symbol,
-            "side": self.side,
-            "price": self.price,
-            "amount": self.amount,
-            "comment": self.comment,
-        }
+    if available > free:
+        # предупреждение о нехватке свободного бюджета
+        return (
+            f"{symbol} {month}\n"
+            f"По уровню OCO доступно {available} USDC, но свободно в бюджете только {free} USDC.\n"
+            f"Сначала освободите бюджет или уменьшите другие уровни.",
+            {}
+        )
 
+    # автофлаг и описание
+    sdata = _load_symbol_data(symbol)
+    flags = sdata.get("flags") or {}
+    flag_oco = flags.get("OCO") or ""
+    flag_desc = _flag_desc(flag_oco)
 
-def calc_order_notional(price: float, amount: float) -> float:
-    """
-    Общая стоимость (quote-часть) ордера.
-    """
-    return round(price * amount, 8)
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
 
-
-def allocate_from_budget(
-    free: float,
-    reserve: float,
-    spent: float,
-    need: float,
-) -> tuple[bool, float, float, float]:
-    """
-    Простая функция, которая пытается "занять" деньги из бюджета.
-
-    Возвращает:
-      ok, new_free, new_reserve, new_spent
-
-    Логика сейчас примитивная: сначала тратим free, потом, если нужно,
-    залезаем в reserve. Реальные правила можно будет донастроить позже.
-    """
-    if need <= 0:
-        return True, free, reserve, spent
-
-    total_available = free + reserve
-    if need > total_available:
-        return False, free, reserve, spent
-
-    use_free = min(free, need)
-    remaining = need - use_free
-    use_reserve = remaining
-
-    new_free = free - use_free
-    new_reserve = reserve - use_reserve
-    new_spent = spent + need
-
-    return True, new_free, new_reserve, new_spent
-
-
-# Заготовка под будущий перенос логики из app.py.
-# Пример того, как может выглядеть "чистая" функция для сборки
-# превью по LIMIT 0:
-def build_limit0_preview(
-    symbol: str,
-    side: Side,
-    price: float,
-    amount: float,
-    month: str,
-    budget_snapshot: BudgetPosition,
-) -> dict:
-    """
-    Чистая функция без Telegram: готовит данные для карточки LIMIT 0.
-
-    Возвращает словарь с тем, что нужно отобразить в UI.
-    """
-    notional = calc_order_notional(price, amount)
-    ok, new_free, new_reserve, new_spent = allocate_from_budget(
-        budget_snapshot.free,
-        budget_snapshot.reserve,
-        budget_snapshot.spent,
-        notional,
+    msg = (
+        f"{symbol} {mon_disp} Wk{week}\n"
+        f"OCO OPEN\n\n"
+        f"Сумма: {available} USDC\n"
+        f"Флаг: {flag_oco or '-'} ({flag_desc})\n"
+        f"Поставить виртуальный OCO-ордер на {available} USDC?"
     )
-
-    return {
-        "ok": ok,
-        "symbol": symbol,
-        "side": side,
-        "price": price,
-        "amount": amount,
-        "notional": notional,
-        "month": month,
-        "budget_before": {
-            "free": budget_snapshot.free,
-            "reserve": budget_snapshot.reserve,
-            "spent": budget_snapshot.spent,
-        },
-        "budget_after": {
-            "free": new_free,
-            "reserve": new_reserve,
-            "spent": new_spent,
-        },
+    kb = {
+        "inline_keyboard": [
+            [
+                {"text": "CONFIRM", "callback_data": f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"},
+                {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+            ]
+        ]
     }
+    return msg, kb
+
+def confirm_open_oco(symbol: str, amount: int) -> Tuple[str, Dict[str, Any]]:
+    """Подтвердить OCO OPEN: обновляет резерв и возвращает текст/клавиатуру для карточки символа.
+    Возвращает (text, reply_markup). Если карточку собрать не удалось — вернётся краткое текстовое подтверждение.
+    """
+    symbol = (symbol or "").upper().strip()
+    if not symbol or amount <= 0:
+        return "Некорректные параметры операции.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    budget = int(info.get("budget") or 0)
+    free = int(info.get("free") or 0)
+    week = int(info.get("week") or 0)
+
+    if week <= 0 or budget <= 0:
+        return f"{symbol} {month}\nЦикл не запущен или бюджет 0 — операция отклонена.", {}
+
+    # пересчёт лимитов на момент подтверждения
+    mode_key = _mode_key_from_symbol(symbol)
+    perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
+    p_oco = int(perc.get("OCO") or 0)
+    if p_oco <= 0:
+        return f"{symbol} {month}\nДля уровня OCO в режиме {mode_key} доля бюджета 0% — операция отменена.", {}
+
+    quota = int(round(budget * p_oco / 100.0))
+    levels = get_pair_levels(symbol, month) or {}
+    lvl_state = levels.get("OCO") or {}
+    used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
+    available = quota - used
+    if available <= 0 or free <= 0:
+        return f"{symbol} {month}\nЛимит по OCO или свободный бюджет уже исчерпаны — операция отменена.", {}
+
+    actual = min(int(amount), available, free)
+    if actual <= 0:
+        return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
+
+    # обновляем состояние уровня OCO
+    new_reserved = int(lvl_state.get("reserved") or 0) + actual
+    levels["OCO"] = {
+        "reserved": new_reserved,
+        "spent": int(lvl_state.get("spent") or 0),
+    }
+    save_pair_levels(symbol, month, levels)
+    info2 = recompute_pair_aggregates(symbol, month)
+
+    # пробуем собрать карточку символа
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard": [[
+                {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
+            ]]
+        }
+        return card, kb
+    except Exception:
+        # fallback короткий текст
+        msg = (
+            f"{symbol} {month}\n"
+            f"OCO: виртуальный ордер на {actual} USDC учтён в резерве.\n"
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
+        return msg, {}

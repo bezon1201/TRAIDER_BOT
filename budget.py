@@ -7,6 +7,166 @@ BUDGET_FILE = os.path.join(STORAGE_DIR, "budget.json")
 BUDGET_STATE_FILE = os.path.join(STORAGE_DIR, "budget_state.json")
 
 
+BUDGET_LEVELS_FILE = os.path.join(STORAGE_DIR, "budget_levels.json")
+LEVEL_KEYS = ("OCO", "L0", "L1", "L2", "L3")
+
+
+def _load_levels() -> Dict[str, Any]:
+    """Load per-level budget state (reserved/spent per OCO/L0-L3)."""
+    data = _load_json(BUDGET_LEVELS_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    if "pairs" not in data or not isinstance(data.get("pairs"), dict):
+        data["pairs"] = {}
+    return data
+
+
+def _save_levels(data: Dict[str, Any]) -> None:
+    _save_json(BUDGET_LEVELS_FILE, data)
+
+
+def get_pair_levels(symbol: str, month: str) -> Dict[str, Dict[str, int]]:
+    """Return per-level state for a pair/month with defaults.
+
+    Structure:
+    {
+        "OCO": {"reserved": int, "spent": int},
+        "L0": {...},
+        ...
+    }
+    """
+    sym = _norm_symbol(symbol)
+    mkey = str(month)
+    data = _load_levels()
+    pairs = data.get("pairs") or {}
+    p = pairs.get(sym) or {}
+    monthly = p.get("monthly") or {}
+    cur = monthly.get(mkey) or {}
+
+    result: Dict[str, Dict[str, int]] = {}
+    for lvl in LEVEL_KEYS:
+        raw = cur.get(lvl) or {}
+        try:
+            reserved = int(raw.get("reserved") or 0)
+        except Exception:
+            reserved = 0
+        try:
+            spent = int(raw.get("spent") or 0)
+        except Exception:
+            spent = 0
+        if reserved < 0:
+            reserved = 0
+        if spent < 0:
+            spent = 0
+        result[lvl] = {"reserved": reserved, "spent": spent}
+    return result
+
+
+def _save_pair_levels(symbol: str, month: str, levels: Dict[str, Dict[str, int]]) -> None:
+    """Persist per-level state for a pair/month."""
+    sym = _norm_symbol(symbol)
+    mkey = str(month)
+    data = _load_levels()
+    pairs = data.setdefault("pairs", {})
+    p = pairs.setdefault(sym, {})
+    monthly = p.setdefault("monthly", {})
+
+    entry: Dict[str, Any] = {}
+    for lvl in LEVEL_KEYS:
+        src = levels.get(lvl) or {}
+        try:
+            reserved = int(src.get("reserved") or 0)
+        except Exception:
+            reserved = 0
+        try:
+            spent = int(src.get("spent") or 0)
+        except Exception:
+            spent = 0
+        if reserved < 0:
+            reserved = 0
+        if spent < 0:
+            spent = 0
+        entry[lvl] = {"reserved": reserved, "spent": spent}
+
+    monthly[mkey] = entry
+    _save_levels(data)
+
+
+def save_pair_levels(symbol: str, month: str, levels: Dict[str, Dict[str, int]]) -> None:
+    """Public wrapper around _save_pair_levels for external modules (app.py)."""
+    _save_pair_levels(symbol, month, levels)
+
+
+def clear_pair_levels(symbol: str, month: str) -> None:
+    """Reset per-level state for a pair/month (used by BUDGET CANCEL)."""
+    sym = _norm_symbol(symbol)
+    mkey = str(month)
+    data = _load_levels()
+    pairs = data.get("pairs") or {}
+    p = pairs.get(sym)
+    if not p:
+        return
+    monthly = p.get("monthly") or {}
+    if mkey in monthly:
+        monthly.pop(mkey, None)
+        # clean up empty structures
+        if not monthly:
+            p.pop("monthly", None)
+        if not p.get("monthly"):
+            pairs.pop(sym, None)
+        _save_levels(data)
+
+
+def recompute_pair_aggregates(symbol: str, month: str) -> Dict[str, int]:
+    """Recalculate total reserve/spent in budget.json from per-level state."""
+    sym = _norm_symbol(symbol)
+    mkey = str(month)
+
+    # read per-level state
+    levels = get_pair_levels(sym, mkey)
+    total_reserve = sum(int(v.get("reserved") or 0) for v in levels.values())
+    total_spent = sum(int(v.get("spent") or 0) for v in levels.values())
+    if total_reserve < 0:
+        total_reserve = 0
+    if total_spent < 0:
+        total_spent = 0
+
+    data = _load_budget()
+    pairs = data.setdefault("pairs", {})
+    p = pairs.setdefault(sym, {})
+    monthly = p.setdefault("monthly", {})
+    cur_raw = monthly.get(mkey) or {}
+    norm = _normalize_entry(cur_raw)
+
+    budget = norm["budget"]
+    week = int(cur_raw.get("week") or 0)
+
+    reserve = total_reserve
+    spent = total_spent
+    free = budget - reserve - spent
+    if free < 0:
+        free = 0
+
+    monthly[mkey] = {
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+        "week": week,
+    }
+    _save_budget(data)
+
+    return {
+        "symbol": sym,
+        "month": mkey,
+        "week": week,
+        "budget": budget,
+        "reserve": reserve,
+        "spent": spent,
+        "free": free,
+    }
+
+
+
 def _load_json(path: str, default: Any) -> Any:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -198,6 +358,10 @@ def clear_pair_budget(symbol: str, month: str) -> Dict[str, int]:
     """
     sym = _norm_symbol(symbol)
     mkey = str(month)
+
+    # сбрасываем помесячное состояние уровней (OCO/L0-L3)
+    clear_pair_levels(sym, mkey)
+
     data = _load_budget()
     pairs = data.setdefault("pairs", {})
     p = pairs.setdefault(sym, {})
