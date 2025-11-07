@@ -147,6 +147,17 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     save_pair_levels(symbol, month, levels)
     recompute_pair_aggregates(symbol, month)
 
+    # Update /data JSON flags for visual card: set current level to ⚠️
+    try:
+        sdata = _load_symbol_data(symbol)
+        flags = sdata.get('flags') or {}
+        flags[lvl] = '⚠️'
+        sdata['flags'] = flags
+        with open(_symbol_data_path(symbol), 'w', encoding='utf-8') as f:
+            json.dump(sdata, f, ensure_ascii=False)
+    except Exception:
+        pass
+
     card = build_symbol_message(symbol)
     sym = (symbol or "").upper()
     kb = {"inline_keyboard": [[
