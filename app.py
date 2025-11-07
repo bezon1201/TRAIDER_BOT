@@ -868,7 +868,7 @@ async def _answer_callback(callback: dict) -> dict:
 
 
 
-        )
+        
         kb = build_budget_keyboard(symbol, month)
         await tg_send(chat_id, msg, reply_markup=kb)
 
