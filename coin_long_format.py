@@ -105,14 +105,14 @@ def build_long_card(data: dict) -> str:
     lines = [header1, header2, f"Price {_i(price)}$ {mtext} {mode}"]
 
     oco = data.get("oco") or {}
-    auto_flags = data.get("flags") or {}
+    flags = data.get("flags") or {}
     manual_flags = data.get("flags_manual") or {}
 
     def _pick_flag(level: str) -> str:
         mf = (manual_flags or {}).get(level)
         if mf:
             return mf
-        return (auto_flags or {}).get(level, "")
+        return (flags or {}).get(level, "")
 
     if all(k in oco for k in ("tp_limit", "sl_trigger", "sl_limit")):
         pf = _pick_flag("OCO")

@@ -24,18 +24,23 @@ def _load_symbol_data(symbol: str) -> dict:
     except Exception:
         return {}
 
-
 def _save_symbol_data(symbol: str, data: dict) -> None:
+    """Persist symbol JSON alongside auto flags and other metrics.
+
+    Best-effort write: errors are silently ignored so that trading logic
+    is not broken by filesystem issues.
+    """
     path = _symbol_data_path(symbol)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, path)
     except Exception:
-        # best-effort: не роняем логику ордеров, если не удалось сохранить флаг
+        # best-effort; ignore write errors
         pass
+
 
 def _mode_key_from_symbol(symbol: str) -> str:
     sdata = _load_symbol_data(symbol)
@@ -102,8 +107,6 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     sdata = _load_symbol_data(symbol)
     auto_flags = sdata.get("flags") or {}
     manual_flags = sdata.get("flags_manual") or {}
-
-    # приоритет флагов: сначала ручные (⚠️/✅), затем автофлаги
     flag_val = (manual_flags.get(lvl)
                 or auto_flags.get(lvl)
                 or "")
@@ -166,15 +169,16 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    # после перевода средств из 🎯free в ⏳reserve помечаем уровень ручным флагом ⚠️
+    # После открытия виртуального ордера помечаем уровень ручным флагом ⚠️,
+    # чтобы он имел приоритет над автофлагами при построении карточки.
     try:
         sdata = _load_symbol_data(symbol)
-        manual_flags = sdata.get("flags_manual") or {}
-        manual_flags[lvl] = "⚠️"
-        sdata["flags_manual"] = manual_flags
+        mflags = sdata.get("flags_manual") or {}
+        mflags[lvl] = "⚠️"
+        sdata["flags_manual"] = mflags
         _save_symbol_data(symbol, sdata)
     except Exception:
-        # не мешаем основному потоку, если флаг не удалось сохранить
+        # не мешаем основной логике, если не удалось обновить флаги
         pass
 
     try:
@@ -196,6 +200,191 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         )
         return msg, {}
 
+def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+    """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    week = int(info.get("week") or 0)
+
+    levels = get_pair_levels(symbol, month)
+    lvl_state = levels.get(lvl) or {}
+    reserved = int(lvl_state.get("reserved") or 0)
+
+    # Подтягиваем флаг (ручной имеет приоритет над авто)
+    sdata = _load_symbol_data(symbol)
+    auto_flags = sdata.get("flags") or {}
+    manual_flags = sdata.get("flags_manual") or {}
+    flag_val = (manual_flags.get(lvl)
+                or auto_flags.get(lvl)
+                or "")
+    flag_desc = _flag_desc(flag_val)
+
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+
+    if reserved <= 0:
+        msg = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"{title} CANCEL\n\n"
+            f"Нет виртуального ордера на уровне {title} (в резерве 0 USDC)."
+        )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+    msg = (
+        f"{symbol} {mon_disp} Wk{week}\n"
+        f"{title} CANCEL\n\n"
+        f"Сейчас в резерве: {reserved} USDC\n"
+        f"Вернуть в free:   {reserved} USDC\n\n"
+        f"Флаг: {flag_val or '-'} ({flag_desc})\n"
+        f"Отменить виртуальный {title} на {reserved} USDC?"
+    )
+    cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
+    kb = {
+        "inline_keyboard": [[
+            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
+            {"text": "↩️", "callback_data": f"ORDERS_CANCEL:{symbol}"},
+        ]]
+    }
+    return msg, kb
+
+
+def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+    """Подтверждение отмены: возвращаем резерв в free и снимаем ручной флаг."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректные параметры операции.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    levels = get_pair_levels(symbol, month)
+    lvl_state = levels.get(lvl) or {}
+    reserved = int(lvl_state.get("reserved") or 0)
+
+    if reserved <= 0:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp} Wk?\n"
+            f"{title} CANCEL\n\n"
+            f"Нечего отменять: резерв уже 0 USDC."
+        )
+        # остаёмся в меню CANCEL
+        sym = symbol
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+    try:
+        requested = int(amount)
+    except Exception:
+        requested = 0
+    if requested <= 0:
+        requested = reserved
+    actual = min(reserved, requested)
+    new_reserved = reserved - actual
+    if new_reserved < 0:
+        new_reserved = 0
+
+    levels[lvl] = {
+        "reserved": new_reserved,
+        "spent": int(lvl_state.get("spent") or 0),
+    }
+    save_pair_levels(symbol, month, levels)
+    info2 = recompute_pair_aggregates(symbol, month)
+
+    # Если резерв на уровне обнулился — снимаем ручной флаг ⚠️/✅,
+    # чтобы карточка вернулась к автофлагам.
+    try:
+        if new_reserved <= 0:
+            sdata = _load_symbol_data(symbol)
+            mflags = sdata.get("flags_manual") or {}
+            if lvl in mflags:
+                mflags.pop(lvl, None)
+            sdata["flags_manual"] = mflags
+            _save_symbol_data(symbol, sdata)
+    except Exception:
+        pass
+
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return card, kb
+    except Exception:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp}\n"
+            f"{title}: отменён виртуальный ордер на {actual} USDC.\n"
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+
+# Публичные API для уровней
+
 # Публичные API для уровней
 def prepare_open_oco(symbol: str):  return _prepare_open_level(symbol, "OCO", "OCO")
 def confirm_open_oco(symbol: str, amount: int):  return _confirm_open_level(symbol, amount, "OCO", "OCO")
@@ -211,3 +400,18 @@ def confirm_open_l2(symbol: str, amount: int):   return _confirm_open_level(symb
 
 def prepare_open_l3(symbol: str):   return _prepare_open_level(symbol, "L3", "LIMIT 3")
 def confirm_open_l3(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L3", "LIMIT 3")
+
+def prepare_cancel_oco(symbol: str):  return _prepare_cancel_level(symbol, "OCO", "OCO")
+def confirm_cancel_oco(symbol: str, amount: int):  return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
+
+def prepare_cancel_l0(symbol: str):   return _prepare_cancel_level(symbol, "L0", "LIMIT 0")
+def confirm_cancel_l0(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
+
+def prepare_cancel_l1(symbol: str):   return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
+def confirm_cancel_l1(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
+
+def prepare_cancel_l2(symbol: str):   return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
+def confirm_cancel_l2(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
+
+def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
+def confirm_cancel_l3(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")

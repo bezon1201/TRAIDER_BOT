@@ -12,7 +12,28 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
-from orders import prepare_open_oco, confirm_open_oco, prepare_open_l0, confirm_open_l0, prepare_open_l1, confirm_open_l1, prepare_open_l2, confirm_open_l2, prepare_open_l3, confirm_open_l3
+from orders import (
+    prepare_open_oco,
+    confirm_open_oco,
+    prepare_open_l0,
+    confirm_open_l0,
+    prepare_open_l1,
+    confirm_open_l1,
+    prepare_open_l2,
+    confirm_open_l2,
+    prepare_open_l3,
+    confirm_open_l3,
+    prepare_cancel_oco,
+    confirm_cancel_oco,
+    prepare_cancel_l0,
+    confirm_cancel_l0,
+    prepare_cancel_l1,
+    confirm_cancel_l1,
+    prepare_cancel_l2,
+    confirm_cancel_l2,
+    prepare_cancel_l3,
+    confirm_cancel_l3,
+)
 from general_scheduler import (
     start_collector,
     stop_collector,
@@ -630,7 +651,7 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = confirm_open_oco(symbol, amount)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-    # ORDERS → CANCEL → выбор уровня для отмены (пока только кнопки)
+    # ORDERS → CANCEL → выбор уровня для отмены
     if data.startswith("ORDERS_CANCEL:"):
         try:
             _, sym_raw = data.split(":", 1)
@@ -654,6 +675,156 @@ async def _answer_callback(callback: dict) -> dict:
             ]
         }
         await _edit_markup(kb)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подготовка отмены OCO
+    if data.startswith("ORDERS_CANCEL_OCO:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_cancel_oco(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подготовка отмены LIMIT 0
+    if data.startswith("ORDERS_CANCEL_L0:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_cancel_l0(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подготовка отмены LIMIT 1
+    if data.startswith("ORDERS_CANCEL_L1:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_cancel_l1(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подготовка отмены LIMIT 2
+    if data.startswith("ORDERS_CANCEL_L2:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_cancel_l2(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подготовка отмены LIMIT 3
+    if data.startswith("ORDERS_CANCEL_L3:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_cancel_l3(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подтверждение OCO
+    if data.startswith("ORDERS_CANCEL_OCO_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_oco(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подтверждение LIMIT 0
+    if data.startswith("ORDERS_CANCEL_L0_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_l0(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подтверждение LIMIT 1
+    if data.startswith("ORDERS_CANCEL_L1_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_l1(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подтверждение LIMIT 2
+    if data.startswith("ORDERS_CANCEL_L2_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_l2(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+
+    # ORDERS → CANCEL → подтверждение LIMIT 3
+    if data.startswith("ORDERS_CANCEL_L3_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_l3(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
 
     # ORDERS → FILL → выбор уровня для пометки исполненным (пока только кнопки)
