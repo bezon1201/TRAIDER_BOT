@@ -24,6 +24,19 @@ def _load_symbol_data(symbol: str) -> dict:
     except Exception:
         return {}
 
+
+def _save_symbol_data(symbol: str, data: dict) -> None:
+    path = _symbol_data_path(symbol)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+    except Exception:
+        # best-effort: не роняем логику ордеров, если не удалось сохранить флаг
+        pass
+
 def _mode_key_from_symbol(symbol: str) -> str:
     sdata = _load_symbol_data(symbol)
     market_mode = sdata.get("market_mode")
@@ -42,7 +55,11 @@ def _flag_desc(flag: str) -> str:
         return "можно открыть по рекомендациям"
     if flag == "🔴":
         return "цена высока — ордер ставить рискованно"
-    return "нет автофлага"
+    if flag == "⚠️":
+        return "есть виртуальный ордер на этом уровне"
+    if flag == "✅":
+        return "уровень уже отработан"
+    return "нет флага"
 
 def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
@@ -83,8 +100,13 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         )
 
     sdata = _load_symbol_data(symbol)
-    flags = sdata.get("flags") or {}
-    flag_val = flags.get(lvl) or ""
+    auto_flags = sdata.get("flags") or {}
+    manual_flags = sdata.get("flags_manual") or {}
+
+    # приоритет флагов: сначала ручные (⚠️/✅), затем автофлаги
+    flag_val = (manual_flags.get(lvl)
+                or auto_flags.get(lvl)
+                or "")
     flag_desc = _flag_desc(flag_val)
 
     mon_disp = month
@@ -143,6 +165,17 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
+
+    # после перевода средств из 🎯free в ⏳reserve помечаем уровень ручным флагом ⚠️
+    try:
+        sdata = _load_symbol_data(symbol)
+        manual_flags = sdata.get("flags_manual") or {}
+        manual_flags[lvl] = "⚠️"
+        sdata["flags_manual"] = manual_flags
+        _save_symbol_data(symbol, sdata)
+    except Exception:
+        # не мешаем основному потоку, если флаг не удалось сохранить
+        pass
 
     try:
         card = build_symbol_message(symbol)

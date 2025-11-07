@@ -105,16 +105,24 @@ def build_long_card(data: dict) -> str:
     lines = [header1, header2, f"Price {_i(price)}$ {mtext} {mode}"]
 
     oco = data.get("oco") or {}
-    flags = data.get("flags") or {}
+    auto_flags = data.get("flags") or {}
+    manual_flags = data.get("flags_manual") or {}
+
+    def _pick_flag(level: str) -> str:
+        mf = (manual_flags or {}).get(level)
+        if mf:
+            return mf
+        return (auto_flags or {}).get(level, "")
+
     if all(k in oco for k in ("tp_limit", "sl_trigger", "sl_limit")):
-        pf = flags.get("OCO", "")
+        pf = _pick_flag("OCO")
         prefix = _amt_prefix("OCO", pf)
         lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
 
     grid = data.get("grid") or {}
     for k in ("L0", "L1", "L2", "L3"):
         if k in grid and grid[k] is not None:
-            pf = (flags or {}).get(k, "")
+            pf = _pick_flag(k)
             prefix = _amt_prefix(k, pf)
             lines.append(f"{prefix}{k} {_i(grid[k])}$")
 
