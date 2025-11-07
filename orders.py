@@ -138,6 +138,16 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
     levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
+    # set manual flag ⚠️ for this level in /data JSON
+    try:
+        sdata = _load_symbol_data(symbol) or {}
+        flags = sdata.get("flags") or {}
+        flags[lvl] = "⚠️"
+        sdata["flags"] = flags
+        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
+            json.dump(sdata, f, ensure_ascii=False)
+    except Exception:
+        pass
     recompute_pair_aggregates(symbol, month)
 
     card = build_symbol_message(symbol)
@@ -207,6 +217,16 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str):
 
     levels[lvl] = {"reserved": current - actual, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
+    # set manual flag ⚠️ for this level in /data JSON
+    try:
+        sdata = _load_symbol_data(symbol) or {}
+        flags = sdata.get("flags") or {}
+        flags[lvl] = "⚠️"
+        sdata["flags"] = flags
+        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
+            json.dump(sdata, f, ensure_ascii=False)
+    except Exception:
+        pass
     recompute_pair_aggregates(symbol, month)
 
     card = build_symbol_message(symbol)
@@ -272,6 +292,16 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str):
 
     levels[lvl] = {"reserved": current_reserved - actual, "spent": current_spent + actual}
     save_pair_levels(symbol, month, levels)
+    # set manual flag ⚠️ for this level in /data JSON
+    try:
+        sdata = _load_symbol_data(symbol) or {}
+        flags = sdata.get("flags") or {}
+        flags[lvl] = "⚠️"
+        sdata["flags"] = flags
+        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
+            json.dump(sdata, f, ensure_ascii=False)
+    except Exception:
+        pass
     recompute_pair_aggregates(symbol, month)
     card = build_symbol_message(symbol)
     return card, {}
