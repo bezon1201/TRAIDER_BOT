@@ -13,7 +13,7 @@ from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
 from orders import (
-    prepare_open_oco, confirm_open_oco,
+prepare_open_oco, confirm_open_oco,
     prepare_open_l0, confirm_open_l0,
     prepare_open_l1, confirm_open_l1,
     prepare_open_l2, confirm_open_l2,
@@ -22,12 +22,7 @@ from orders import (
     prepare_cancel_l0, confirm_cancel_l0,
     prepare_cancel_l1, confirm_cancel_l1,
     prepare_cancel_l2, confirm_cancel_l2,
-    prepare_cancel_l3, confirm_cancel_l3,
-    prepare_fill_oco, confirm_fill_oco,
-    prepare_fill_l0, confirm_fill_l0,
-    prepare_fill_l1, confirm_fill_l1,
-    prepare_fill_l2, confirm_fill_l2,
-    prepare_fill_l3, confirm_fill_l3,
+    prepare_cancel_l3, confirm_cancel_l3, prepare_fill_oco, confirm_fill_oco, prepare_fill_l0, confirm_fill_l0, prepare_fill_l1, confirm_fill_l1, prepare_fill_l2, confirm_fill_l2, prepare_fill_l3, confirm_fill_l3,
 )
 from general_scheduler import (
     start_collector,
@@ -302,7 +297,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -334,7 +329,7 @@ async def _answer_callback(callback: dict) -> dict:
             try:
                 _, sym_raw = data.split(":", 1)
             except ValueError:
-                    return {"ok": True}
+                return {"ok": True}
             symbol = (sym_raw or "").upper().strip()
             if not symbol:
                 return {"ok": True}
@@ -458,7 +453,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -483,7 +478,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -497,13 +492,13 @@ async def _answer_callback(callback: dict) -> dict:
             _, payload = data.split(":", 1)
             sym_raw, amount_raw = payload.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
     # ORDERS → OPEN → LIMIT 0 (подтверждение виртуального ордера)
     if data.startswith("ORDERS_OPEN_L0:"):
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -516,7 +511,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym, amount_str = data.split(":", 2)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym or "").upper().strip()
         try:
             amount = int(amount_str)
@@ -533,7 +528,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -546,7 +541,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym, amount_str = data.split(":", 2)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym or "").upper().strip()
         try:
             amount = int(amount_str)
@@ -563,7 +558,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -576,7 +571,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym, amount_str = data.split(":", 2)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym or "").upper().strip()
         try:
             amount = int(amount_str)
@@ -593,7 +588,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -606,7 +601,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym, amount_str = data.split(":", 2)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         
 
    # ORDERS → OPEN → подтверждение OCO
@@ -615,7 +610,7 @@ async def _answer_callback(callback: dict) -> dict:
             _, payload = data.split(":", 1)
             sym_raw, amount_raw = payload.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         try:
             amount = int(amount_raw)
@@ -632,7 +627,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -682,6 +677,130 @@ async def _answer_callback(callback: dict) -> dict:
         ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
         await tg_send(chat_id, _code(msg), reply_markup=kb2)
         return {"ok": True}
+
+    # ORDERS → FILL (подменю уровней)
+    if data.startswith("ORDERS_FILL:"):
+        try:
+            _, sym = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        kb = {"inline_keyboard": [[
+            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+        msg = build_symbol_message(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb)
+        return {"ok": True}
+
+    # ====== ORDERS → FILL per-level ======
+    # OCO
+    if data.startswith("ORDERS_FILL_OCO:"):
+        try:
+            _, sym = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        msg, kb = prepare_fill_oco(symbol)
+        if not kb:
+            kb2 = {"inline_keyboard": [[
+                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+            await tg_send(chat_id, _code(msg), reply_markup=kb2)
+            return {"ok": True}
+        await tg_send(chat_id, _code(msg), reply_markup=kb)
+        return {"ok": True}
+
+    if data.startswith("ORDERS_FILL_OCO_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        if not symbol or amount <= 0:
+            return {"ok": True}
+        msg, _ = confirm_fill_oco(symbol, amount)
+        kb2 = {"inline_keyboard": [[
+            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+        await tg_send(chat_id, _code(msg), reply_markup=kb2)
+        return {"ok": True}
+
+    # L0..L3
+    for _lvl, _title in [("L0","LIMIT 0"),("L1","LIMIT 1"),("L2","LIMIT 2"),("L3","LIMIT 3")]:
+        if data.startswith(f"ORDERS_FILL_{_lvl}:"):
+            try:
+                _, sym = data.split(":", 1)
+            except ValueError:
+                return {"ok": True}
+            symbol = (sym or "").upper().strip()
+            fn = {
+                "L0": prepare_fill_l0,
+                "L1": prepare_fill_l1,
+                "L2": prepare_fill_l2,
+                "L3": prepare_fill_l3,
+            }[_lvl]
+            msg, kb = fn(symbol)
+            if not kb:
+                kb2 = {"inline_keyboard": [[
+                    {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+                ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+                await tg_send(chat_id, _code(msg), reply_markup=kb2)
+                return {"ok": True}
+            await tg_send(chat_id, _code(msg), reply_markup=kb)
+            return {"ok": True}
+
+        if data.startswith(f"ORDERS_FILL_{_lvl}_CONFIRM:"):
+            try:
+                _, sym, amount_str = data.split(":", 2)
+            except ValueError:
+                return {"ok": True}
+            symbol = (sym or "").upper().strip()
+            try:
+                amount = int(amount_str)
+            except Exception:
+                amount = 0
+            if not symbol or amount <= 0:
+                return {"ok": True}
+            fn = {
+                "L0": confirm_fill_l0,
+                "L1": confirm_fill_l1,
+                "L2": confirm_fill_l2,
+                "L3": confirm_fill_l3,
+            }[_lvl]
+            msg, _ = fn(symbol, amount)
+            kb2 = {"inline_keyboard": [[
+                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+            await tg_send(chat_id, _code(msg), reply_markup=kb2)
+            return {"ok": True}
+
+
 
     # ====== CANCEL LIMIT 0..3 ======
     # Сгенерировано одинаковыми блоками для L0, L1, L2, L3
@@ -738,7 +857,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -766,7 +885,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -786,7 +905,7 @@ async def _answer_callback(callback: dict) -> dict:
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
-                return {"ok": True}
+            return {"ok": True}
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
@@ -1198,243 +1317,3 @@ async def _startup_metrics():
 @app.on_event("shutdown")
 async def _shutdown_metrics():
     await stop_collector()
-
-
-    # ORDERS → FILL → OCO (подтверждение исполнения)
-    if data.startswith("ORDERS_FILL_OCO:"):
-        try:
-            _, sym = data.split(":", 1)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        msg, kb = prepare_fill_oco(symbol)
-        if not kb:
-            kb2 = {"inline_keyboard": [[
-                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-            await tg_send(chat_id, _code(msg), reply_markup=kb2)
-            return {"ok": True}
-        await tg_send(chat_id, _code(msg), reply_markup=kb)
-        return {"ok": True}
-
-    # ORDERS → FILL → подтверждение OCO
-    if data.startswith("ORDERS_FILL_OCO_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, _ = confirm_fill_oco(symbol, amount)
-        kb2 = {"inline_keyboard": [[
-            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-        await tg_send(chat_id, _code(msg), reply_markup=kb2)
-        return {"ok": True}
-
-
-    # ORDERS → FILL → LIMIT 0 (подтверждение исполнения)
-    if data.startswith("ORDERS_FILL_L0:"):
-        try:
-            _, sym = data.split(":", 1)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        msg, kb = prepare_fill_l0(symbol)
-        if not kb:
-            kb2 = {"inline_keyboard": [[
-                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-            await tg_send(chat_id, _code(msg), reply_markup=kb2)
-            return {"ok": True}
-        await tg_send(chat_id, _code(msg), reply_markup=kb)
-        return {"ok": True}
-
-    # ORDERS → FILL → подтверждение LIMIT 0
-    if data.startswith("ORDERS_FILL_L0_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, _ = confirm_fill_l0(symbol, amount)
-        kb2 = {"inline_keyboard": [[
-            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-        await tg_send(chat_id, _code(msg), reply_markup=kb2)
-        return {"ok": True}
-
-
-    # ORDERS → FILL → LIMIT 1 (подтверждение исполнения)
-    if data.startswith("ORDERS_FILL_L1:"):
-        try:
-            _, sym = data.split(":", 1)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        msg, kb = prepare_fill_l1(symbol)
-        if not kb:
-            kb2 = {"inline_keyboard": [[
-                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-            await tg_send(chat_id, _code(msg), reply_markup=kb2)
-            return {"ok": True}
-        await tg_send(chat_id, _code(msg), reply_markup=kb)
-        return {"ok": True}
-
-    # ORDERS → FILL → подтверждение LIMIT 1
-    if data.startswith("ORDERS_FILL_L1_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, _ = confirm_fill_l1(symbol, amount)
-        kb2 = {"inline_keyboard": [[
-            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-        await tg_send(chat_id, _code(msg), reply_markup=kb2)
-        return {"ok": True}
-
-
-    # ORDERS → FILL → LIMIT 2 (подтверждение исполнения)
-    if data.startswith("ORDERS_FILL_L2:"):
-        try:
-            _, sym = data.split(":", 1)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        msg, kb = prepare_fill_l2(symbol)
-        if not kb:
-            kb2 = {"inline_keyboard": [[
-                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-            await tg_send(chat_id, _code(msg), reply_markup=kb2)
-            return {"ok": True}
-        await tg_send(chat_id, _code(msg), reply_markup=kb)
-        return {"ok": True}
-
-    # ORDERS → FILL → подтверждение LIMIT 2
-    if data.startswith("ORDERS_FILL_L2_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, _ = confirm_fill_l2(symbol, amount)
-        kb2 = {"inline_keyboard": [[
-            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-        await tg_send(chat_id, _code(msg), reply_markup=kb2)
-        return {"ok": True}
-
-
-    # ORDERS → FILL → LIMIT 3 (подтверждение исполнения)
-    if data.startswith("ORDERS_FILL_L3:"):
-        try:
-            _, sym = data.split(":", 1)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        if not symbol:
-            return {"ok": True}
-        msg, kb = prepare_fill_l3(symbol)
-        if not kb:
-            kb2 = {"inline_keyboard": [[
-                {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-            await tg_send(chat_id, _code(msg), reply_markup=kb2)
-            return {"ok": True}
-        await tg_send(chat_id, _code(msg), reply_markup=kb)
-        return {"ok": True}
-
-    # ORDERS → FILL → подтверждение LIMIT 3
-    if data.startswith("ORDERS_FILL_L3_CONFIRM:"):
-        try:
-            _, sym, amount_str = data.split(":", 2)
-        except ValueError:
-                return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, _ = confirm_fill_l3(symbol, amount)
-        kb2 = {"inline_keyboard": [[
-            {"text": "OCO",     "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-            {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-            {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-            {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-            {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
-        await tg_send(chat_id, _code(msg), reply_markup=kb2)
-        return {"ok": True}
