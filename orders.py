@@ -3,19 +3,14 @@ from datetime import datetime
 from typing import Tuple, Dict, Any
 import os, json
 
-from budget import (
-    get_pair_budget,
-    get_pair_levels,
-    save_pair_levels,
-    recompute_pair_aggregates,
-)
+from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates
 from symbol_info import build_symbol_message
 
 # Недельные доли по режиму рынка
 WEEKLY_PERCENT = {
     "UP":   {"OCO": 10, "L0": 10, "L1": 5,  "L2": 0,  "L3": 0},
     "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
-    "DOWN": {"OCO": 5,  "L0": 0,  "L1": 5, "L2": 10, "L3": 5},
+    "DOWN": {"OCO": 0,  "L0": 0,  "L1": 10, "L2": 10, "L3": 5},
 }
 
 def _symbol_data_path(symbol: str) -> str:
@@ -36,7 +31,7 @@ def _mode_key_from_symbol(symbol: str) -> str:
     raw_mode_str = str(raw_mode or "").upper()
     if "UP" in raw_mode_str:
         return "UP"
-    if "DOWN" in raw_mode_str:
+    elif "DOWN" in raw_mode_str:
         return "DOWN"
     return "RANGE"
 
@@ -49,12 +44,11 @@ def _flag_desc(flag: str) -> str:
         return "цена высока — ордер ставить рискованно"
     return "нет автофлага"
 
-# ---------- OPEN ----------
-
 def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "Некорректный символ.", {}
+
     month = datetime.now().strftime("%Y-%m")
     info = get_pair_budget(symbol, month)
     budget = int(info.get("budget") or 0)
@@ -79,6 +73,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         return f"{symbol} {month}\nЛимит по {title} уже исчерпан (доступно 0 USDC).", {}
     if free <= 0:
         return f"{symbol} {month}\nСвободный бюджет 0 USDC — сначала освободите бюджет.", {}
+
     if available > free:
         return (
             f"{symbol} {month}\n"
@@ -92,7 +87,10 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     flag_val = flags.get(lvl) or ""
     flag_desc = _flag_desc(flag_val)
 
-    mon_disp = f"{month[5:]}-{month[:4]}" if (len(month) == 7 and month[4] == "-") else month
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+
     msg = (
         f"{symbol} {mon_disp} Wk{week}\n"
         f"{title} OPEN\n\n"
@@ -113,18 +111,22 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     symbol = (symbol or "").upper().strip()
     if not symbol or int(amount) <= 0:
         return "Некорректные параметры операции.", {}
+
     month = datetime.now().strftime("%Y-%m")
     info = get_pair_budget(symbol, month)
     budget = int(info.get("budget") or 0)
     free = int(info.get("free") or 0)
     week = int(info.get("week") or 0)
+
     if week <= 0 or budget <= 0:
         return f"{symbol} {month}\nЦикл не запущен или бюджет 0 — операция отменена.", {}
+
     mode_key = _mode_key_from_symbol(symbol)
     perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
     p = int(perc.get(lvl) or 0)
     if p <= 0:
         return f"{symbol} {month}\nДля уровня {title} в режиме {mode_key} доля бюджета 0% — операция отменена.", {}
+
     quota = int(round(budget * p / 100.0))
     levels = get_pair_levels(symbol, month) or {}
     lvl_state = levels.get(lvl) or {}
@@ -132,187 +134,47 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     available = quota - used
     if available <= 0 or free <= 0:
         return f"{symbol} {month}\nЛимит по {title} или свободный бюджет уже исчерпаны — операция отменена.", {}
+
     actual = min(int(amount), available, free)
     if actual <= 0:
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
+
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
     levels[lvl] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
-    # set manual flag ⚠️ for this level in /data JSON
+    info2 = recompute_pair_aggregates(symbol, month)
+
     try:
-        sdata = _load_symbol_data(symbol) or {}
-        flags = sdata.get("flags") or {}
-        flags[lvl] = "⚠️"
-        sdata["flags"] = flags
-        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
-            json.dump(sdata, f, ensure_ascii=False)
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {"inline_keyboard": [[
+            {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+            {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
+        ]]}
+        return card, kb
     except Exception:
-        pass
-    recompute_pair_aggregates(symbol, month)
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: виртуальный ордер на {actual} USDC учтён в резерве.\n"
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
+        return msg, {}
 
-    card = build_symbol_message(symbol)
-    sym = (symbol or "").upper()
-    kb = {"inline_keyboard": [[
-        {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
-        {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
-    ]]}
-    return card, kb
-
-# Публичные OPEN API
+# Публичные API для уровней
 def prepare_open_oco(symbol: str):  return _prepare_open_level(symbol, "OCO", "OCO")
 def confirm_open_oco(symbol: str, amount: int):  return _confirm_open_level(symbol, amount, "OCO", "OCO")
+
 def prepare_open_l0(symbol: str):   return _prepare_open_level(symbol, "L0", "LIMIT 0")
 def confirm_open_l0(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L0", "LIMIT 0")
+
 def prepare_open_l1(symbol: str):   return _prepare_open_level(symbol, "L1", "LIMIT 1")
 def confirm_open_l1(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L1", "LIMIT 1")
+
 def prepare_open_l2(symbol: str):   return _prepare_open_level(symbol, "L2", "LIMIT 2")
 def confirm_open_l2(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L2", "LIMIT 2")
+
 def prepare_open_l3(symbol: str):   return _prepare_open_level(symbol, "L3", "LIMIT 3")
 def confirm_open_l3(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L3", "LIMIT 3")
-
-# ---------- CANCEL (с подтверждением) ----------
-
-def _prepare_cancel_level(symbol: str, lvl: str, title: str):
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    week = int(info.get("week") or 0)
-    mon_disp = f"{month[5:]}-{month[:4]}" if (len(month) == 7 and month[4] == "-") else month
-
-    levels = get_pair_levels(symbol, month) or {}
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-    if reserved <= 0:
-        return f"{symbol} {month}\nВиртуального {title} нет — отменять нечего.", {}
-
-    msg = (
-        f"{symbol} {mon_disp} Wk{week}\n"
-        f"CANCEL {title}\n\n"
-        f"Сумма: {reserved} USDC\n"
-        f"Отменить виртуальный {title} на {reserved} USDC?\n"
-        f"Сумма будет возвращена из ⏳ в 🎯."
-    )
-    cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
-    kb = {
-        "inline_keyboard": [[
-            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
-            {"text": "↩️", "callback_data": f"ORDERS_CANCEL:{symbol}"},
-        ]]
-    }
-    return msg, kb
-
-def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str):
-    symbol = (symbol or "").upper().strip()
-    if not symbol or int(amount) <= 0:
-        return "Некорректные параметры операции.", {}
-    month = datetime.now().strftime("%Y-%m")
-    levels = get_pair_levels(symbol, month) or {}
-    lvl_state = levels.get(lvl) or {}
-    current = int(lvl_state.get("reserved") or 0)
-    actual = min(int(amount), max(current, 0))
-    if actual <= 0:
-        return f"{symbol} {month}\nВиртуальный {title} уже отменён — ничего не сделано.", {}
-
-    levels[lvl] = {"reserved": current - actual, "spent": int(lvl_state.get("spent") or 0)}
-    save_pair_levels(symbol, month, levels)
-    # set manual flag ⚠️ for this level in /data JSON
-    try:
-        sdata = _load_symbol_data(symbol) or {}
-        flags = sdata.get("flags") or {}
-        flags[lvl] = "⚠️"
-        sdata["flags"] = flags
-        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
-            json.dump(sdata, f, ensure_ascii=False)
-    except Exception:
-        pass
-    recompute_pair_aggregates(symbol, month)
-
-    card = build_symbol_message(symbol)
-    return card, {}
-
-# Публичные CANCEL API
-def prepare_cancel_oco(symbol: str): return _prepare_cancel_level(symbol, "OCO", "OCO")
-def confirm_cancel_oco(symbol: str, amount: int): return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
-def prepare_cancel_l0(symbol: str): return _prepare_cancel_level(symbol, "L0", "LIMIT 0")
-def confirm_cancel_l0(symbol: str, amount: int): return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
-def prepare_cancel_l1(symbol: str): return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
-def confirm_cancel_l1(symbol: str, amount: int): return _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
-def prepare_cancel_l2(symbol: str): return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
-def confirm_cancel_l2(symbol: str, amount: int): return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
-def prepare_cancel_l3(symbol: str): return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
-def confirm_cancel_l3(symbol: str, amount: int): return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
-
-# ====== FILL (виртуальное исполнение) ======
-
-from datetime import datetime as _dt
-
-def _prepare_fill_level(symbol: str, lvl: str, title: str):
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = _dt.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    week = int(info.get("week") or 0)
-    mon_disp = f"{month[5:]}-{month[:4]}" if (len(month)==7 and month[4]=="-") else month
-
-    levels = get_pair_levels(symbol, month) or {}
-    st = levels.get(lvl) or {}
-    reserved = int(st.get("reserved") or 0)
-    if reserved <= 0:
-        return f"{symbol} {month}\nВиртуального {title} в резерве нет — исполнять нечего.", {}
-
-    msg = (
-        f"{symbol} {mon_disp} Wk{week}\n"
-        f"FILL {title}\n\n"
-        f"Сумма: {reserved} USDC\n"
-        f"Исполнить виртуальный {title} на {reserved} USDC?\n"
-        f"Сумма перейдёт из ⏳ в 💸."
-    )
-    cb = f"ORDERS_FILL_{lvl}_CONFIRM"
-    kb = {"inline_keyboard": [[
-        {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
-        {"text": "↩️", "callback_data": f"ORDERS_FILL:{symbol}"},
-    ]]}
-    return msg, kb
-
-def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str):
-    symbol = (symbol or "").upper().strip()
-    if not symbol or int(amount) <= 0:
-        return "Некорректные параметры операции.", {}
-    month = _dt.now().strftime("%Y-%m")
-    levels = get_pair_levels(symbol, month) or {}
-    st = levels.get(lvl) or {}
-    current_reserved = int(st.get("reserved") or 0)
-    current_spent = int(st.get("spent") or 0)
-    actual = min(int(amount), max(current_reserved, 0))
-    if actual <= 0:
-        return f"{symbol} {month}\nВиртуальный {title} уже исполнен/отсутствует — ничего не сделано.", {}
-
-    levels[lvl] = {"reserved": current_reserved - actual, "spent": current_spent + actual}
-    save_pair_levels(symbol, month, levels)
-    # set manual flag ⚠️ for this level in /data JSON
-    try:
-        sdata = _load_symbol_data(symbol) or {}
-        flags = sdata.get("flags") or {}
-        flags[lvl] = "⚠️"
-        sdata["flags"] = flags
-        with open(_symbol_data_path(symbol), "w", encoding="utf-8") as f:
-            json.dump(sdata, f, ensure_ascii=False)
-    except Exception:
-        pass
-    recompute_pair_aggregates(symbol, month)
-    card = build_symbol_message(symbol)
-    return card, {}
-
-def prepare_fill_oco(symbol: str): return _prepare_fill_level(symbol, "OCO", "OCO")
-def confirm_fill_oco(symbol: str, amount: int): return _confirm_fill_level(symbol, amount, "OCO", "OCO")
-def prepare_fill_l0(symbol: str): return _prepare_fill_level(symbol, "L0", "LIMIT 0")
-def confirm_fill_l0(symbol: str, amount: int): return _confirm_fill_level(symbol, amount, "L0", "LIMIT 0")
-def prepare_fill_l1(symbol: str): return _prepare_fill_level(symbol, "L1", "LIMIT 1")
-def confirm_fill_l1(symbol: str, amount: int): return _confirm_fill_level(symbol, amount, "L1", "LIMIT 1")
-def prepare_fill_l2(symbol: str): return _prepare_fill_level(symbol, "L2", "LIMIT 2")
-def confirm_fill_l2(symbol: str, amount: int): return _confirm_fill_level(symbol, amount, "L2", "LIMIT 2")
-def prepare_fill_l3(symbol: str): return _prepare_fill_level(symbol, "L3", "LIMIT 3")
-def confirm_fill_l3(symbol: str, amount: int): return _confirm_fill_level(symbol, amount, "L3", "LIMIT 3")
