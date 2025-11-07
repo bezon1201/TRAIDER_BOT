@@ -406,6 +406,11 @@ async def _answer_callback(callback: dict) -> dict:
         # BUDGET CANCEL → reset reserve and spent, keep budget, restore single BUDGET button
         if data.startswith("BUDGET_CLEAR:"):
             info = clear_pair_budget(symbol, month)
+            # после обнуления бюджета пересчитываем флаги, чтобы убрать ⚠️/✅
+            try:
+                recompute_flags_for_symbol(symbol)
+            except Exception:
+                pass
             # отправляем обновлённую карточку по символу
             try:
                 sym = info.get("symbol") or symbol
