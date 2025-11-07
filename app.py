@@ -477,11 +477,13 @@ async def _answer_callback(callback: dict) -> dict:
     # ORDERS → OPEN → подтверждение OCO
     if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
         try:
-            _, payload = data.split(":", 1)
-            sym_raw, amount_raw = payload.split(":", 1)
-        except ValueError:
+            parts = data.split(":")
+            # ["ORDERS_OPEN_OCO_CONFIRM", SYMBOL, AMOUNT]
+            sym_raw = parts[1]
+            amount_raw = parts[2]
+        except Exception:
             return {"ok": True}
-    # ORDERS → OPEN → LIMIT 0 (подтверждение виртуального ордера)
+# ORDERS → OPEN → LIMIT 0 (подтверждение виртуального ордера)
     if data.startswith("ORDERS_OPEN_L0:"):
         try:
             _, sym_raw = data.split(":", 1)
