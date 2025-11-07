@@ -10,7 +10,7 @@ from symbol_info import build_symbol_message
 WEEKLY_PERCENT = {
     "UP":   {"OCO": 10, "L0": 10, "L1": 5,  "L2": 0,  "L3": 0},
     "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
-    "DOWN": {"OCO": 0,  "L0": 0,  "L1": 10, "L2": 10, "L3": 5},
+    "DOWN": {"OCO": 5,  "L0": 0,  "L1": 5, "L2": 10, "L3": 5},
 }
 
 def _symbol_data_path(symbol: str) -> str:
