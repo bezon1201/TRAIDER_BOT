@@ -12,7 +12,18 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
 from symbol_info import build_symbol_message
-from orders import prepare_open_oco, confirm_open_oco, prepare_open_l0, confirm_open_l0, prepare_open_l1, confirm_open_l1, prepare_open_l2, confirm_open_l2, prepare_open_l3, confirm_open_l3
+from orders import (
+    prepare_open_oco, confirm_open_oco,
+    prepare_open_l0, confirm_open_l0,
+    prepare_open_l1, confirm_open_l1,
+    prepare_open_l2, confirm_open_l2,
+    prepare_open_l3, confirm_open_l3,
+    prepare_cancel_oco, confirm_cancel_oco,
+    prepare_cancel_l0, confirm_cancel_l0,
+    prepare_cancel_l1, confirm_cancel_l1,
+    prepare_cancel_l2, confirm_cancel_l2,
+    prepare_cancel_l3, confirm_cancel_l3,
+)
 from general_scheduler import (
     start_collector,
     stop_collector,
@@ -437,7 +448,7 @@ async def _answer_callback(callback: dict) -> dict:
         await _edit_markup(kb)
         return {"ok": True}
 
-    # ORDERS → OPEN → подуровни OCO / L0-3 (пока только кнопки)
+    # ORDERS → OPEN → подуровни OCO / L0-3
     if data.startswith("ORDERS_OPEN:"):
         try:
             _, sym_raw = data.split(":", 1)
@@ -591,27 +602,7 @@ async def _answer_callback(callback: dict) -> dict:
             _, sym, amount_str = data.split(":", 2)
         except ValueError:
             return {"ok": True}
-        symbol = (sym or "").upper().strip()
-        try:
-            amount = int(amount_str)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, kb = confirm_open_l3(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
-        return {"ok": True}
-
-        symbol = (sym_raw or "").upper().strip()
-        try:
-            amount = int(amount_raw)
-        except Exception:
-            amount = 0
-        if not symbol or amount <= 0:
-            return {"ok": True}
-        msg, kb = confirm_open_oco(symbol, amount)
-        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
-        return {"ok": True}
+        
 
    # ORDERS → OPEN → подтверждение OCO
     if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
@@ -630,31 +621,112 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = confirm_open_oco(symbol, amount)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-    # ORDERS → CANCEL → выбор уровня для отмены (пока только кнопки)
+
+    # ORDERS → CANCEL (подменю уровней)
     if data.startswith("ORDERS_CANCEL:"):
         try:
-            _, sym_raw = data.split(":", 1)
+            _, sym = data.split(":", 1)
         except ValueError:
             return {"ok": True}
-        symbol = (sym_raw or "").upper().strip()
+        symbol = (sym or "").upper().strip()
         if not symbol:
             return {"ok": True}
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+        kb = {"inline_keyboard": [[
+            {"text": "OCO",     "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+        msg = build_symbol_message(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb)
+        return {"ok": True}
+
+    # ====== CANCEL OCO ======
+    if data.startswith("ORDERS_CANCEL_OCO:"):
+        _, sym = data.split(":", 1)
+        symbol = (sym or "").upper().strip()
+        msg, kb = prepare_cancel_oco(symbol)
+        if not kb:
+            kb2 = {"inline_keyboard": [[
+                {"text": "OCO",     "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+            await tg_send(chat_id, _code(msg), reply_markup=kb2)
+            return {"ok": True}
+        await tg_send(chat_id, _code(msg), reply_markup=kb)
+        return {"ok": True}
+
+    if data.startswith("ORDERS_CANCEL_OCO_CONFIRM:"):
+        _, sym, amount_str = data.split(":", 2)
+        symbol = (sym or "").upper().strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        msg, _ = confirm_cancel_oco(symbol, amount)
+        kb2 = {"inline_keyboard": [[
+            {"text": "OCO",     "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+        ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+        await tg_send(chat_id, _code(msg), reply_markup=kb2)
+        return {"ok": True}
+
+    # ====== CANCEL LIMIT 0..3 ======
+    # Сгенерировано одинаковыми блоками для L0, L1, L2, L3
+    for lvl in ["L0","L1","L2","L3"]:
+        if data.startswith(f"ORDERS_CANCEL_{lvl}:"):
+            _, sym = data.split(":", 1)
+            symbol = (sym or "").upper().strip()
+            fn = {
+                "L0": prepare_cancel_l0,
+                "L1": prepare_cancel_l1,
+                "L2": prepare_cancel_l2,
+                "L3": prepare_cancel_l3,
+            }[lvl]
+            msg, kb = fn(symbol)
+            if not kb:
+                kb2 = {"inline_keyboard": [[
+                    {"text": "OCO",     "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
                     {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
                     {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
                     {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        await _edit_markup(kb)
-        return {"ok": True}
+                ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+                await tg_send(chat_id, _code(msg), reply_markup=kb2)
+                return {"ok": True}
+            await tg_send(chat_id, _code(msg), reply_markup=kb)
+            return {"ok": True}
+
+        if data.startswith(f"ORDERS_CANCEL_{lvl}_CONFIRM:"):
+            _, sym, amount_str = data.split(":", 2)
+            symbol = (sym or "").upper().strip()
+            try:
+                amount = int(amount_str)
+            except Exception:
+                amount = 0
+            fn = {
+                "L0": confirm_cancel_l0,
+                "L1": confirm_cancel_l1,
+                "L2": confirm_cancel_l2,
+                "L3": confirm_cancel_l3,
+            }[lvl]
+            msg, _ = fn(symbol, amount)
+            kb2 = {"inline_keyboard": [[
+                {"text": "OCO",     "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+            ], [{"text": "↩️", "callback_data": f"ORDERS:{symbol}"}]]}
+            await tg_send(chat_id, _code(msg), reply_markup=kb2)
+            return {"ok": True}
 
     # ORDERS → FILL → выбор уровня для пометки исполненным (пока только кнопки)
     if data.startswith("ORDERS_FILL:"):
