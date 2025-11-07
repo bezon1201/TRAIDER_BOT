@@ -1,13 +1,12 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Tuple, Dict, Any
-
 import os, json
 
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates
 from symbol_info import build_symbol_message
 
-# локальные константы распределения недельного бюджета — копия из app.py
+# Распределение недельного бюджета, синхронизировано с app.py
 WEEKLY_PERCENT = {
     "UP":   {"OCO": 10, "L0": 10, "L1": 5,  "L2": 0,  "L3": 0},
     "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
@@ -46,9 +45,6 @@ def _flag_desc(flag: str) -> str:
     return "нет автофлага"
 
 def prepare_open_oco(symbol: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовить текст и клавиатуру подтверждения 'OCO OPEN'.
-    Возвращает (message_text, reply_markup). Исключения не бросает, сообщения об ошибке возвращаются как текст.
-    """
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "Некорректный символ.", {}
@@ -79,7 +75,6 @@ def prepare_open_oco(symbol: str) -> Tuple[str, Dict[str, Any]]:
         return f"{symbol} {month}\nСвободный бюджет 0 USDC — сначала освободите бюджет.", {}
 
     if available > free:
-        # предупреждение о нехватке свободного бюджета
         return (
             f"{symbol} {month}\n"
             f"По уровню OCO доступно {available} USDC, но свободно в бюджете только {free} USDC.\n"
@@ -87,7 +82,6 @@ def prepare_open_oco(symbol: str) -> Tuple[str, Dict[str, Any]]:
             {}
         )
 
-    # автофлаг и описание
     sdata = _load_symbol_data(symbol)
     flags = sdata.get("flags") or {}
     flag_oco = flags.get("OCO") or ""
@@ -105,21 +99,16 @@ def prepare_open_oco(symbol: str) -> Tuple[str, Dict[str, Any]]:
         f"Поставить виртуальный OCO-ордер на {available} USDC?"
     )
     kb = {
-        "inline_keyboard": [
-            [
-                {"text": "CONFIRM", "callback_data": f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"},
-                {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-            ]
-        ]
+        "inline_keyboard": [[
+            {"text": "CONFIRM", "callback_data": f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"},
+            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+        ]]
     }
     return msg, kb
 
 def confirm_open_oco(symbol: str, amount: int) -> Tuple[str, Dict[str, Any]]:
-    """Подтвердить OCO OPEN: обновляет резерв и возвращает текст/клавиатуру для карточки символа.
-    Возвращает (text, reply_markup). Если карточку собрать не удалось — вернётся краткое текстовое подтверждение.
-    """
     symbol = (symbol or "").upper().strip()
-    if not symbol or amount <= 0:
+    if not symbol or int(amount) <= 0:
         return "Некорректные параметры операции.", {}
 
     month = datetime.now().strftime("%Y-%m")
@@ -131,7 +120,6 @@ def confirm_open_oco(symbol: str, amount: int) -> Tuple[str, Dict[str, Any]]:
     if week <= 0 or budget <= 0:
         return f"{symbol} {month}\nЦикл не запущен или бюджет 0 — операция отклонена.", {}
 
-    # пересчёт лимитов на момент подтверждения
     mode_key = _mode_key_from_symbol(symbol)
     perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
     p_oco = int(perc.get("OCO") or 0)
@@ -150,28 +138,20 @@ def confirm_open_oco(symbol: str, amount: int) -> Tuple[str, Dict[str, Any]]:
     if actual <= 0:
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
 
-    # обновляем состояние уровня OCO
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
-    levels["OCO"] = {
-        "reserved": new_reserved,
-        "spent": int(lvl_state.get("spent") or 0),
-    }
+    levels["OCO"] = {"reserved": new_reserved, "spent": int(lvl_state.get("spent") or 0)}
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    # пробуем собрать карточку символа
     try:
         card = build_symbol_message(symbol)
         sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard": [[
-                {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
-                {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
-            ]]
-        }
+        kb = {"inline_keyboard": [[
+            {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+            {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
+        ]]}
         return card, kb
     except Exception:
-        # fallback короткий текст
         msg = (
             f"{symbol} {month}\n"
             f"OCO: виртуальный ордер на {actual} USDC учтён в резерве.\n"
