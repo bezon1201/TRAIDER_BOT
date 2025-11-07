@@ -366,9 +366,173 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
         return msg, kb
 
 
-# Публичные API для уровней
+def _prepare_fill_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+    """Подготовка пометки виртуального ордера исполненным (FILL)."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    week = int(info.get("week") or 0)
+
+    levels = get_pair_levels(symbol, month)
+    lvl_state = levels.get(lvl) or {}
+    reserved = int(lvl_state.get("reserved") or 0)
+
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+
+    if reserved <= 0:
+        msg = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"{title} FILL\n\n"
+            f"Нет открытого виртуального ордера на уровне {title} "
+            f"для пометки исполненным (в резерве 0 USDC)."
+        )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+    msg = (
+        f"{symbol} {mon_disp} Wk{week}\n"
+        f"{title} FILL\n\n"
+        f"Сейчас в резерве: {reserved} USDC\n"
+        f"Перенести в spent: {reserved} USDC\n\n"
+        f"Пометить виртуальный {title} на {reserved} USDC как исполненный?"
+    )
+    cb = f"ORDERS_FILL_{lvl}_CONFIRM"
+    kb = {
+        "inline_keyboard": [[
+            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
+            {"text": "↩️", "callback_data": f"ORDERS_FILL:{symbol}"},
+        ]]
+    }
+    return msg, kb
+
+
+def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+    """Подтверждение исполнения: перевод резервов в потраченные."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректные параметры операции.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    levels = get_pair_levels(symbol, month)
+    lvl_state = levels.get(lvl) or {}
+    reserved = int(lvl_state.get("reserved") or 0)
+    spent = int(lvl_state.get("spent") or 0)
+
+    if reserved <= 0:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp} Wk?\n"
+            f"{title} FILL\n\n"
+            f"Нечего помечать исполненным: резерв уже 0 USDC."
+        )
+        sym = symbol
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{sym}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+    try:
+        requested = int(amount)
+    except Exception:
+        requested = 0
+    if requested <= 0:
+        requested = reserved
+    actual = min(reserved, requested)
+    new_reserved = reserved - actual
+    if new_reserved < 0:
+        new_reserved = 0
+    new_spent = spent + actual
+
+    levels[lvl] = {
+        "reserved": new_reserved,
+        "spent": new_spent,
+    }
+    save_pair_levels(symbol, month, levels)
+    info2 = recompute_pair_aggregates(symbol, month)
+
+    # обновляем флаги: теперь должен появиться ✅ (spent>0)
+    _recompute_symbol_flags(symbol)
+
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{sym}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return card, kb
+    except Exception:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp}\n"
+            f"{title}: помечен исполненным виртуальный ордер на {actual} USDC.\n"
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        return msg, kb
+
 
 # Публичные API для уровней
+
 def prepare_open_oco(symbol: str):  return _prepare_open_level(symbol, "OCO", "OCO")
 def confirm_open_oco(symbol: str, amount: int):  return _confirm_open_level(symbol, amount, "OCO", "OCO")
 
@@ -403,3 +567,19 @@ def confirm_cancel_l3(symbol: str, amount: int):   return _confirm_cancel_level(
 def recompute_flags_for_symbol(symbol: str) -> None:
     """Публичный помощник для пересчёта флагов по монете."""
     _recompute_symbol_flags(symbol)
+
+
+def prepare_fill_oco(symbol: str):  return _prepare_fill_level(symbol, "OCO", "OCO")
+def confirm_fill_oco(symbol: str, amount: int):  return _confirm_fill_level(symbol, amount, "OCO", "OCO")
+
+def prepare_fill_l0(symbol: str):   return _prepare_fill_level(symbol, "L0", "LIMIT 0")
+def confirm_fill_l0(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L0", "LIMIT 0")
+
+def prepare_fill_l1(symbol: str):   return _prepare_fill_level(symbol, "L1", "LIMIT 1")
+def confirm_fill_l1(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L1", "LIMIT 1")
+
+def prepare_fill_l2(symbol: str):   return _prepare_fill_level(symbol, "L2", "LIMIT 2")
+def confirm_fill_l2(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L2", "LIMIT 2")
+
+def prepare_fill_l3(symbol: str):   return _prepare_fill_level(symbol, "L3", "LIMIT 3")
+def confirm_fill_l3(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L3", "LIMIT 3")

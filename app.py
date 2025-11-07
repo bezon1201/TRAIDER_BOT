@@ -33,6 +33,16 @@ from orders import (
     confirm_cancel_l2,
     prepare_cancel_l3,
     confirm_cancel_l3,
+    prepare_fill_oco,
+    confirm_fill_oco,
+    prepare_fill_l0,
+    confirm_fill_l0,
+    prepare_fill_l1,
+    confirm_fill_l1,
+    prepare_fill_l2,
+    confirm_fill_l2,
+    prepare_fill_l3,
+    confirm_fill_l3,
     recompute_flags_for_symbol,
 )
 from general_scheduler import (
@@ -833,7 +843,7 @@ async def _answer_callback(callback: dict) -> dict:
         await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
-    # ORDERS → FILL → выбор уровня для пометки исполненным (пока только кнопки)
+    # ORDERS → FILL → выбор уровня для пометки исполненным
     if data.startswith("ORDERS_FILL:"):
         try:
             _, sym_raw = data.split(":", 1)
@@ -859,9 +869,157 @@ async def _answer_callback(callback: dict) -> dict:
         await _edit_markup(kb)
         return {"ok": True}
 
+    # ORDERS → FILL → подготовка FILL OCO
+    if data.startswith("ORDERS_FILL_OCO:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_fill_oco(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
 
+    # ORDERS → FILL → подготовка FILL LIMIT 0
+    if data.startswith("ORDERS_FILL_L0:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_fill_l0(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
 
-    # ORDERS back from submenu to root BUDGET/ORDERS row
+    # ORDERS → FILL → подготовка FILL LIMIT 1
+    if data.startswith("ORDERS_FILL_L1:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_fill_l1(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подготовка FILL LIMIT 2
+    if data.startswith("ORDERS_FILL_L2:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_fill_l2(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подготовка FILL LIMIT 3
+    if data.startswith("ORDERS_FILL_L3:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_fill_l3(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подтверждение OCO
+    if data.startswith("ORDERS_FILL_OCO_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        msg, kb = confirm_fill_oco(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подтверждение LIMIT 0
+    if data.startswith("ORDERS_FILL_L0_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        msg, kb = confirm_fill_l0(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подтверждение LIMIT 1
+    if data.startswith("ORDERS_FILL_L1_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        msg, kb = confirm_fill_l1(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подтверждение LIMIT 2
+    if data.startswith("ORDERS_FILL_L2_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        msg, kb = confirm_fill_l2(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+    # ORDERS → FILL → подтверждение LIMIT 3
+    if data.startswith("ORDERS_FILL_L3_CONFIRM:"):
+        try:
+            _, sym, amount_str = data.split(":", 2)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+        msg, kb = confirm_fill_l3(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+
+# ORDERS back from submenu to root BUDGET/ORDERS row
     if data.startswith("ORDERS_BACK_ROOT:"):
         try:
             _, sym_raw = data.split(":", 1)
