@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from budget import get_pair_levels
+from budget import get_pair_levels, get_pair_budget
 
 def _pick(obj: dict, *keys, default=None):
     for k in keys:
@@ -24,27 +24,45 @@ def _mode_alpha_delta(mode: str) -> tuple[float, float]:
     return (0.5, 0.3)
 
 
+
 def _budget_flag_for_level(data: dict, level_key: str) -> str | None:
-    """Дополнительные флаги на основе бюджета: ✅ если spent>0, ⚠️ если reserved>0."""
+    """Дополнительные флаги на основе бюджета.
+
+    Логика приоритета:
+    - ✅ если по уровню был FILL в ТЕКУЩУЮ неделю;
+    - ⚠️ если по уровню есть открытый виртуальный ордер (reserved > 0);
+    - иначе — нет «бюджетного» флага, используется автофлаг 🔴/🟡/🟢.
+    """
     symbol = (data.get("symbol") or "").upper().strip()
     if not symbol:
         return None
+
     month = datetime.now().strftime("%Y-%m")
     try:
         levels = get_pair_levels(symbol, month)
+        info = get_pair_budget(symbol, month)
     except Exception:
         return None
+
     st = (levels.get(level_key) or {}) if isinstance(levels, dict) else {}
     try:
         reserved = int(st.get("reserved") or 0)
     except Exception:
         reserved = 0
     try:
-        spent = int(st.get("spent") or 0)
+        last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
     except Exception:
-        spent = 0
-    if spent > 0:
+        last_fill_week = -1
+
+    try:
+        current_week = int(info.get("week") or 0)
+    except Exception:
+        current_week = 0
+
+    # ✅ — если ордер по уровню исполнялся в текущую неделю
+    if current_week > 0 and last_fill_week == current_week:
         return "✅"
+    # ⚠️ — если по уровню есть открытый виртуальный ордер
     if reserved > 0:
         return "⚠️"
     return None

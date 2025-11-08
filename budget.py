@@ -25,12 +25,13 @@ def _save_levels(data: Dict[str, Any]) -> None:
     _save_json(BUDGET_LEVELS_FILE, data)
 
 
+
 def get_pair_levels(symbol: str, month: str) -> Dict[str, Dict[str, int]]:
     """Return per-level state for a pair/month with defaults.
 
     Structure:
     {
-        "OCO": {"reserved": int, "spent": int},
+        "OCO": {"reserved": int, "spent": int, "week_quota": int, "last_fill_week": int},
         "L0": {...},
         ...
     }
@@ -54,12 +55,29 @@ def get_pair_levels(symbol: str, month: str) -> Dict[str, Dict[str, int]]:
             spent = int(raw.get("spent") or 0)
         except Exception:
             spent = 0
+        try:
+            week_quota = int(raw.get("week_quota") or 0)
+        except Exception:
+            week_quota = 0
+        try:
+            last_fill_week = int(raw.get("last_fill_week") if raw.get("last_fill_week") is not None else -1)
+        except Exception:
+            last_fill_week = -1
         if reserved < 0:
             reserved = 0
         if spent < 0:
             spent = 0
-        result[lvl] = {"reserved": reserved, "spent": spent}
+        if week_quota < 0:
+            week_quota = 0
+        # last_fill_week может быть -1, это допустимо
+        result[lvl] = {
+            "reserved": reserved,
+            "spent": spent,
+            "week_quota": week_quota,
+            "last_fill_week": last_fill_week,
+        }
     return result
+
 
 
 def _save_pair_levels(symbol: str, month: str, levels: Dict[str, Dict[str, int]]) -> None:
@@ -82,11 +100,27 @@ def _save_pair_levels(symbol: str, month: str, levels: Dict[str, Dict[str, int]]
             spent = int(src.get("spent") or 0)
         except Exception:
             spent = 0
+        try:
+            week_quota = int(src.get("week_quota") or 0)
+        except Exception:
+            week_quota = 0
+        try:
+            last_fill_week = int(src.get("last_fill_week") if src.get("last_fill_week") is not None else -1)
+        except Exception:
+            last_fill_week = -1
         if reserved < 0:
             reserved = 0
         if spent < 0:
             spent = 0
-        entry[lvl] = {"reserved": reserved, "spent": spent}
+        if week_quota < 0:
+            week_quota = 0
+        # last_fill_week может быть -1
+        entry[lvl] = {
+            "reserved": reserved,
+            "spent": spent,
+            "week_quota": week_quota,
+            "last_fill_week": last_fill_week,
+        }
 
     monthly[mkey] = entry
     _save_levels(data)
