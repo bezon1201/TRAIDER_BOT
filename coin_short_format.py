@@ -39,7 +39,7 @@ def build_short_card(data: dict) -> str:
     else:
         mon_disp = month
 
-    header1 = f"{sym} {mon_disp} Wk{week}"
+    header1 = f"{sym} {mon_disp} Wk{week}" + ("  LIVE✅" if data.get("live") else "  LIVE❌")
     header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
 
     lines = [header1, header2, f"Price {_i(price)}$ {mtext} {mode}"]

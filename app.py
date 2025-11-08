@@ -143,6 +143,27 @@ BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
+
+SETTINGS_PATH = os.path.join(STORAGE_DIR, "settings.json")
+
+def _load_settings() -> dict:
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {"LIVE_MODE": False, "LIVE_SYMBOLS": []}
+
+def _save_settings(s: dict) -> None:
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 app = FastAPI()
 client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
@@ -1466,6 +1487,47 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
         sym = parts[1].strip().upper()
         await tg_send(chat_id, _code(_market_line_for(sym)))
+        return {"ok": True}
+
+    # /live ...
+    if text_lower.startswith("/live"):
+        parts = text.split()
+        st = _load_settings()
+        if len(parts) == 1:
+            mode = "ON" if st.get("LIVE_MODE") else "OFF"
+            syms = st.get("LIVE_SYMBOLS") or []
+            msg = f"LIVE: {mode}\nSYMBOLS: " + (", ".join(sorted(set(map(str.upper, syms)))) if syms else "—")
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+        sub = (parts[1] or "").lower()
+        if sub == "on":
+            st["LIVE_MODE"] = True
+            _save_settings(st)
+            await tg_send(chat_id, _code("LIVE: ON"))
+            return {"ok": True}
+        if sub == "off":
+            st["LIVE_MODE"] = False
+            _save_settings(st)
+            await tg_send(chat_id, _code("LIVE: OFF"))
+            return {"ok": True}
+        if sub == "add" and len(parts) >= 3:
+            sym = parts[2].upper().strip()
+            syms = set(map(str.upper, st.get("LIVE_SYMBOLS") or []))
+            if sym:
+                syms.add(sym)
+            st["LIVE_SYMBOLS"] = sorted(syms)
+            _save_settings(st)
+            await tg_send(chat_id, _code(f"LIVE SYMBOLS: {', '.join(st['LIVE_SYMBOLS']) or '—'}"))
+            return {"ok": True}
+        if (sub == "rm" or sub == "remove") and len(parts) >= 3:
+            sym = parts[2].upper().strip()
+            syms = [s for s in (st.get("LIVE_SYMBOLS") or []) if s.upper() != sym]
+            st["LIVE_SYMBOLS"] = syms
+            _save_settings(st)
+            await tg_send(chat_id, _code(f"LIVE SYMBOLS: {', '.join(st['LIVE_SYMBOLS']) or '—'}"))
+            return {"ok": True}
+        # fallback: show help
+        await tg_send(chat_id, _code("Usage:\n/live\n/live on | /live off\n/live add SYMBOL\n/live rm SYMBOL"))
         return {"ok": True}
 
     # /data ...

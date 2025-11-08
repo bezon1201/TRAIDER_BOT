@@ -72,7 +72,7 @@ def build_long_card(data: dict) -> str:
     else:
         mon_disp = month
 
-    header1 = f"{sym} {mon_disp} Wk{week}"
+    header1 = f"{sym} {mon_disp} Wk{week}" + ("  LIVE✅" if data.get("live") else "  LIVE❌")
     header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
 
     # расчёт сумм по уровням
