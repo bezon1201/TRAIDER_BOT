@@ -315,7 +315,6 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     # store lightweight exact info separately (does not modify budgets)
     _append_exact(symbol, month, lvl, price_lx or 0.0, qty or 0.0, round(notional_exact, 6))
 
-        return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
 
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
     new_spent = int(lvl_state.get("spent") or 0)
