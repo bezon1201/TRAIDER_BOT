@@ -17,6 +17,12 @@ WEEKLY_PERCENT = {
 LEVEL_KEYS = ("OCO", "L0", "L1", "L2", "L3")
 
 
+
+# ---- runtime cache for multi-step ALL actions ----
+# key: (symbol, month, action); value: list[(level_name, quota_usdc)]
+_RUNTIME_PLANS = globals().get('_RUNTIME_PLANS', {})
+# --------------------------------------------------
+
 def _symbol_data_path(symbol: str) -> str:
     storage_dir = os.getenv("STORAGE_DIR", "/data")
     return os.path.join(storage_dir, f"{symbol}.json")
