@@ -810,7 +810,10 @@ def _calc_available_for_level(symbol: str, month: str, week: int, lvl: str, budg
 
 
 def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовка: открыть все лимитные уровни (🟡) на доступные суммы."""
+    """Подготовка: открыть все лимитные уровни (🟡).
+    Если свободных средств меньше общей суммы — предупреждаем и предлагаем
+    открыть только ПОЛНЫЕ квоты сверху вниз (без частичных).
+    """
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "Некорректный символ.", {}
@@ -822,12 +825,14 @@ def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
     if week <= 0 or budget <= 0:
         return f"{symbol} {month}\nЦикл ещё не запущен — ALL недоступен.", {}
 
+    # собираем список уровней со статусом 🟡 (включая OCO) в порядке сверху-вниз
     sdata = _load_symbol_data(symbol)
     flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
     yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
     levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
 
-    items = []
+    # базовый план: для каждого уровня доступное «a» к открытию
+    items: list[tuple[str,int]] = []
     total = 0
     for lvl in levels_list:
         a = _calc_available_for_level(symbol, month, week, lvl, budget)
@@ -840,15 +845,57 @@ def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
         return f"{symbol} {month}\nALL (лимит) — нечего открывать.", kb
 
     mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in items])
+
+    if free >= total:
+        # хватает на всё — обычное подтверждение
+        parts = ", ".join([f"{lvl} {amt}" for lvl,amt in items])
+        msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
+               f"Открыть {len(items)} ордера на сумму {total} USDC?\nСписок: {parts}")
+        kb = {"inline_keyboard":[
+            [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CONFIRM:{symbol}"}],
+            [{"text":"MANUAL","callback_data":f"ORDERS_OPEN:{symbol}"}],
+        ]}
+        # сохраним план в оперативке
+        try:
+            _RUNTIME_PLANS[(symbol, month, "limit_all_full")] = items.copy()
+        except Exception:
+            pass
+        return msg, kb
+
+    # Не хватает средств — предложим открыть ПОЛНЫЕ квоты сверху вниз
+    selected: list[tuple[str,int]] = []
+    sel_sum = 0
+    for lvl, a in items:
+        if sel_sum + a <= free:
+            selected.append((lvl, a))
+            sel_sum += a
+        else:
+            continue
+
+    if not selected:
+        msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
+               f"Доступно: {free} USDC, нужно: {total}. Недостаточно средств для любых уровней.\n"
+               f"Откройте по одному или пополните баланс.")
+        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_OPEN:{symbol}"}]]}
+        return msg, kb
+
+    plan = ", ".join(f"{k} {q}" for k,q in items)
+    will = ", ".join(f"{k} {q}" for k,q in selected)
+    miss_items = [(k,q) for k,q in items if (k,q) not in selected]
+    miss = ", ".join(f"{k} {q}" for k,q in miss_items) if miss_items else "—"
     msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
-           f"Открыть {len(items)} ордера на сумму {total} USDC?\nСписок: {parts}")
+           f"Доступно: {free} USDC, нужно: {total} (не хватает {total-free}).\n"
+           f"Открыть ПОЛНЫЕ квоты сверху вниз, без частичных?\n\n"
+           f"План: {plan}\nБудет открыто: {will}\nПропущены: {miss}")
     kb = {"inline_keyboard":[
         [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CONFIRM:{symbol}"}],
-        [{"text":"CANCEL","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CANCEL:{symbol}"}],
+        [{"text":"MANUAL","callback_data":f"ORDERS_OPEN:{symbol}"}],
     ]}
+    try:
+        _RUNTIME_PLANS[(symbol, month, "limit_all_full")] = selected.copy()
+    except Exception:
+        pass
     return msg, kb
-
 
 def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
@@ -862,59 +909,49 @@ def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
     if week <= 0 or budget <= 0:
         return f"{symbol} {month}\nЦикл ещё не запущен — операция отменена.", {}
 
-    levels = get_pair_levels(symbol, month) or {}
-    sdata = _load_symbol_data(symbol)
-    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
-    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
+    # загрузим сохранённый план (если есть), иначе сформируем по текущим 🟡
+    plan = _RUNTIME_PLANS.pop((symbol, month, "limit_all_full"), None)
+    if plan is None:
+        sdata = _load_symbol_data(symbol)
+        flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+        yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
+        levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
+        plan = []
+        for lvl in levels_list:
+            a = _calc_available_for_level(symbol, month, week, lvl, budget)
+            if a > 0:
+                plan.append((lvl, a))
 
-    applied = []
+    levels = get_pair_levels(symbol, month) or {}
+    applied: list[tuple[str,int]] = []
     total = 0
-    for lvl in levels_list:
-        a = _calc_available_for_level(symbol, month, week, lvl, budget)
+
+    for lvl, a in plan:
         if a <= 0:
             continue
-        if free <= 0:
-            break
-        actual = min(a, free)
+        if free < a:
+            # без частичных
+            continue
         st = levels.get(lvl) or {}
         reserved = int(st.get("reserved") or 0)
-        try:
-            spent = int(st.get("spent") or 0)
-        except Exception:
-            spent = 0
-        try:
-            week_quota = int(st.get("week_quota") or 0)
-        except Exception:
-            week_quota = 0
-        try:
-            last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
-        except Exception:
-            last_fill_week = -1
+        spent = int(st.get("spent") or 0)
+        week_quota = int(st.get("week_quota") or 0)
+        last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
         levels[lvl] = {
-            "reserved": reserved + actual,
+            "reserved": reserved + a,
             "spent": spent,
             "week_quota": week_quota,
             "last_fill_week": last_fill_week,
         }
-        free -= actual
-        total += actual
-        applied.append((lvl, actual))
+        free -= a
+        total += a
+        applied.append((lvl, a))
 
     save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
+    recompute_pair_aggregates(symbol, month)
     _recompute_symbol_flags(symbol)
 
-    if total <= 0:
-        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
-        return f"{symbol} {month}\nALL (лимит) — ничего не открыто.", kb
-
-    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in applied])
-    msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
-           f"Открыто {len(applied)} ордеров на сумму {total} USDC.\nСписок: {parts}")
-    
-    # После изменений пересобираем карточку и остаёмся в подменю OPEN
+    # Пересобираем карточку и остаёмся в OPEN
     try:
         card = build_symbol_message(symbol)
         sym = (symbol or "").upper()
@@ -930,17 +967,18 @@ def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
                 [
                     {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{sym}"},
                     {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{sym}"},
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
         }
         return card, kb
     except Exception:
-        # Фоллбек: текстовое подтверждение, если сборка карточки упала
+        # Фоллбек
         mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-        return f"{symbol} {mon_disp}\nОперация выполнена.", kb
-
-
+        parts = ", ".join(f"{k} {q}" for k,q in applied) if applied else "—"
+        return (f"{symbol} {mon_disp}\n⚠️ ALL выполнен. Открыто: {parts} на {total} USDC.",
+                {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_OPEN:{symbol}"}]]})
 
 def prepare_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
     """Подготовка: маркет-исполнение (🟢) всех доступных уровней на их квоты."""
