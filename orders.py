@@ -6,6 +6,7 @@ import os, json
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates, set_pair_week
 from auto_flags import compute_all_flags
 from symbol_info import build_symbol_message
+import math
 
 # Недельные доли по режиму рынка
 WEEKLY_PERCENT = {
