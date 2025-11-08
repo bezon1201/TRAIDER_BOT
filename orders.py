@@ -280,6 +280,39 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
 
     actual = min(int(amount), available, free)
     if actual <= 0:
+    # Compute precise qty & notional for logging (does not affect integer quotas)
+    # Load symbol data and level price
+    sdata = _load_symbol_data(symbol)
+    filt = (sdata or {}).get("filters") or {}
+    tick = 0.0
+    try:
+        tick = float(filt.get("tickSize") or 0)
+    except Exception:
+        tick = 0.0
+    step = 0.0
+    try:
+        step = float(filt.get("stepSize") or 0)
+    except Exception:
+        step = 0.0
+    grid = (sdata or {}).get("grid") or {}
+    price_lx = None
+    try:
+        price_lx = float(grid.get(lvl)) if grid.get(lvl) is not None else None
+    except Exception:
+        price_lx = None
+    if price_lx and tick and tick > 0:
+        price_lx = math.floor(price_lx / tick) * tick
+    qty = None
+    if price_lx and price_lx > 0:
+        qty_raw = float(actual) / float(price_lx)
+        if step and step > 0:
+            qty = math.floor(qty_raw / step) * step
+        else:
+            qty = qty_raw
+    notional_exact = float(qty or 0) * float(price_lx or 0)
+    # store lightweight exact info separately (does not modify budgets)
+    _append_exact(symbol, month, lvl, price_lx or 0.0, qty or 0.0, round(notional_exact, 6))
+
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
 
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
