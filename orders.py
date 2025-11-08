@@ -733,7 +733,11 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
         if had_fill:
             next_week_quota = base
         else:
-            leftover = reserved
+            # переносим НЕизрасходованную квоту: базовая/текущая квота минус резерв
+            quota = week_quota if week_quota > 0 else base
+            leftover = quota - reserved
+            if leftover < 0:
+                leftover = 0
             next_week_quota = base + leftover
             if base > 0:
                 max_quota = 4 * base
