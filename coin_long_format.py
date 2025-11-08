@@ -79,20 +79,31 @@ def build_long_card(data: dict) -> str:
     perc = WEEKLY_PERCENT.get(mode_key, WEEKLY_PERCENT["RANGE"])
     levels = get_pair_levels(sym, month)
 
+
     def _amount_available(level: str) -> int:
         if week <= 0 or budget <= 0:
             return 0
-        p = int(perc.get(level, 0) or 0)
-        if p <= 0:
-            return 0
-        quota = int(round(budget * p / 100.0))
         lvl_state = (levels or {}).get(level) or {}
-        used = int(lvl_state.get("reserved") or 0) + int(lvl_state.get("spent") or 0)
+        try:
+            week_quota = int(lvl_state.get("week_quota") or 0)
+        except Exception:
+            week_quota = 0
+        if week_quota <= 0:
+            # fallback: базовая квота по процентам, если week_quota ещё не задана
+            p = int(perc.get(level, 0) or 0)
+            if p <= 0:
+                return 0
+            quota = int(round(budget * p / 100.0))
+        else:
+            quota = week_quota
+        try:
+            used = int(lvl_state.get("reserved") or 0)
+        except Exception:
+            used = 0
         avail = quota - used
         if avail < 0:
             avail = 0
         return avail
-
     def _amt_prefix(level: str, flag: str) -> str:
         """Префикс перед уровнем: либо просто флаг, либо 3-значная сумма + флаг."""
         amt = _amount_available(level)
