@@ -910,23 +910,33 @@ def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
     parts = ", ".join([f"{lvl} {amt}" for lvl,amt in applied])
     msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
            f"Открыто {len(applied)} ордеров на сумму {total} USDC.\nСписок: {parts}")
-    kb = {
-        "inline_keyboard":[
-            [
-                {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{symbol}"},
-                {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{symbol}"},
-                {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{symbol}"},
-                {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{symbol}"},
-                {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{symbol}"},
-            ],
-            [
-                {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{symbol}"},
-                {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
-                {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"},
-            ],
-        ]
-    }
-    return msg, kb
+    
+    # После изменений пересобираем карточку и остаёмся в подменю OPEN
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard":[
+                [
+                    {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{sym}"},
+                    {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{sym}"},
+                    {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{sym}"},
+                    {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{sym}"},
+                    {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{sym}"},
+                ],
+                [
+                    {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{sym}"},
+                    {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{sym}"},
+                    {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return card, kb
+    except Exception:
+        # Фоллбек: текстовое подтверждение, если сборка карточки упала
+        mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
+        return f"{symbol} {mon_disp}\nОперация выполнена.", kb
+
 
 
 def prepare_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
@@ -1024,23 +1034,33 @@ def confirm_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
     parts = ", ".join([f"{lvl} {amt}" for lvl,amt in applied])
     msg = (f"{symbol} {mon_disp} Wk{week}\n✅ ALL (маркет)\n\n"
            f"Исполнено {len(applied)} на сумму {total} USDC.\nСписок: {parts}")
-    kb = {
-        "inline_keyboard":[
-            [
-                {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{symbol}"},
-                {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{symbol}"},
-                {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{symbol}"},
-                {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{symbol}"},
-                {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{symbol}"},
-            ],
-            [
-                {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{symbol}"},
-                {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
-                {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"},
-            ],
-        ]
-    }
-    return msg, kb
+    
+    # После изменений пересобираем карточку и остаёмся в подменю OPEN
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard":[
+                [
+                    {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{sym}"},
+                    {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{sym}"},
+                    {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{sym}"},
+                    {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{sym}"},
+                    {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{sym}"},
+                ],
+                [
+                    {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{sym}"},
+                    {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{sym}"},
+                    {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return card, kb
+    except Exception:
+        # Фоллбек: текстовое подтверждение, если сборка карточки упала
+        mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
+        return f"{symbol} {mon_disp}\nОперация выполнена.", kb
+
 # -------------------------
 
 # Публичные обёртки для FILL
