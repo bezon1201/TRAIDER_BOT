@@ -45,6 +45,7 @@ from orders import (
     confirm_fill_l3,
     perform_rollover,
     recompute_flags_for_symbol,
+    confirm_cancel_all,
 )
 from general_scheduler import (
     start_collector,
@@ -752,7 +753,24 @@ async def _answer_callback(callback: dict) -> dict:
         return {"ok": True}
 
     # ORDERS → CANCEL → подготовка отмены OCO
-    if data.startswith("ORDERS_CANCEL_OCO:"):
+    
+    # ORDERS → CANCEL → ⚠️ALL
+    if data.startswith("ORDERS_CANCEL_ALL:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_all(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        try:
+            await _edit_markup(kb)
+        except Exception:
+            pass
+        return {"ok": True}
+if data.startswith("ORDERS_CANCEL_OCO:"):
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
