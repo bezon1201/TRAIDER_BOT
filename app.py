@@ -586,6 +586,7 @@ async def _answer_callback(callback: dict) -> dict:
             return {"ok": True}
         msg, kb = prepare_open_l0(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await _edit_markup(kb)
         return {"ok": True}
 
     # ORDERS → OPEN → подтверждение LIMIT 0
