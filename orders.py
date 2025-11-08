@@ -766,7 +766,17 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
     # сохраняем уровни и пересчитываем агрегаты
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
-    # после ролловера пересчитаем флаги
+
+    # ensure week increment and fresh state
+    info3 = info2
+    try:
+        new_week = week + 1
+        set_pair_week(symbol, month, new_week)
+        info3 = get_pair_budget(symbol, month)
+    except Exception:
+        # fallback: return aggregates before week increment if anything fails
+        pass
+# после ролловера пересчитаем флаги
     _recompute_symbol_flags(symbol)
 
     return info3
