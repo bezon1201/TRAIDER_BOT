@@ -108,6 +108,8 @@ def compute_L_flag(data: dict, level_key: str) -> str:
         L = None
     mm = data.get("market_mode")
     mode = _norm_mode((mm.get("12h") if isinstance(mm, dict) else mm) or "RANGE")
+    if level_key == "L0" and mode == "DOWN":
+        return "🔴"
     if level_key == "L2" and mode == "UP":
         return "🔴"
     if level_key == "L3" and mode in ("UP", "RANGE"):
