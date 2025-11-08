@@ -741,11 +741,8 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
         if had_fill:
             next_week_quota = base
         else:
-            quota = week_quota if week_quota > 0 else base
-            leftover = quota - reserved
-            if leftover < 0:
-                leftover = 0
-            next_week_quota = base + leftover
+            quota_prev = week_quota if week_quota > 0 else base
+            next_week_quota = base + quota_prev
             if base > 0:
                 max_quota = 4 * base
                 if next_week_quota > max_quota:
@@ -764,7 +761,6 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
     # сохраняем уровни и пересчитываем агрегаты
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
-
     # после ролловера пересчитаем флаги
     _recompute_symbol_flags(symbol)
 
