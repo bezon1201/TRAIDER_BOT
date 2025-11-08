@@ -174,7 +174,8 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     kb = {
         "inline_keyboard": [[
             {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{available}"},
-            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+            {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
         ]]
     }
     return msg, kb
@@ -252,7 +253,8 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                 {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{sym}"},
             ],
             [
-                {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
             ],
         ]}
         return card, kb
@@ -301,6 +303,7 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -356,6 +359,7 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
@@ -412,6 +416,7 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
@@ -439,6 +444,7 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -465,6 +471,89 @@ def confirm_open_l2(symbol: str, amount: int):   return _confirm_open_level(symb
 def prepare_open_l3(symbol: str):   return _prepare_open_level(symbol, "L3", "LIMIT 3")
 def confirm_open_l3(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L3", "LIMIT 3")
 
+
+def confirm_cancel_all(symbol: str):
+    """Batch-cancel all levels with ⚠️ flag and reserved>0; stay in CANCEL submenu."""
+    from datetime import datetime
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return "Некорректный символ.", {}
+    month = datetime.now().strftime("%Y-%m")
+
+    levels = get_pair_levels(sym, month)
+    sdata = _load_symbol_data(sym)
+    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+
+    changed = False
+    for lvl in ("OCO","L0","L1","L2","L3"):
+        st = levels.get(lvl) or {}
+        try:
+            reserved = int(st.get("reserved") or 0)
+        except Exception:
+            reserved = 0
+        flg = (flags or {}).get(lvl)
+        if flg == "⚠️" and reserved > 0:
+            st["reserved"] = 0
+            levels[lvl] = st
+            changed = True
+
+    if not changed:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = f"{sym} {mon_disp}\nНечего отменять: нет ордеров с ⚠️."
+        kb = {"inline_keyboard": [[
+            {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+        ],[
+            {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
+            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+        ]]} 
+        return msg, kb
+
+    save_pair_levels(sym, month, levels)
+    info2 = recompute_pair_aggregates(sym, month)
+    _recompute_symbol_flags(sym)
+
+    try:
+        card = build_symbol_message(sym)
+        kb = {"inline_keyboard": [[
+            {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+        ],[
+            {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
+            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+        ]]} 
+        return card, kb
+    except Exception:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{sym} {mon_disp}\n"
+            f"Отменены ордера с ⚠️. "
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
+        kb = {"inline_keyboard": [[
+            {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+            {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+            {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+            {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+            {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+        ],[
+            {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
+            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+        ]]} 
+        return msg, kb
 def prepare_cancel_oco(symbol: str):  return _prepare_cancel_level(symbol, "OCO", "OCO")
 def confirm_cancel_oco(symbol: str, amount: int):  return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
 
@@ -513,6 +602,7 @@ def _prepare_fill_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         kb = {
             "inline_keyboard": [
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -535,6 +625,7 @@ def _prepare_fill_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -603,6 +694,7 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -650,6 +742,7 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{sym}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
@@ -677,6 +770,7 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
+                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
