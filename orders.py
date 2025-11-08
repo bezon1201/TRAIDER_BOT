@@ -78,49 +78,7 @@ def _compute_base_quota(symbol: str, month: str, lvl: str, budget: int) -> int:
         p = 0
     if p <= 0:
         return 0
-    quota = int(round(budget * p / 100.0))
-    if quota < 0:
-        quota = 0
-    return quota
-
-
-def _mode_key_from_symbol(symbol: str) -> str:
-    sdata = _load_symbol_data(symbol)
-    market_mode = sdata.get("market_mode")
-    raw_mode = market_mode.get("12h") if isinstance(market_mode, dict) else market_mode
-    raw_mode_str = str(raw_mode or "").upper()
-    if "UP" in raw_mode_str:
-        return "UP"
-    elif "DOWN" in raw_mode_str:
-        return "DOWN"
-    return "RANGE"
-
-def _flag_desc(flag: str) -> str:
-    if flag == "🟢":
-        return "цена ниже / внизу коридора — можно брать по рынку"
-    if flag == "🟡":
-        return "можно открыть по рекомендациям"
-    if flag == "🔴":
-        return "цена высока — ордер ставить рискованно"
-    return "нет автофлага"
-
-
-def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    free = int(info.get("free") or 0)
-    week = int(info.get("week") or 0)
-
-    if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл ещё не запущен (Wk{week}) или бюджет 0 — {title} недоступен.", {}
-
-    # базовая квота по режиму рынка
-    base_quota = _compute_base_quota(symbol, month, lvl, budget)
+    quota = week_quota if week_quota > 0 else (0 if (int(lvl_state.get('last_fill_week') or -1) == week) else base_quota) = _compute_base_quota(symbol, month, lvl, budget)
     if base_quota <= 0:
         mode_key = _mode_key_from_symbol(symbol)
         return (
@@ -231,7 +189,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     levels[lvl] = {
         "reserved": new_reserved,
         "spent": new_spent,
-        "week_quota": (week_quota if not (week_quota <= 0 and int(lvl_state.get('last_fill_week') or -1) < 0 and int(lvl_state.get('reserved') or 0) == 0 and int(lvl_state.get('spent') or 0) == 0) else quota),
+        "week_quota": week_quota if week_quota > 0 else quota,
         "last_fill_week": last_fill_week,
     }
     save_pair_levels(symbol, month, levels)
