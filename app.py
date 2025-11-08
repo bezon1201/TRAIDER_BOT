@@ -44,7 +44,9 @@ from orders import (
     prepare_fill_l3,
     confirm_fill_l3,
     perform_rollover,
-    recompute_flags_for_symbol,
+    recompute_flags_for_symbol,,
+    prepare_open_all_limit, confirm_open_all_limit,
+    prepare_open_all_mkt, confirm_open_all_mkt
 )
 from general_scheduler import (
     start_collector,
@@ -549,13 +551,104 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
                 ],
                 [
+                    {"text": "✅ ALL", "callback_data": f"ORDERS_OPEN_ALL_MKT:{symbol}"},
+                    {"text": "⚠️ ALL", "callback_data": f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
         }
         await _edit_markup(kb)
         return {"ok": True}
-    # ORDERS → OPEN → OCO (подтверждение виртуального ордера)
+    
+    # ORDERS → OPEN → ALL (лимитные, 🟡)
+    if data.startswith("ORDERS_OPEN_ALL_LIMIT:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        from orders import prepare_open_all_limit
+        msg, kb = prepare_open_all_limit(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await _edit_markup(kb)
+        return {"ok": True}
+    if data.startswith("ORDERS_OPEN_ALL_LIMIT_CONFIRM:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        from orders import confirm_open_all_limit
+        msg, kb = confirm_open_all_limit(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+    if data.startswith("ORDERS_OPEN_ALL_LIMIT_CANCEL:"):
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
+                ],
+                [
+                    {"text": "✅ ALL", "callback_data": f"ORDERS_OPEN_ALL_MKT:{symbol}"},
+                    {"text": "⚠️ ALL", "callback_data": f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
+    # ORDERS → OPEN → ALL (маркет, 🟢)
+    if data.startswith("ORDERS_OPEN_ALL_MKT:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        from orders import prepare_open_all_mkt
+        msg, kb = prepare_open_all_mkt(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await _edit_markup(kb)
+        return {"ok": True}
+    if data.startswith("ORDERS_OPEN_ALL_MKT_CONFIRM:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        from orders import confirm_open_all_mkt
+        msg, kb = confirm_open_all_mkt(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        return {"ok": True}
+    if data.startswith("ORDERS_OPEN_ALL_MKT_CANCEL:"):
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
+                ],
+                [
+                    {"text": "✅ ALL", "callback_data": f"ORDERS_OPEN_ALL_MKT:{symbol}"},
+                    {"text": "⚠️ ALL", "callback_data": f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        await _edit_markup(kb)
+        return {"ok": True}
+
+# ORDERS → OPEN → OCO (подтверждение виртуального ордера)
     if data.startswith("ORDERS_OPEN_OCO:"):
         try:
             _, sym_raw = data.split(":", 1)

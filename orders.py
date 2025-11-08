@@ -781,6 +781,268 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
     return info3
 
 
+# -------------------------
+# OPEN ALL helpers
+
+def _calc_available_for_level(symbol: str, month: str, week: int, lvl: str, budget: int) -> int:
+    """Доступная сумма к открытию по уровню с учётом квот и already used/filled этой недели."""
+    levels = get_pair_levels(symbol, month) or {}
+    base_quota = _compute_base_quota(symbol, month, lvl, budget)
+    if base_quota <= 0:
+        return 0
+    st = levels.get(lvl) or {}
+    try:
+        week_quota = int(st.get("week_quota") or 0)
+    except Exception:
+        week_quota = 0
+    quota = week_quota if week_quota > 0 else base_quota
+    try:
+        last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
+    except Exception:
+        last_fill_week = -1
+    reserved = int(st.get("reserved") or 0)
+    spent_curr = int(st.get("spent") or 0) if last_fill_week == week else 0
+    available = quota - (reserved + spent_curr)
+    return available if available > 0 else 0
+
+
+def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    """Подготовка: открыть все лимитные уровни (🟡) на доступные суммы."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    budget = int(info.get("budget") or 0)
+    free = int(info.get("free") or 0)
+    week = int(info.get("week") or 0)
+    if week <= 0 or budget <= 0:
+        return f"{symbol} {month}\nЦикл ещё не запущен — ALL недоступен.", {}
+
+    sdata = _load_symbol_data(symbol)
+    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+    yellow = {k for k,v in (flags or {}).items() if v == "Y"}
+    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
+
+    items = []
+    total = 0
+    for lvl in levels_list:
+        a = _calc_available_for_level(symbol, month, week, lvl, budget)
+        if a > 0:
+            items.append((lvl, a))
+            total += a
+
+    if total <= 0:
+        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
+        return f"{symbol} {month}\nALL (лимит) — нечего открывать.", kb
+
+    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
+    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in items])
+    msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
+           f"Открыть {len(items)} ордера на сумму {total} USDC?\nСписок: {parts}")
+    kb = {"inline_keyboard":[
+        [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CONFIRM:{symbol}"}],
+        [{"text":"CANCEL","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CANCEL:{symbol}"}],
+    ]}
+    return msg, kb
+
+
+def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    budget = int(info.get("budget") or 0)
+    free = int(info.get("free") or 0)
+    week = int(info.get("week") or 0)
+    if week <= 0 or budget <= 0:
+        return f"{symbol} {month}\nЦикл ещё не запущен — операция отменена.", {}
+
+    levels = get_pair_levels(symbol, month) or {}
+    sdata = _load_symbol_data(symbol)
+    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+    yellow = {k for k,v in (flags or {}).items() if v == "Y"}
+    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
+
+    applied = []
+    total = 0
+    for lvl in levels_list:
+        a = _calc_available_for_level(symbol, month, week, lvl, budget)
+        if a <= 0:
+            continue
+        if free <= 0:
+            break
+        actual = min(a, free)
+        st = levels.get(lvl) or {}
+        reserved = int(st.get("reserved") or 0)
+        try:
+            spent = int(st.get("spent") or 0)
+        except Exception:
+            spent = 0
+        try:
+            week_quota = int(st.get("week_quota") or 0)
+        except Exception:
+            week_quota = 0
+        try:
+            last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
+        except Exception:
+            last_fill_week = -1
+        levels[lvl] = {
+            "reserved": reserved + actual,
+            "spent": spent,
+            "week_quota": week_quota,
+            "last_fill_week": last_fill_week,
+        }
+        free -= actual
+        total += actual
+        applied.append((lvl, actual))
+
+    save_pair_levels(symbol, month, levels)
+    info2 = recompute_pair_aggregates(symbol, month)
+    _recompute_symbol_flags(symbol)
+
+    if total <= 0:
+        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
+        return f"{symbol} {month}\nALL (лимит) — ничего не открыто.", kb
+
+    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
+    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in applied])
+    msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
+           f"Открыто {len(applied)} ордеров на сумму {total} USDC.\nСписок: {parts}")
+    kb = {
+        "inline_keyboard":[
+            [
+                {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{symbol}"},
+                {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{symbol}"},
+                {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{symbol}"},
+                {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{symbol}"},
+                {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{symbol}"},
+            ],
+            [
+                {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{symbol}"},
+                {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"},
+            ],
+        ]
+    }
+    return msg, kb
+
+
+def prepare_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    """Подготовка: маркет-исполнение (🟢) всех доступных уровней на их квоты."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    budget = int(info.get("budget") or 0)
+    week = int(info.get("week") or 0)
+    if week <= 0 or budget <= 0:
+        return f"{symbol} {month}\nЦикл ещё не запущен — ALL недоступен.", {}
+
+    sdata = _load_symbol_data(symbol)
+    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+    green = {k for k,v in (flags or {}).items() if v == "G"}
+    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in green]
+
+    items = []
+    total = 0
+    for lvl in levels_list:
+        a = _calc_available_for_level(symbol, month, week, lvl, budget)
+        if a > 0:
+            items.append((lvl, a))
+            total += a
+
+    if total <= 0:
+        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
+        return f"{symbol} {month}\n✅ ALL — нечего исполнять.", kb
+
+    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
+    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in items])
+    msg = (f"{symbol} {mon_disp} Wk{week}\n✅ ALL (маркет)\n\n"
+           f"Исполнить {len(items)} ордеров на сумму {total} USDC?\nСписок: {parts}")
+    kb = {"inline_keyboard":[
+        [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_MKT_CONFIRM:{symbol}"}],
+        [{"text":"CANCEL","callback_data":f"ORDERS_OPEN_ALL_MKT_CANCEL:{symbol}"}],
+    ]}
+    return msg, kb
+
+
+def confirm_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    budget = int(info.get("budget") or 0)
+    week = int(info.get("week") or 0)
+    if week <= 0 or budget <= 0:
+        return f"{symbol} {month}\nЦикл ещё не запущен — операция отменена.", {}
+
+    levels = get_pair_levels(symbol, month) or {}
+    sdata = _load_symbol_data(symbol)
+    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+    green = {k for k,v in (flags or {}).items() if v == "G"}
+    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in green]
+
+    applied = []
+    total = 0
+    for lvl in levels_list:
+        a = _calc_available_for_level(symbol, month, week, lvl, budget)
+        if a <= 0:
+            continue
+        st = levels.get(lvl) or {}
+        reserved = int(st.get("reserved") or 0)
+        try:
+            spent = int(st.get("spent") or 0)
+        except Exception:
+            spent = 0
+        try:
+            week_quota = int(st.get("week_quota") or 0)
+        except Exception:
+            week_quota = 0
+        # FILL: перевод в spent и фиксация недели
+        levels[lvl] = {
+            "reserved": reserved,
+            "spent": spent + a,
+            "week_quota": week_quota,
+            "last_fill_week": week,
+        }
+        total += a
+        applied.append((lvl, a))
+
+    save_pair_levels(symbol, month, levels)
+    info2 = recompute_pair_aggregates(symbol, month)
+    _recompute_symbol_flags(symbol)
+
+    if total <= 0:
+        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
+        return f"{symbol} {month}\n✅ ALL — ничего не исполнено.", kb
+
+    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
+    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in applied])
+    msg = (f"{symbol} {mon_disp} Wk{week}\n✅ ALL (маркет)\n\n"
+           f"Исполнено {len(applied)} на сумму {total} USDC.\nСписок: {parts}")
+    kb = {
+        "inline_keyboard":[
+            [
+                {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{symbol}"},
+                {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{symbol}"},
+                {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{symbol}"},
+                {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{symbol}"},
+                {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{symbol}"},
+            ],
+            [
+                {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{symbol}"},
+                {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"},
+            ],
+        ]
+    }
+    return msg, kb
+# -------------------------
+
 # Публичные обёртки для FILL
 def prepare_fill_oco(symbol: str):  return _prepare_fill_level(symbol, "OCO", "OCO")
 def confirm_fill_oco(symbol: str, amount: int):  return _confirm_fill_level(symbol, amount, "OCO", "OCO")
