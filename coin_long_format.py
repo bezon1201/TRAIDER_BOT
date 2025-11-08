@@ -88,7 +88,7 @@ def build_long_card(data: dict) -> str:
             week_quota = int(lvl_state.get("week_quota") or 0)
         except Exception:
             week_quota = 0
-        if week_quota <= 0:
+        if 'week_quota' not in (lvl_state or {}):
             # fallback: базовая квота по процентам, если week_quota ещё не задана
             p = int(perc.get(level, 0) or 0)
             if p <= 0:
