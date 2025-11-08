@@ -268,7 +268,8 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                 {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{sym}"},
             ],
             [
-                {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
             ],
         ]}
         return card, kb
@@ -372,6 +373,7 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
                 ],
                 [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
@@ -428,6 +430,7 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
                 ],
                 [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
@@ -666,6 +669,7 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{sym}"},
                 ],
                 [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                 ],
             ]
@@ -1078,3 +1082,132 @@ def confirm_fill_l2(symbol: str, amount: int):   return _confirm_fill_level(symb
 
 def prepare_fill_l3(symbol: str):   return _prepare_fill_level(symbol, "L3", "LIMIT 3")
 def confirm_fill_l3(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L3", "LIMIT 3")
+
+def prepare_cancel_all(symbol: str):
+    """Подготовка отмены всех открытых (⚠️ reserved>0) ордеров: OCO, L0–L3."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+    month = datetime.now().strftime("%Y-%m")
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+    levels = get_pair_levels(symbol, month)
+    if not isinstance(levels, dict):
+        levels = {}
+    order_keys = ["OCO","L0","L1","L2","L3"]
+    items = []
+    total = 0
+    for k in order_keys:
+        st = levels.get(k) or {}
+        r = int(st.get("reserved") or 0)
+        if r > 0:
+            items.append(f"{k} {r}")
+            total += r
+    if total <= 0:
+        return (f"{symbol} {mon_disp}\n"
+                f"❌ ALL — нечего отменять."), {
+            "inline_keyboard":[
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+                ],
+                [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{symbol}"},
+                    {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"},
+                ]
+            ]
+        }
+    msg = (f"{symbol} {mon_disp}\n"
+           f"❌ ALL (cancel)\n\n"
+           f"Отменить {len(items)} ордера на сумму {total} USDC?\n"
+           f"Список: {', '.join(items)}")
+    kb = {
+        "inline_keyboard":[[
+            {"text":"CONFIRM","callback_data":f"ORDERS_CANCEL_ALL_CONFIRM:{symbol}"},
+            {"text":"↩️","callback_data":f"ORDERS_CANCEL:{symbol}"},
+        ]]
+    }
+    return msg, kb
+
+
+def confirm_cancel_all(symbol: str):
+    """Отмена всех открытых (⚠️) ордеров — reserved→0, пересбор карточки и подменю CANCEL."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректные параметры операции.", {}
+    month = datetime.now().strftime("%Y-%m")
+    levels = get_pair_levels(symbol, month)
+    if not isinstance(levels, dict):
+        levels = {}
+    changed = False
+    total = 0
+    for k in ["OCO","L0","L1","L2","L3"]:
+        st = levels.get(k) or {}
+        r = int(st.get("reserved") or 0)
+        if r > 0:
+            total += r
+            changed = True
+            levels[k] = {
+                "reserved": 0,
+                "spent": int(st.get("spent") or 0),
+                "week_quota": int(st.get("week_quota") or 0),
+                "last_fill_week": int(st.get("last_fill_week") or 0),
+            }
+    if not changed:
+        # Нечего отменять — просто вернуть текущее подменю CANCEL
+        try:
+            card = build_symbol_message(symbol)
+            sym = (symbol or "").upper()
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+                        {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+                        {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+                        {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+                        {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+                    ],
+                    [
+                        {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                        {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                    ],
+                ]
+            }
+            return card, kb
+        except Exception:
+            return "❌ ALL — нечего отменять.", {}
+    # Сохраняем и пересчитываем агрегаты/флаги
+    save_pair_levels(symbol, month, levels)
+    recompute_pair_aggregates(symbol, month)
+    _recompute_symbol_flags(symbol)
+    # Пересобираем карточку и остаёмся в CANCEL
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+                ],
+                [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return card, kb
+    except Exception:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}

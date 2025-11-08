@@ -46,7 +46,7 @@ from orders import (
     perform_rollover,
     recompute_flags_for_symbol,
     prepare_open_all_limit, confirm_open_all_limit,
-    prepare_open_all_mkt, confirm_open_all_mkt
+    prepare_open_all_mkt, confirm_open_all_mkt, prepare_cancel_all, confirm_cancel_all
 )
 from general_scheduler import (
     start_collector,
@@ -553,6 +553,7 @@ async def _answer_callback(callback: dict) -> dict:
                 [
                     {"text": "✅ ALL", "callback_data": f"ORDERS_OPEN_ALL_MKT:{symbol}"},
                     {"text": "⚠️ ALL", "callback_data": f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                    {"text":"❌ ALL","callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -597,6 +598,7 @@ async def _answer_callback(callback: dict) -> dict:
                 [
                     {"text": "✅ ALL", "callback_data": f"ORDERS_OPEN_ALL_MKT:{symbol}"},
                     {"text": "⚠️ ALL", "callback_data": f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                    {"text":"❌ ALL","callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -641,6 +643,7 @@ async def _answer_callback(callback: dict) -> dict:
                 [
                     {"text": "✅ ALL", "callback_data": f"ORDERS_OPEN_ALL_MKT:{symbol}"},
                     {"text": "⚠️ ALL", "callback_data": f"ORDERS_OPEN_ALL_LIMIT:{symbol}"},
+                    {"text":"❌ ALL","callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -836,6 +839,7 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
                 ],
                 [
+                    {"text":"❌ ALL","callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -843,6 +847,19 @@ async def _answer_callback(callback: dict) -> dict:
         await _edit_markup(kb)
         return {"ok": True}
 
+
+    # ORDERS → CANCEL → подготовка отмены ALL
+    if data.startswith("ORDERS_CANCEL_ALL:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = prepare_cancel_all(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
     # ORDERS → CANCEL → подготовка отмены OCO
     if data.startswith("ORDERS_CANCEL_OCO:"):
         try:
@@ -908,7 +925,20 @@ async def _answer_callback(callback: dict) -> dict:
         await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
-    # ORDERS → CANCEL → подтверждение OCO
+    
+    # ORDERS → CANCEL → подтверждение ALL
+    if data.startswith("ORDERS_CANCEL_ALL_CONFIRM:"):
+        try:
+            _, sym_raw = data.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        if not symbol:
+            return {"ok": True}
+        msg, kb = confirm_cancel_all(symbol)
+        await tg_send(chat_id, _code(msg), reply_markup=kb or None)
+        return {"ok": True}
+# ORDERS → CANCEL → подтверждение OCO
     if data.startswith("ORDERS_CANCEL_OCO_CONFIRM:"):
         try:
             _, sym, amount_str = data.split(":", 2)
@@ -1013,6 +1043,7 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
+                    {"text":"❌ ALL","callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
