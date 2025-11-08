@@ -175,12 +175,54 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     if len(month) == 7 and month[4] == "-":
         mon_disp = f"{month[5:]}-{month[:4]}"
 
+    # --- Реальное подтверждение LIMIT BUY (без ввода от пользователя) ---
+    # Берём цену уровня из данных монеты (grid[Lx]) и фильтры из filters
+    base = symbol.replace("USDC","").replace("USDT","")
+    filt = (sdata or {}).get("filters") or {}
+    tick = float(filt.get("tickSize") or 0) if isinstance(filt.get("tickSize"), (int,float,str)) else 0.0
+    try: tick = float(filt.get("tickSize")) if filt.get("tickSize") is not None else 0.0
+    except Exception: pass
+    try: step = float(filt.get("stepSize")) if filt.get("stepSize") is not None else 0.0
+    except Exception: step = 0.0
+    grid = (sdata or {}).get("grid") or {}
+    price_lx = None
+    try: price_lx = float(grid.get(lvl)) if grid.get(lvl) is not None else None
+    except Exception: price_lx = None
+    last_price = None
+    try: last_price = float((sdata or {}).get("price"))
+    except Exception: pass
+    # Округлим цену к tickSize, если возможно
+    if price_lx is not None and tick and tick > 0:
+        price_lx = math.floor(price_lx / tick) * tick
+    # Количество из суммы (available)
+    qty = None
+    if price_lx and price_lx > 0:
+        qty_raw = float(available) / float(price_lx)
+        if step and step > 0:
+            qty = math.floor(qty_raw / step) * step
+        else:
+            qty = qty_raw
+    notional = (qty or 0) * (price_lx or 0)
+    # Процентное отклонение от текущей цены
+    pct = None
+    if last_price and price_lx:
+        try: pct = ((price_lx - last_price) / last_price) * 100.0
+        except Exception: pct = None
+    pct_str = f"{pct:.2f}%" if isinstance(pct, float) else "-"
+    tick_str = (f"{tick:g}" if tick else "-")
+    step_str = (f"{step:g}" if step else "-")
+    qty_str = (f"{qty:.8f}".rstrip("0").rstrip(".") if isinstance(qty, float) else "-")
+    last_str = (f"{last_price:.2f}" if isinstance(last_price, float) else "-")
+    price_str = (f"{price_lx:.2f}" if isinstance(price_lx, float) else "-")
+    notional_str = (f"{notional:.6f}" if isinstance(notional, float) else "-")
+
     msg = (
         f"{symbol} {mon_disp} Wk{week}\n"
-        f"{title} OPEN\n\n"
-        f"Сумма: {available} USDC\n"
-        f"Флаг: {flag_val or '-'} ({flag_desc})\n"
-        f"Поставить виртуальный {title} на {available} USDC?"
+        f"{title} • SPOT LIMIT BUY (GTC)\n\n"
+        f"Цена (L{lvl[-1]}): {price_str} USDC  (tick {tick_str})\n"
+        f"Текущая:   {last_str} USDC  (Δ {pct_str})\n\n"
+        f"Сумма: {available} USDC  →  Qty: {qty_str} {base}  (step {step_str})\n"
+        f"Нотионал: {notional_str} USDC"
     )
     cb = f"ORDERS_OPEN_{lvl}_CONFIRM"
     kb = {
