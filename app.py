@@ -770,7 +770,7 @@ async def _answer_callback(callback: dict) -> dict:
         except Exception:
             pass
         return {"ok": True}
-if data.startswith("ORDERS_CANCEL_OCO:"):
+    if data.startswith("ORDERS_CANCEL_OCO:"):
         try:
             _, sym_raw = data.split(":", 1)
         except ValueError:
