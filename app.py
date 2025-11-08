@@ -44,7 +44,7 @@ from orders import (
     prepare_fill_l3,
     confirm_fill_l3,
     perform_rollover,
-    recompute_flags_for_symbol,,
+    recompute_flags_for_symbol,
     prepare_open_all_limit, confirm_open_all_limit,
     prepare_open_all_mkt, confirm_open_all_mkt
 )
