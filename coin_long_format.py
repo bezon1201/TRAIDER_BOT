@@ -97,9 +97,14 @@ def build_long_card(data: dict) -> str:
         else:
             quota = week_quota
         try:
-            used = int(lvl_state.get("reserved") or 0)
+            used_r = int(lvl_state.get("reserved") or 0)
         except Exception:
-            used = 0
+            used_r = 0
+        try:
+            used_s = int(lvl_state.get("spent") or 0)
+        except Exception:
+            used_s = 0
+        used = used_r + used_s
         avail = quota - used
         if avail < 0:
             avail = 0
