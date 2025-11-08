@@ -1171,31 +1171,43 @@ async def telegram_webhook(update: Request):
     # /coins [SYMBOLS...] (только показать/валидировать; без сохранения)
     if text_lower.startswith("/coins"):
         parts = text.split(maxsplit=1)
+        # No arguments -> read pairs.json and show status
         if len(parts) == 1:
             pairs = load_pairs()
-            reply = "Пары: " + (", ".join(pairs) if pairs else "—")
+            if pairs:
+                reply = "Активные пары: " + ", ".join(pairs)
+            else:
+                reply = "Активных пар нет. Добавьте пары командой /coins BTCUSDC ETHUSDC ..."
             await tg_send(chat_id, _code(reply))
             return {"ok": True}
-        else:
-            rest = parts[1].strip()
-            items = [x.strip().upper() for x in rest.split() if x.strip()]
-            valids, invalids = [], []
-            for sym in items:
-                if re.fullmatch(r"[A-Z]+", sym) and sym.endswith("USDC"):
-                    valids.append(sym)
-                else:
-                    invalids.append(sym)
-            if invalids:
-                await tg_send(chat_id, _code("Некорректные тикеры: " + ", ".join(invalids)))
-                return {"ok": True}
-            seen = set()
-            filtered = []
-            for s in valids:
-                if s not in seen:
-                    seen.add(s)
-                    filtered.append(s)
-            await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
+
+        # With arguments -> parse, validate, dedupe, write pairs.json
+        rest = parts[1].strip()
+        items = [x.strip().upper() for x in rest.split() if x.strip()]
+        # Validate ^[A-Z]+USDC$
+        valids = [s for s in items if re.fullmatch(r"^[A-Z]+USDC$", s)]
+        if not valids:
+            await tg_send(chat_id, _code("Не удалось найти ни одного корректного тикера (формат: XXXUSDC)."))
             return {"ok": True}
+
+        # Deduplicate preserving first occurrence, then sort A→Z (allowed by спецификация)
+        seen = set()
+        deduped = []
+        for s in valids:
+            if s not in seen:
+                seen.add(s)
+                deduped.append(s)
+        deduped_sorted = sorted(deduped)
+
+        # Save as {"pairs":[...]}
+        try:
+            save_pairs_json(deduped_sorted)
+            reply = "Пары обновлены: " + ", ".join(deduped_sorted)
+        except Exception as e:
+            reply = f"Ошибка записи pairs.json: {e.__class__.__name__}"
+        await tg_send(chat_id, _code(reply))
+        return {"ok": True}
+
 
     # /now [<SYMBOL>|long|short]
     if text_lower.startswith("/now"):
