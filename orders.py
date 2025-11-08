@@ -1,3 +1,4 @@
+from typing import Tuple, Dict, Any, List, Optional
 
 def _symbol_data_path(symbol: str) -> str:
     storage_dir = os.getenv("STORAGE_DIR", "/data")
