@@ -249,7 +249,12 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    # После изменения резервов обновляем автофлаги (включая ⚠️/✅).
+    
+    # увеличиваем номер недели
+    new_week = week + 1
+    set_pair_week(symbol, month, new_week)
+    info3 = get_pair_budget(symbol, month)
+# После изменения резервов обновляем автофлаги (включая ⚠️/✅).
     _recompute_symbol_flags(symbol)
 
     try:
@@ -764,7 +769,7 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
     # после ролловера пересчитаем флаги
     _recompute_symbol_flags(symbol)
 
-    return info2
+    return info3
 
 
 # Публичные обёртки для FILL
