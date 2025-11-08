@@ -268,7 +268,6 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                 {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{sym}"},
             ],
             [
-                {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
             ],
         ]}
@@ -1198,10 +1197,9 @@ def confirm_cancel_all(symbol: str):
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
                 ],
                 [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                ],
+                        {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                        {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                    ],
             ]
         }
         return card, kb
