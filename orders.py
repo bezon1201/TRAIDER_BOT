@@ -1173,8 +1173,7 @@ def confirm_cancel_all(symbol: str):
                     ],
                     [
                         {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                        {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                        {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
                     ],
                 ]
             }
