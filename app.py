@@ -314,7 +314,7 @@ async def _answer_callback(callback: dict) -> dict:
             pass
 
     # Parse commands
-    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET_ROLLOVER:") or data.startswith("BUDGET_BACK_ROOT:") or data.startswith("ORDERS"):
+    if data.startswith("BUDGET_SET:") or data.startswith("BUDGET_CLEAR:") or data.startswith("BUDGET_START:") or data.startswith("BUDGET_ROLLOVER:") or data.startswith("BUDGET:") or data.startswith("BUDGET_BACK_ROOT:") or data.startswith("ORDERS"):
         # Extract symbol
         try:
             _, sym_raw = data.split(":", 1)
