@@ -252,7 +252,6 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     
     # увеличиваем номер недели
     new_week = week + 1
-    set_pair_week(symbol, month, new_week)
     info3 = get_pair_budget(symbol, month)
 # После изменения резервов обновляем автофлаги (включая ⚠️/✅).
     _recompute_symbol_flags(symbol)
