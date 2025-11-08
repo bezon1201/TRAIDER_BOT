@@ -243,10 +243,18 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     try:
         card = build_symbol_message(symbol)
         sym = (symbol or "").upper()
-        kb = {"inline_keyboard": [[
-            {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
-            {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
-        ]]}
+        kb = {"inline_keyboard": [
+            [
+                {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{sym}"},
+                {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{sym}"},
+                {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{sym}"},
+                {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{sym}"},
+                {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{sym}"},
+            ],
+            [
+                {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+            ],
+        ]}
         return card, kb
     except Exception:
         msg = (
@@ -257,7 +265,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
             f"💸 {info2.get('spent')} | "
             f"🎯 {info2.get('free')}"
         )
-        return msg, {}
+        return msg, kb
 
 def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
@@ -612,6 +620,8 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     if new_reserved < 0:
         new_reserved = 0
     new_spent = spent + actual
+    # ключевая правка: уменьшаем недельную квоту на объём FILL
+    week_quota = max(0, int(week_quota) - int(actual))
 
     # помечаем, что исполнение было в текущую неделю
     if actual > 0 and week > 0:

@@ -182,25 +182,47 @@ def _pairs_env() -> list[str]:
     return out
 
 
+
 def load_pairs(storage_dir: str = STORAGE_DIR) -> list[str]:
+    """
+    Read active pairs from STORAGE_DIR/pairs.json.
+    Supports:
+      - {"pairs": ["BTCUSDC", ...]}
+      - ["BTCUSDC", ...]  (legacy)
+    Returns a de-duplicated UPPERCASE list preserving input order.
+    """
     path = os.path.join(storage_dir, "pairs.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            res: list[str] = []
-            seen = set()
-            for x in data:
-                s = str(x).strip().upper()
-                if s and s not in seen:
-                    seen.add(s)
-                    res.append(s)
-            return res
+        if isinstance(data, dict) and isinstance(data.get("pairs"), list):
+            src = data.get("pairs", [])
+        elif isinstance(data, list):
+            src = data
+        else:
+            src = []
+        seen = set()
+        out: list[str] = []
+        for x in src:
+            s = str(x).strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
     except FileNotFoundError:
         return []
     except Exception:
         return []
-    return []
+
+def save_pairs_json(pairs: list[str], storage_dir: str = STORAGE_DIR) -> None:
+    """Atomically write pairs.json as {"pairs":[...]}, ensuring directory exists."""
+    path = os.path.join(storage_dir, "pairs.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = {"pairs": list(pairs)}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, path)
 
 
 async def tg_send(chat_id: str, text: str, reply_markup: dict | None = None) -> None:
@@ -564,6 +586,7 @@ async def _answer_callback(callback: dict) -> dict:
             return {"ok": True}
         msg, kb = prepare_open_l0(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
+        await _edit_markup(kb)
         return {"ok": True}
 
     # ORDERS → OPEN → подтверждение LIMIT 0
@@ -1171,31 +1194,43 @@ async def telegram_webhook(update: Request):
     # /coins [SYMBOLS...] (только показать/валидировать; без сохранения)
     if text_lower.startswith("/coins"):
         parts = text.split(maxsplit=1)
+        # No arguments -> read pairs.json and show status
         if len(parts) == 1:
             pairs = load_pairs()
-            reply = "Пары: " + (", ".join(pairs) if pairs else "—")
+            if pairs:
+                reply = "Активные пары: " + ", ".join(pairs)
+            else:
+                reply = "Активных пар нет. Добавьте пары командой /coins BTCUSDC ETHUSDC ..."
             await tg_send(chat_id, _code(reply))
             return {"ok": True}
-        else:
-            rest = parts[1].strip()
-            items = [x.strip().upper() for x in rest.split() if x.strip()]
-            valids, invalids = [], []
-            for sym in items:
-                if re.fullmatch(r"[A-Z]+", sym) and sym.endswith("USDC"):
-                    valids.append(sym)
-                else:
-                    invalids.append(sym)
-            if invalids:
-                await tg_send(chat_id, _code("Некорректные тикеры: " + ", ".join(invalids)))
-                return {"ok": True}
-            seen = set()
-            filtered = []
-            for s in valids:
-                if s not in seen:
-                    seen.add(s)
-                    filtered.append(s)
-            await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
+
+        # With arguments -> parse, validate, dedupe, write pairs.json
+        rest = parts[1].strip()
+        items = [x.strip().upper() for x in rest.split() if x.strip()]
+        # Validate ^[A-Z]+USDC$
+        valids = [s for s in items if re.fullmatch(r"^[A-Z]+USDC$", s)]
+        if not valids:
+            await tg_send(chat_id, _code("Не удалось найти ни одного корректного тикера (формат: XXXUSDC)."))
             return {"ok": True}
+
+        # Deduplicate preserving first occurrence, then sort A→Z (allowed by спецификация)
+        seen = set()
+        deduped = []
+        for s in valids:
+            if s not in seen:
+                seen.add(s)
+                deduped.append(s)
+        deduped_sorted = sorted(deduped)
+
+        # Save as {"pairs":[...]}
+        try:
+            save_pairs_json(deduped_sorted)
+            reply = "Пары обновлены: " + ", ".join(deduped_sorted)
+        except Exception as e:
+            reply = f"Ошибка записи pairs.json: {e.__class__.__name__}"
+        await tg_send(chat_id, _code(reply))
+        return {"ok": True}
+
 
     # /now [<SYMBOL>|long|short]
     if text_lower.startswith("/now"):
