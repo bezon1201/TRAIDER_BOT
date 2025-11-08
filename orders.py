@@ -137,7 +137,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         week_quota = 0
 
     # если квота на неделю ещё не установлена (старые данные) — берём базовую
-    quota = week_quota if ('week_quota' in (lvl_state or {})) else base_quota
+    quota = base_quota if (week_quota <= 0 and int(lvl_state.get('last_fill_week') or -1) < 0 and int(lvl_state.get('reserved') or 0) == 0 and int(lvl_state.get('spent') or 0) == 0) else week_quota
 
     used = int(lvl_state.get("reserved") or 0)
     available = quota - used
@@ -210,7 +210,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         week_quota = int(lvl_state.get("week_quota") or 0)
     except Exception:
         week_quota = 0
-    quota = week_quota if ('week_quota' in (lvl_state or {})) else base_quota
+    quota = base_quota if (week_quota <= 0 and int(lvl_state.get('last_fill_week') or -1) < 0 and int(lvl_state.get('reserved') or 0) == 0 and int(lvl_state.get('spent') or 0) == 0) else week_quota
 
     used = int(lvl_state.get("reserved") or 0)
     available = quota - used
@@ -231,7 +231,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     levels[lvl] = {
         "reserved": new_reserved,
         "spent": new_spent,
-        "week_quota": week_quota if ('week_quota' in (lvl_state or {})) else quota,
+        "week_quota": (week_quota if not (week_quota <= 0 and int(lvl_state.get('last_fill_week') or -1) < 0 and int(lvl_state.get('reserved') or 0) == 0 and int(lvl_state.get('spent') or 0) == 0) else quota),
         "last_fill_week": last_fill_week,
     }
     save_pair_levels(symbol, month, levels)
