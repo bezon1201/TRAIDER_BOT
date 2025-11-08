@@ -550,7 +550,6 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
                 ],
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -744,7 +743,6 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
                 ],
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -939,7 +937,6 @@ async def _answer_callback(callback: dict) -> dict:
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]

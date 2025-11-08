@@ -1,21 +1,3 @@
-from __future__ import annotations
-from datetime import datetime
-from typing import Tuple, Dict, Any
-import os, json
-
-from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates, set_pair_week
-from auto_flags import compute_all_flags
-from symbol_info import build_symbol_message
-
-# Недельные доли по режиму рынка
-WEEKLY_PERCENT = {
-    "UP":   {"OCO": 10, "L0": 10, "L1": 5,  "L2": 0,  "L3": 0},
-    "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
-    "DOWN": {"OCO": 5,  "L0": 0,  "L1": 5, "L2": 10, "L3": 5},
-}
-
-LEVEL_KEYS = ("OCO", "L0", "L1", "L2", "L3")
-
 
 def _symbol_data_path(symbol: str) -> str:
     storage_dir = os.getenv("STORAGE_DIR", "/data")
@@ -174,8 +156,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     kb = {
         "inline_keyboard": [[
             {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{available}"},
-            {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+            {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
         ]]
     }
     return msg, kb
@@ -602,7 +583,6 @@ def _prepare_fill_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         kb = {
             "inline_keyboard": [
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -625,7 +605,6 @@ def _prepare_fill_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -694,7 +673,6 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
@@ -770,7 +748,6 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
                     {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
                 ],
                 [
-                    {"text": "⚠️ALL", "callback_data": f"ORDERS_CANCEL_ALL:{symbol}"},
                     {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
                 ],
             ]
