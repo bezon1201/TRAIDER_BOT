@@ -10,30 +10,23 @@ import httpx
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 # ---------- basic io ----------
-
 def load_pairs(storage_dir: str = STORAGE_DIR) -> List[str]:
     path = os.path.join(storage_dir, "pairs.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict) and isinstance(data.get("pairs"), list):
-            src = data.get("pairs", [])
-        elif isinstance(data, list):
-            src = data
-        else:
-            src = []
-        res: List[str] = []
-        seen = set()
-        for x in src:
-            s = str(x).strip().upper()
-            if s and s not in seen:
-                seen.add(s)
-                res.append(s)
-        return res
+        if isinstance(data, list):
+            res=[]; seen=set()
+            for x in data:
+                s = str(x).strip().upper()
+                if s and s not in seen:
+                    seen.add(s); res.append(s)
+            return res
     except FileNotFoundError:
         return []
     except Exception:
         return []
+    return []
 
 def _coin_file(symbol: str, storage_dir: str = STORAGE_DIR) -> str:
     os.makedirs(storage_dir, exist_ok=True)
