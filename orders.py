@@ -141,7 +141,11 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
 
     reserved = int(lvl_state.get("reserved") or 0)
     spent = int(lvl_state.get("spent") or 0)
-    used = reserved + spent
+    try:
+        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
+    except Exception:
+        last_fill_week = -1
+    used = reserved + (spent if last_fill_week == week else 0)
     available = quota - used
     if available <= 0:
         return f"{symbol} {month}\nЛимит по {title} уже исчерпан (доступно 0 USDC).", {}
@@ -216,7 +220,11 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
 
     reserved = int(lvl_state.get("reserved") or 0)
     spent = int(lvl_state.get("spent") or 0)
-    used = reserved + spent
+    try:
+        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
+    except Exception:
+        last_fill_week = -1
+    used = reserved + (spent if last_fill_week == week else 0)
     available = quota - used
     if available <= 0 or free <= 0:
         return f"{symbol} {month}\nЛимит по {title} или свободный бюджет уже исчерпаны — операция отменена.", {}
@@ -733,7 +741,6 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
         if had_fill:
             next_week_quota = base
         else:
-            # переносим НЕизрасходованную квоту: базовая/текущая квота минус резерв
             quota = week_quota if week_quota > 0 else base
             leftover = quota - reserved
             if leftover < 0:
@@ -758,15 +765,10 @@ def perform_rollover(symbol: str) -> Dict[str, Any]:
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    # увеличиваем номер недели
-    new_week = week + 1
-    set_pair_week(symbol, month, new_week)
-    info3 = get_pair_budget(symbol, month)
-
     # после ролловера пересчитаем флаги
     _recompute_symbol_flags(symbol)
 
-    return info3
+    return info2
 
 
 # Публичные обёртки для FILL

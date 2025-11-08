@@ -104,7 +104,11 @@ def build_long_card(data: dict) -> str:
             used_s = int(lvl_state.get("spent") or 0)
         except Exception:
             used_s = 0
-        used = used_r + used_s
+        try:
+            last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
+        except Exception:
+            last_fill_week = -1
+        used = used_r + (used_s if last_fill_week == week else 0)
         avail = quota - used
         if avail < 0:
             avail = 0
