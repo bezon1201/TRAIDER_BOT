@@ -821,7 +821,7 @@ def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
 
     sdata = _load_symbol_data(symbol)
     flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    yellow = {k for k,v in (flags or {}).items() if v == "Y"}
+    yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
     levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
 
     items = []
@@ -862,7 +862,7 @@ def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
     levels = get_pair_levels(symbol, month) or {}
     sdata = _load_symbol_data(symbol)
     flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    yellow = {k for k,v in (flags or {}).items() if v == "Y"}
+    yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
     levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
 
     applied = []
@@ -943,7 +943,7 @@ def prepare_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
 
     sdata = _load_symbol_data(symbol)
     flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    green = {k for k,v in (flags or {}).items() if v == "G"}
+    green = {k for k,v in (flags or {}).items() if v == "🟢"}
     levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in green]
 
     items = []
@@ -983,7 +983,7 @@ def confirm_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
     levels = get_pair_levels(symbol, month) or {}
     sdata = _load_symbol_data(symbol)
     flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    green = {k for k,v in (flags or {}).items() if v == "G"}
+    green = {k for k,v in (flags or {}).items() if v == "🟢"}
     levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in green]
 
     applied = []
