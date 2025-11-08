@@ -1244,168 +1244,44 @@ async def telegram_webhook(update: Request):
 
     message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or message.get("caption") or "").strip()
-if text.startswith("/live"):
-    return await _handle_live_command(chat_id, text)
+    if text.startswith("/live"):
+        return await _handle_live_command(chat_id, text)
 
-    # Стикер → команда
-    if not text and message.get("sticker"):
-        st = message["sticker"]
-        text = (
-            STICKER_TO_COMMAND.get(st.get("file_unique_id"))
-            or STICKER_TO_COMMAND.get(st.get("file_id"))
-            or ""
-        ).strip()
+        # Стикер → команда
+        if not text and message.get("sticker"):
+            st = message["sticker"]
+            text = (
+                STICKER_TO_COMMAND.get(st.get("file_unique_id"))
+                or STICKER_TO_COMMAND.get(st.get("file_id"))
+                or ""
+            ).strip()
 
-    text_norm = text
-    text_lower = text_norm.lower()
-    text_upper = text_norm.upper()
-    chat_id = str((message.get("chat") or {}).get("id") or "")
-    if not chat_id:
-        return {"ok": True}
-
-    # Budget input mode: if this chat is expected to send a budget value
-    pending = get_budget_input(chat_id)
-    if pending and not text_lower.startswith("/"):
-        raw = (text or "").strip()
-        try:
-            # Только целые числа >= 0
-            val = int(raw)
-            if val < 0:
-                raise ValueError()
-        except Exception:
-            msg = f"{pending['symbol']}\nНужно ввести целое число ≥ 0 в USDC. Попробуй ещё раз:"
-            await tg_send(chat_id, _code(msg))
+        text_norm = text
+        text_lower = text_norm.lower()
+        text_upper = text_norm.upper()
+        chat_id = str((message.get("chat") or {}).get("id") or "")
+        if not chat_id:
             return {"ok": True}
-        info = set_pair_budget(pending["symbol"], pending["month"], val)
-        clear_budget_input(chat_id)
-        # После установки бюджета сразу отправляем карточку по символу
-        try:
-            sym = info.get("symbol") or pending["symbol"]
-            card = build_symbol_message(sym)
-            kb = {
-                "inline_keyboard": [
-                    [
-                        {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
-                        {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
-                    ]
-                ]
-            }
-            await tg_send(chat_id, _code(card), reply_markup=kb)
-        except Exception:
-            # если что-то пошло не так, просто молча выходим
-            pass
-        return {"ok": True}
 
-    # /invested <delta>  |  /invest <delta>
-    if text_lower.startswith("/invested") or text_lower.startswith("/invest "):
-        parts = text.split(maxsplit=1)
-        if len(parts) == 2:
-            raw = parts[1].replace(",", ".")
+        # Budget input mode: if this chat is expected to send a budget value
+        pending = get_budget_input(chat_id)
+        if pending and not text_lower.startswith("/"):
+            raw = (text or "").strip()
             try:
-                delta = float(raw)
-                new_total = adjust_invested_total(STORAGE_DIR, delta)
-                sign = "+" if delta >= 0 else ""
-                reply = f"OK. Added: {sign}{delta:.2f}$ | Invested total: {new_total:.2f}$"
-            except ValueError:
-                reply = "Нужна сумма: /invested 530 или /invest -10"
-        else:
-            reply = "Нужна сумма: /invested 530"
-        await tg_send(chat_id, _code(reply))
-        return {"ok": True}
-
-    # /coins [SYMBOLS...] (только показать/валидировать; без сохранения)
-    if text_lower.startswith("/coins"):
-        parts = text.split(maxsplit=1)
-        # No arguments -> read pairs.json and show status
-        if len(parts) == 1:
-            pairs = load_pairs()
-            if pairs:
-                reply = "Активные пары: " + ", ".join(pairs)
-            else:
-                reply = "Активных пар нет. Добавьте пары командой /coins BTCUSDC ETHUSDC ..."
-            await tg_send(chat_id, _code(reply))
-            return {"ok": True}
-
-        # With arguments -> parse, validate, dedupe, write pairs.json
-        rest = parts[1].strip()
-        items = [x.strip().upper() for x in rest.split() if x.strip()]
-        # Validate ^[A-Z]+USDC$
-        valids = [s for s in items if re.fullmatch(r"^[A-Z]+USDC$", s)]
-        if not valids:
-            await tg_send(chat_id, _code("Не удалось найти ни одного корректного тикера (формат: XXXUSDC)."))
-            return {"ok": True}
-
-        # Deduplicate preserving first occurrence, then sort A→Z (allowed by спецификация)
-        seen = set()
-        deduped = []
-        for s in valids:
-            if s not in seen:
-                seen.add(s)
-                deduped.append(s)
-        deduped_sorted = sorted(deduped)
-
-        # Save as {"pairs":[...]}
-        try:
-            save_pairs_json(deduped_sorted)
-            reply = "Пары обновлены: " + ", ".join(deduped_sorted)
-        except Exception as e:
-            reply = f"Ошибка записи pairs.json: {e.__class__.__name__}"
-        await tg_send(chat_id, _code(reply))
-        return {"ok": True}
-
-
-    # /now [<SYMBOL>|long|short]
-    if text_lower.startswith("/now"):
-        parts = text.strip().split()
-        symbol_arg = None
-        if len(parts) >= 2 and parts[1].lower() not in ("long", "short"):
-            symbol_arg = parts[1].upper()
-
-        parts = (text or "").strip().split()
-        mode_arg = None
-        if len(parts) >= 2 and parts[1].strip().lower() in ("long", "short"):
-            mode_arg = parts[1].strip().upper()
-
-        count, msg = await run_now(symbol_arg)
-        _log("/now result:", count)
-
-        # Если указан символ — одна карточка с кнопкой BUDGET
-        if symbol_arg:
-            kb = {
-                "inline_keyboard": [
-                    [
-                        {"text": "BUDGET", "callback_data": f"BUDGET:{symbol_arg.upper()}"},
-                        {"text": "ORDERS", "callback_data": f"ORDERS:{symbol_arg.upper()}"},
-                    ]
-                ]
-            }
-            await tg_send(chat_id, _code(msg), reply_markup=kb)
-            return {"ok": True}
-
-        # Иначе: summary + по каждой паре
-        await tg_send(chat_id, _code(msg))
-
-        try:
-            pairs = load_pairs()
-        except Exception:
-            pairs = []
-
-        # Фильтр по LONG/SHORT если задан
-        if mode_arg:
-            try:
-                filtered = []
-                for _s in (pairs or []):
-                    _, _m = get_mode(_s)
-                    if _m == mode_arg:
-                        filtered.append(_s)
-                pairs = filtered
+                # Только целые числа >= 0
+                val = int(raw)
+                if val < 0:
+                    raise ValueError()
             except Exception:
-                pass
-
-        for sym in (pairs or []):
+                msg = f"{pending['symbol']}\nНужно ввести целое число ≥ 0 в USDC. Попробуй ещё раз:"
+                await tg_send(chat_id, _code(msg))
+                return {"ok": True}
+            info = set_pair_budget(pending["symbol"], pending["month"], val)
+            clear_budget_input(chat_id)
+            # После установки бюджета сразу отправляем карточку по символу
             try:
-                smsg = build_symbol_message(sym)
-                _log("/now symbol", sym, "len=", len(smsg or ""))
+                sym = info.get("symbol") or pending["symbol"]
+                card = build_symbol_message(sym)
                 kb = {
                     "inline_keyboard": [
                         [
@@ -1414,176 +1290,300 @@ if text.startswith("/live"):
                         ]
                     ]
                 }
-                await tg_send(chat_id, _code(smsg), reply_markup=kb)
+                await tg_send(chat_id, _code(card), reply_markup=kb)
             except Exception:
+                # если что-то пошло не так, просто молча выходим
                 pass
-        return {"ok": True}
+            return {"ok": True}
 
-    # /mode
-    if text_lower.startswith("/mode"):
-        parts = text.split()
-        if len(parts) == 1:
-            summary = list_modes()
-            await tg_send(chat_id, _code(f"Режимы: {summary}"))
+        # /invested <delta>  |  /invest <delta>
+        if text_lower.startswith("/invested") or text_lower.startswith("/invest "):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                raw = parts[1].replace(",", ".")
+                try:
+                    delta = float(raw)
+                    new_total = adjust_invested_total(STORAGE_DIR, delta)
+                    sign = "+" if delta >= 0 else ""
+                    reply = f"OK. Added: {sign}{delta:.2f}$ | Invested total: {new_total:.2f}$"
+                except ValueError:
+                    reply = "Нужна сумма: /invested 530 или /invest -10"
+            else:
+                reply = "Нужна сумма: /invested 530"
+            await tg_send(chat_id, _code(reply))
             return {"ok": True}
-        if len(parts) == 2:
-            sym, md = get_mode(parts[1])
-            if not sym:
-                await tg_send(chat_id, _code("Некорректная команда"))
+
+        # /coins [SYMBOLS...] (только показать/валидировать; без сохранения)
+        if text_lower.startswith("/coins"):
+            parts = text.split(maxsplit=1)
+            # No arguments -> read pairs.json and show status
+            if len(parts) == 1:
+                pairs = load_pairs()
+                if pairs:
+                    reply = "Активные пары: " + ", ".join(pairs)
+                else:
+                    reply = "Активных пар нет. Добавьте пары командой /coins BTCUSDC ETHUSDC ..."
+                await tg_send(chat_id, _code(reply))
                 return {"ok": True}
-            await tg_send(chat_id, _code(f"{sym}: {md}"))
-            return {"ok": True}
-        if len(parts) >= 3:
-            sym = parts[1]
-            md = parts[2]
+
+            # With arguments -> parse, validate, dedupe, write pairs.json
+            rest = parts[1].strip()
+            items = [x.strip().upper() for x in rest.split() if x.strip()]
+            # Validate ^[A-Z]+USDC$
+            valids = [s for s in items if re.fullmatch(r"^[A-Z]+USDC$", s)]
+            if not valids:
+                await tg_send(chat_id, _code("Не удалось найти ни одного корректного тикера (формат: XXXUSDC)."))
+                return {"ok": True}
+
+            # Deduplicate preserving first occurrence, then sort A→Z (allowed by спецификация)
+            seen = set()
+            deduped = []
+            for s in valids:
+                if s not in seen:
+                    seen.add(s)
+                    deduped.append(s)
+            deduped_sorted = sorted(deduped)
+
+            # Save as {"pairs":[...]}
             try:
-                sym, md = set_mode(sym, md)
-                await tg_send(chat_id, _code(f"{sym} → {md}"))
-            except ValueError:
-                await tg_send(chat_id, _code("Некорректный режим"))
+                save_pairs_json(deduped_sorted)
+                reply = "Пары обновлены: " + ", ".join(deduped_sorted)
+            except Exception as e:
+                reply = f"Ошибка записи pairs.json: {e.__class__.__name__}"
+            await tg_send(chat_id, _code(reply))
             return {"ok": True}
 
-    # Шорткаты вида /BTCUSDC /ETHUSDC ...
-    if text_lower.startswith("/") and len(text_norm) > 2:
-        sym = text_upper[1:].split()[0].upper()
-        if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "DATA", "JSON", "INVESTED", "INVEST", "MARKET", "SCHEDULER"):
-            msg = build_symbol_message(sym)
-            await tg_send(chat_id, _code(msg))
-            return {"ok": True}
 
-    # /market [SYMBOL]
-    if text_lower.startswith("/market"):
-        parts = text.split()
-        if len(parts) == 1:
-            pairs = load_pairs()
-            if not pairs:
-                await tg_send(chat_id, _code("Пары: —"))
+        # /now [<SYMBOL>|long|short]
+        if text_lower.startswith("/now"):
+            parts = text.strip().split()
+            symbol_arg = None
+            if len(parts) >= 2 and parts[1].lower() not in ("long", "short"):
+                symbol_arg = parts[1].upper()
+
+            parts = (text or "").strip().split()
+            mode_arg = None
+            if len(parts) >= 2 and parts[1].strip().lower() in ("long", "short"):
+                mode_arg = parts[1].strip().upper()
+
+            count, msg = await run_now(symbol_arg)
+            _log("/now result:", count)
+
+            # Если указан символ — одна карточка с кнопкой BUDGET
+            if symbol_arg:
+                kb = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "BUDGET", "callback_data": f"BUDGET:{symbol_arg.upper()}"},
+                            {"text": "ORDERS", "callback_data": f"ORDERS:{symbol_arg.upper()}"},
+                        ]
+                    ]
+                }
+                await tg_send(chat_id, _code(msg), reply_markup=kb)
                 return {"ok": True}
-            lines = [_market_line_for(sym) for sym in pairs]
-            await tg_send(chat_id, _code("\n".join(lines)))
-            return {"ok": True}
-        sym = parts[1].strip().upper()
-        await tg_send(chat_id, _code(_market_line_for(sym)))
-        return {"ok": True}
 
-    # /data ...
-    if text_lower.startswith("/data"):
-        parts = text.split()
-        if len(parts) == 1:
-            files = sorted(
-                [os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)]
-            )
-            msg = "Файлы: " + (", ".join(files) if files else "—")
+            # Иначе: summary + по каждой паре
             await tg_send(chat_id, _code(msg))
+
+            try:
+                pairs = load_pairs()
+            except Exception:
+                pairs = []
+
+            # Фильтр по LONG/SHORT если задан
+            if mode_arg:
+                try:
+                    filtered = []
+                    for _s in (pairs or []):
+                        _, _m = get_mode(_s)
+                        if _m == mode_arg:
+                            filtered.append(_s)
+                    pairs = filtered
+                except Exception:
+                    pass
+
+            for sym in (pairs or []):
+                try:
+                    smsg = build_symbol_message(sym)
+                    _log("/now symbol", sym, "len=", len(smsg or ""))
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "BUDGET", "callback_data": f"BUDGET:{sym}"},
+                                {"text": "ORDERS", "callback_data": f"ORDERS:{sym}"},
+                            ]
+                        ]
+                    }
+                    await tg_send(chat_id, _code(smsg), reply_markup=kb)
+                except Exception:
+                    pass
             return {"ok": True}
 
-        if len(parts) >= 3 and parts[1].strip().lower() == "delete":
-            name = os.path.basename(parts[2].strip())
-            files = sorted(
-                [os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)]
-            )
-            if name not in files:
+        # /mode
+        if text_lower.startswith("/mode"):
+            parts = text.split()
+            if len(parts) == 1:
+                summary = list_modes()
+                await tg_send(chat_id, _code(f"Режимы: {summary}"))
+                return {"ok": True}
+            if len(parts) == 2:
+                sym, md = get_mode(parts[1])
+                if not sym:
+                    await tg_send(chat_id, _code("Некорректная команда"))
+                    return {"ok": True}
+                await tg_send(chat_id, _code(f"{sym}: {md}"))
+                return {"ok": True}
+            if len(parts) >= 3:
+                sym = parts[1]
+                md = parts[2]
+                try:
+                    sym, md = set_mode(sym, md)
+                    await tg_send(chat_id, _code(f"{sym} → {md}"))
+                except ValueError:
+                    await tg_send(chat_id, _code("Некорректный режим"))
+                return {"ok": True}
+
+        # Шорткаты вида /BTCUSDC /ETHUSDC ...
+        if text_lower.startswith("/") and len(text_norm) > 2:
+            sym = text_upper[1:].split()[0].upper()
+            if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "DATA", "JSON", "INVESTED", "INVEST", "MARKET", "SCHEDULER"):
+                msg = build_symbol_message(sym)
+                await tg_send(chat_id, _code(msg))
+                return {"ok": True}
+
+        # /market [SYMBOL]
+        if text_lower.startswith("/market"):
+            parts = text.split()
+            if len(parts) == 1:
+                pairs = load_pairs()
+                if not pairs:
+                    await tg_send(chat_id, _code("Пары: —"))
+                    return {"ok": True}
+                lines = [_market_line_for(sym) for sym in pairs]
+                await tg_send(chat_id, _code("\n".join(lines)))
+                return {"ok": True}
+            sym = parts[1].strip().upper()
+            await tg_send(chat_id, _code(_market_line_for(sym)))
+            return {"ok": True}
+
+        # /data ...
+        if text_lower.startswith("/data"):
+            parts = text.split()
+            if len(parts) == 1:
+                files = sorted(
+                    [os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)]
+                )
+                msg = "Файлы: " + (", ".join(files) if files else "—")
+                await tg_send(chat_id, _code(msg))
+                return {"ok": True}
+
+            if len(parts) >= 3 and parts[1].strip().lower() == "delete":
+                name = os.path.basename(parts[2].strip())
+                files = sorted(
+                    [os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)]
+                )
+                if name not in files:
+                    await tg_send(chat_id, _code("Файл не найден"))
+                    return {"ok": True}
+                path = os.path.join(STORAGE_DIR, name)
+                try:
+                    os.remove(path)
+                    await tg_send(chat_id, _code(f"Удалено: {name}"))
+                except Exception as e:
+                    await tg_send(chat_id, _code(f"Ошибка удаления: {name}: {e.__class__.__name__}"))
+                return {"ok": True}
+
+            name = os.path.basename(parts[1].strip())
+            path = os.path.join(STORAGE_DIR, name)
+            if not (os.path.exists(path) and os.path.isfile(path)):
                 await tg_send(chat_id, _code("Файл не найден"))
                 return {"ok": True}
-            path = os.path.join(STORAGE_DIR, name)
+            await tg_send_file(chat_id, path, filename=name, caption=name)
+            return {"ok": True}
+
+        # /scheduler ...
+        if text_lower.startswith("/scheduler"):
+            parts = (text or "").strip().split()
+            if len(parts) >= 2 and parts[1].lower() == "config":
+                st = scheduler_get_state()
+                await tg_send(chat_id, _code(json.dumps(st, ensure_ascii=False, indent=2)))
+                return {"ok": True}
+
+            if len(parts) >= 2 and parts[1].lower() in ("on", "off"):
+                on = parts[1].lower() == "on"
+                scheduler_set_enabled(on)
+                if on:
+                    await start_collector()
+                else:
+                    await stop_collector()
+                await tg_send(chat_id, _code(f"Scheduler: {'ON' if on else 'OFF'}"))
+                return {"ok": True}
+
+            if len(parts) >= 3 and parts[1].lower() == "tail":
+                try:
+                    n = int(parts[2])
+                except Exception:
+                    n = 100
+                n = max(1, min(5000, n))
+                tail_text = scheduler_tail(n)
+                tmp_path = os.path.join(STORAGE_DIR, "scheduler_tail.txt")
+                try:
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        f.write(tail_text or "")
+                    await tg_send_file(chat_id, tmp_path, filename="scheduler_tail.txt", caption="scheduler_tail.txt")
+                except Exception:
+                    await tg_send(chat_id, _code(tail_text or "—"))
+                return {"ok": True}
+
+            if len(parts) >= 2 and parts[1].isdigit():
+                interval = int(parts[1])
+                jitter = None
+                if len(parts) >= 3 and parts[2].isdigit():
+                    jitter = int(parts[2])
+                interval = max(15, min(43200, interval))
+                if jitter is not None:
+                    jitter = max(1, min(5, jitter))
+                st = scheduler_set_timing(interval, jitter)
+                await tg_send(chat_id, _code("OK"))
+                if st.get("enabled"):
+                    await stop_collector()
+                    await start_collector()
+                return {"ok": True}
+
+            await tg_send(chat_id, _code("Команды: /scheduler on|off | config | <sec> [jitter] | tail <N>"))
+            return {"ok": True}
+
+        # /portfolio
+        if text_lower.startswith("/portfolio"):
             try:
-                os.remove(path)
-                await tg_send(chat_id, _code(f"Удалено: {name}"))
+                reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
+                _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
             except Exception as e:
-                await tg_send(chat_id, _code(f"Ошибка удаления: {name}: {e.__class__.__name__}"))
+                reply = f"Ошибка портфеля: {e}"
+            await tg_send(chat_id, reply or "Нет данных.")
             return {"ok": True}
 
-        name = os.path.basename(parts[1].strip())
-        path = os.path.join(STORAGE_DIR, name)
-        if not (os.path.exists(path) and os.path.isfile(path)):
-            await tg_send(chat_id, _code("Файл не найден"))
-            return {"ok": True}
-        await tg_send_file(chat_id, path, filename=name, caption=name)
         return {"ok": True}
 
-    # /scheduler ...
-    if text_lower.startswith("/scheduler"):
-        parts = (text or "").strip().split()
-        if len(parts) >= 2 and parts[1].lower() == "config":
-            st = scheduler_get_state()
-            await tg_send(chat_id, _code(json.dumps(st, ensure_ascii=False, indent=2)))
-            return {"ok": True}
 
-        if len(parts) >= 2 and parts[1].lower() in ("on", "off"):
-            on = parts[1].lower() == "on"
-            scheduler_set_enabled(on)
-            if on:
-                await start_collector()
-            else:
-                await stop_collector()
-            await tg_send(chat_id, _code(f"Scheduler: {'ON' if on else 'OFF'}"))
-            return {"ok": True}
-
-        if len(parts) >= 3 and parts[1].lower() == "tail":
-            try:
-                n = int(parts[2])
-            except Exception:
-                n = 100
-            n = max(1, min(5000, n))
-            tail_text = scheduler_tail(n)
-            tmp_path = os.path.join(STORAGE_DIR, "scheduler_tail.txt")
-            try:
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(tail_text or "")
-                await tg_send_file(chat_id, tmp_path, filename="scheduler_tail.txt", caption="scheduler_tail.txt")
-            except Exception:
-                await tg_send(chat_id, _code(tail_text or "—"))
-            return {"ok": True}
-
-        if len(parts) >= 2 and parts[1].isdigit():
-            interval = int(parts[1])
-            jitter = None
-            if len(parts) >= 3 and parts[2].isdigit():
-                jitter = int(parts[2])
-            interval = max(15, min(43200, interval))
-            if jitter is not None:
-                jitter = max(1, min(5, jitter))
-            st = scheduler_set_timing(interval, jitter)
-            await tg_send(chat_id, _code("OK"))
-            if st.get("enabled"):
-                await stop_collector()
-                await start_collector()
-            return {"ok": True}
-
-        await tg_send(chat_id, _code("Команды: /scheduler on|off | config | <sec> [jitter] | tail <N>"))
-        return {"ok": True}
-
-    # /portfolio
-    if text_lower.startswith("/portfolio"):
-        try:
-            reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
-            _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
-        except Exception as e:
-            reply = f"Ошибка портфеля: {e}"
-        await tg_send(chat_id, reply or "Нет данных.")
-        return {"ok": True}
-
-    return {"ok": True}
+    def _market_line_for(symbol: str) -> str:
+        path = os.path.join(STORAGE_DIR, f"{symbol}.json")
+        data = _load_json_safe(path)
+        trade_mode = str((data.get("trade_mode") or "SHORT")).upper()
+        market_mode = str((data.get("market_mode") or "RANGE")).upper()
+        mm_emoji = {"UP": "⬆️", "DOWN": "⬇️", "RANGE": "🔄"}.get(market_mode, "🔄")
+        tm_emoji = {"LONG": "📈", "SHORT": "📉"}.get(trade_mode, "")
+        return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
 
 
-def _market_line_for(symbol: str) -> str:
-    path = os.path.join(STORAGE_DIR, f"{symbol}.json")
-    data = _load_json_safe(path)
-    trade_mode = str((data.get("trade_mode") or "SHORT")).upper()
-    market_mode = str((data.get("market_mode") or "RANGE")).upper()
-    mm_emoji = {"UP": "⬆️", "DOWN": "⬇️", "RANGE": "🔄"}.get(market_mode, "🔄")
-    tm_emoji = {"LONG": "📈", "SHORT": "📉"}.get(trade_mode, "")
-    return f"{symbol} {market_mode}{mm_emoji} Mode {trade_mode}{tm_emoji}"
-
-
-# --- Telegram-compatible alias: /webhook/<token> ---
-@app.post("/webhook/{token}")
-async def telegram_webhook_alias(token: str, update: Request):
-    expected = os.getenv("TRAIDER_BOT_TOKEN") or ""
-    if expected and token != expected:
-        # тихо подтверждаем, чтобы TG не долбил ретраями
-        return {"ok": True, "description": "token mismatch"}
-    return await telegram_webhook(update)
+    # --- Telegram-compatible alias: /webhook/<token> ---
+    @app.post("/webhook/{token}")
+    async def telegram_webhook_alias(token: str, update: Request):
+        expected = os.getenv("TRAIDER_BOT_TOKEN") or ""
+        if expected and token != expected:
+            # тихо подтверждаем, чтобы TG не долбил ретраями
+            return {"ok": True, "description": "token mismatch"}
+        return await telegram_webhook(update)
 
 
 # === Metrics lifecycle ===
