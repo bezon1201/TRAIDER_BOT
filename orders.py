@@ -1329,3 +1329,23 @@ def confirm_cancel_all(symbol: str):
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
+
+# === Lightweight exact tracking for orders (virtual numbers preserving 6 decimals) ===
+def _append_exact(symbol: str, month: str, level: str, price: float, qty: float, notional_exact: float):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        path = os.path.join(DATA_DIR, "exact.jsonl")
+        rec = {
+            "ts": int(time.time()),
+            "symbol": (symbol or "").upper(),
+            "month": month,
+            "level": level,
+            "price": float(price),
+            "qty": float(qty),
+            "notional_exact": float(notional_exact)
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[exact] append error: {e}")
+
