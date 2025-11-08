@@ -280,6 +280,8 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
 
     actual = min(int(amount), available, free)
     if actual <= 0:
+        return f"{symbol} {month}\nСумма 0 — операция отменена.", {}
+
     # Compute precise qty & notional for logging (does not affect integer quotas)
     # Load symbol data and level price
     sdata = _load_symbol_data(symbol)
