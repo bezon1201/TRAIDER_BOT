@@ -3122,7 +3122,7 @@ def prepare_cancel_l1_live(symbol: str):
     kb = {
         "inline_keyboard": [
             [
-                {"text": "✅ Подтвердить отмену", "callback_data": f"ORDERS_CANCEL_L1_CONFIRM:{sym}"},
+                {"text": "✅ Подтвердить отмену", "callback_data": f"ORDERS_CANCEL_L1_CONFIRM:{sym}:0"},
                 {"text": "↩️ Назад", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
             ]
         ]
