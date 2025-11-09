@@ -926,6 +926,11 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
 
     # LIVE-ветка: для live-пары выбираем тип ордера по флагу
     if lvl == "L1" and _is_live_pair(symbol):
+        # Обязательная проверка наличия средств на SPOT (с возможным redeem с EARN)
+        ok_funds, note_funds = _ensure_spot_usdc(float(actual))
+        if not ok_funds:
+            return note_funds, {}
+
         if flag_val == "🟢":
             ok, live_msg = _prepare_live_market(symbol, month, lvl, title, actual)
         else:
