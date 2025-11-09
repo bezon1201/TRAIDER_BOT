@@ -1157,12 +1157,15 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
 
     msg = (
         f"{symbol} {mon_disp} Wk{week}\n"
+        f"{title} CANCEL\n\n\n"
+        f"Отменить {title} на {reserved} USDC?"
+    ) if lvl == "L1" else (
+        f"{symbol} {mon_disp} Wk{week}\n"
         f"{title} CANCEL\n\n"
         f"Сейчас в резерве: {reserved} USDC\n"
         f"Вернуть в free:   {reserved} USDC\n\n"
         f"Отменить виртуальный {title} на {reserved} USDC?"
     )
-    cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
     kb = {
         "inline_keyboard": [[
             {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
