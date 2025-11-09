@@ -524,7 +524,22 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
             f"💸 {info2.get('spent')} | "
             f"🎯 {info2.get('free')}"
         )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
         return msg, kb
+def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
@@ -705,6 +720,192 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
         return msg, kb
 
 
+
+def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+    """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректный символ.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    info = get_pair_budget(symbol, month)
+    week = int(info.get("week") or 0)
+
+    levels = get_pair_levels(symbol, month)
+    lvl_state = levels.get(lvl) or {}
+    reserved = int(lvl_state.get("reserved") or 0)
+
+    mon_disp = month
+    if len(month) == 7 and month[4] == "-":
+        mon_disp = f"{month[5:]}-{month[:4]}"
+
+    if reserved <= 0:
+        msg = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"{title} CANCEL\n\n"
+            f"Нет виртуального ордера на уровне {title} (в резерве 0 USDC)."
+        )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+    msg = (
+        f"{symbol} {mon_disp} Wk{week}\n"
+        f"{title} CANCEL\n\n"
+        f"Сейчас в резерве: {reserved} USDC\n"
+        f"Вернуть в free:   {reserved} USDC\n\n"
+        f"Отменить виртуальный {title} на {reserved} USDC?"
+    )
+    cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
+    kb = {
+        "inline_keyboard": [[
+            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
+            {"text": "↩️", "callback_data": f"ORDERS_CANCEL:{symbol}"},
+        ]]
+    }
+    return msg, kb
+
+
+
+def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+    """Подтверждение отмены: возвращаем резерв в free."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "Некорректные параметры операции.", {}
+
+    month = datetime.now().strftime("%Y-%m")
+    levels = get_pair_levels(symbol, month)
+    lvl_state = levels.get(lvl) or {}
+    reserved = int(lvl_state.get("reserved") or 0)
+
+    if reserved <= 0:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp} Wk?\n"
+            f"{title} CANCEL\n\n"
+            f"Нечего отменять: резерв уже 0 USDC."
+        )
+        sym = symbol
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+                ],
+                [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+    try:
+        requested = int(amount)
+    except Exception:
+        requested = 0
+    if requested <= 0:
+        requested = reserved
+    actual = min(reserved, requested)
+    new_reserved = reserved - actual
+    if new_reserved < 0:
+        new_reserved = 0
+
+    # сохраняем только резерв, остальные поля (spent/week_quota/last_fill_week) не трогаем
+    try:
+        spent = int(lvl_state.get("spent") or 0)
+    except Exception:
+        spent = 0
+    try:
+        week_quota = int(lvl_state.get("week_quota") or 0)
+    except Exception:
+        week_quota = 0
+    try:
+        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
+    except Exception:
+        last_fill_week = -1
+
+    levels[lvl] = {
+        "reserved": new_reserved,
+        "spent": spent,
+        "week_quota": week_quota,
+        "last_fill_week": last_fill_week,
+    }
+    save_pair_levels(symbol, month, levels)
+    info2 = recompute_pair_aggregates(symbol, month)
+
+    # После изменения резервов обновляем автофлаги (⚠️/✅/авто).
+    _recompute_symbol_flags(symbol)
+
+    try:
+        card = build_symbol_message(symbol)
+        sym = (symbol or "").upper()
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
+                ],
+                [
+                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+                ],
+            ]
+        }
+        return card, kb
+    except Exception:
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp}\n"
+            f"{title}: отменён виртуальный ордер на {actual} USDC.\n"
+            f"Бюджет: {info2.get('budget')} | "
+            f"⏳ {info2.get('reserve')} | "
+            f"💸 {info2.get('spent')} | "
+            f"🎯 {info2.get('free')}"
+        )
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
+                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
+                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
+                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
+                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
+                ],
+                [
+                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+                ],
+            ]
+        }
+        return msg, kb
+
+
+
+# Публичные API для уровней
+
+# Публичные API для уровней
 
 # Публичные API для уровней
 
