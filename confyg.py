@@ -1,104 +1,105 @@
 import os
 import json
-from typing import Any, Dict, List
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
-CONFYG_FILENAME = "confyg.json"
 
 
 def _confyg_path(storage_dir: str = STORAGE_DIR) -> str:
-    return os.path.join(storage_dir, CONFYG_FILENAME)
+    return os.path.join(storage_dir, "confyg.json")
 
 
-def _normalize_symbol(symbol: str) -> str:
-    return str(symbol or "").strip().upper()
+DEFAULT_CONFIG: dict = {
+    "live": False,
+    "pairs": [],
+}
 
 
-def _normalize_pairs(pairs: Any) -> List[str]:
-    """
-    Normalize list of symbols:
-      - to strings
-      - strip whitespace
-      - UPPERCASE
-      - de-duplicate preserving order
-    """
-    if not isinstance(pairs, list):
-        pairs = []
-    seen = set()
-    out: List[str] = []
-    for x in pairs:
-        s = _normalize_symbol(x)
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
-def _load_raw_confyg(path: str) -> Dict[str, Any]:
+def _read_json(path: str) -> dict | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data
-        return {}
-    except FileNotFoundError:
-        return {}
+            return json.load(f)
     except Exception:
-        return {}
+        return None
 
 
-def _save_confyg(data: Dict[str, Any], path: str) -> None:
-    tmp_path = f"{path}.tmp"
+def _write_json(path: str, data: dict) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-    os.replace(tmp_path, path)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, path)
 
 
-def load_confyg(storage_dir: str = STORAGE_DIR) -> Dict[str, Any]:
+def _normalize_config(cfg: dict | None) -> dict:
+    if not isinstance(cfg, dict):
+        cfg = {}
+    live = bool(cfg.get("live"))
+    pairs_raw = cfg.get("pairs") or []
+    if not isinstance(pairs_raw, list):
+        pairs_raw = []
+
+    pairs: list[str] = []
+    seen: set[str] = set()
+    for p in pairs_raw:
+        if not isinstance(p, str):
+            continue
+        s = p.upper().strip()
+        if not s:
+            continue
+        if s not in seen:
+            seen.add(s)
+            pairs.append(s)
+
+    return {"live": live, "pairs": pairs}
+
+
+def load_confyg(storage_dir: str = STORAGE_DIR) -> dict:
     """
-    Load confyg.json from STORAGE_DIR.
-
-    Always returns a dict with keys:
-      - "live": bool
-      - "pairs": List[str] (UPPERCASE, de-duplicated)
-    Any missing/invalid data is replaced with defaults and written back.
+    Load confyg.json from STORAGE_DIR. If missing or invalid, create a default one.
+    Always returns a normalized dict: {"live": bool, "pairs": [SYMBOL,...]}.
     """
     path = _confyg_path(storage_dir)
-    raw = _load_raw_confyg(path)
+    raw = _read_json(path)
+    if raw is None:
+        cfg = _normalize_config(DEFAULT_CONFIG)
+        try:
+            _write_json(path, cfg)
+        except Exception:
+            pass
+        return cfg
 
-    live = bool(raw.get("live", False)) if isinstance(raw, dict) else False
-    pairs = _normalize_pairs(raw.get("pairs") if isinstance(raw, dict) else [])
-
-    conf: Dict[str, Any] = {"live": live, "pairs": pairs}
-
+    cfg = _normalize_config(raw)
     try:
-        _save_confyg(conf, path)
+        _write_json(path, cfg)
     except Exception:
-        # On write error we still return the normalized config
+        # best-effort write, but config is still usable
         pass
+    return cfg
 
-    return conf
 
-
-def set_live_mode(is_on: bool, storage_dir: str = STORAGE_DIR) -> Dict[str, Any]:
+def set_live_mode(is_on: bool, storage_dir: str = STORAGE_DIR) -> dict:
     """
-    Set the "live" flag and persist confyg.json.
+    Update only the 'live' flag and persist the config.
     """
-    conf = load_confyg(storage_dir)
-    conf["live"] = bool(is_on)
+    cfg = load_confyg(storage_dir)
+    cfg["live"] = bool(is_on)
     path = _confyg_path(storage_dir)
-    _save_confyg(conf, path)
-    return conf
+    try:
+        _write_json(path, cfg)
+    except Exception:
+        pass
+    return cfg
 
 
-def set_live_pairs(pairs: Any, storage_dir: str = STORAGE_DIR) -> Dict[str, Any]:
+def set_live_pairs(pairs: list[str], storage_dir: str = STORAGE_DIR) -> dict:
     """
-    Replace the "pairs" list with given symbols (normalized).
-    Does not change the "live" flag.
+    Replace the list of live pairs, keeping the current 'live' flag.
     """
-    conf = load_confyg(storage_dir)
-    conf["pairs"] = _normalize_pairs(pairs)
+    base = load_confyg(storage_dir)
+    cfg = _normalize_config({"live": base.get("live"), "pairs": pairs or []})
     path = _confyg_path(storage_dir)
-    _save_confyg(conf, path)
-    return conf
+    try:
+        _write_json(path, cfg)
+    except Exception:
+        pass
+    return cfg

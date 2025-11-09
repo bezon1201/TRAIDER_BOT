@@ -35,7 +35,7 @@ def _i(x):
         return "-"
 
 
-def build_long_card(data: dict) -> str:
+def build_long_card(data: dict, is_live: bool = False) -> str:
     sym = data.get("symbol", "")
     price = data.get("price") or (data.get("tf") or {}).get("12h", {}).get("close_last")
     market_mode = data.get("market_mode")
@@ -72,7 +72,8 @@ def build_long_card(data: dict) -> str:
     else:
         mon_disp = month
 
-    header1 = f"{sym} {mon_disp} Wk{week}"
+    live_mark = "✅" if is_live else "❌"
+    header1 = f"{sym} {mon_disp} Wk{week} LIVE  {live_mark}"
     header2 = f"💰{budget} | ⏳{reserve} | 💸{spent} | 🎯{free}"
 
     # расчёт сумм по уровням

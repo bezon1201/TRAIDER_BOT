@@ -1446,76 +1446,76 @@ async def telegram_webhook(update: Request):
                 await tg_send(chat_id, _code("Некорректный режим"))
             return {"ok": True}
 
-    
+
     # /live
     if text_lower.startswith("/live"):
-        parts = text.split()
-        # /live -> show current live status and pairs
+        # ensure config exists
+        try:
+            cfg = load_confyg()
+        except Exception:
+            cfg = {"live": False, "pairs": []}
+
+        parts = (text or "").strip().split()
+        # /live
         if len(parts) == 1:
-            conf = load_confyg(STORAGE_DIR)
-            mode_str = "ON" if conf.get("live") else "OFF"
-            pairs = conf.get("pairs") or []
+            live_on = bool(cfg.get("live"))
+            pairs = cfg.get("pairs") or []
+            mode_str = "ON" if live_on else "OFF"
             pairs_str = ", ".join(pairs) if pairs else "—"
             reply = f"Live: {mode_str}\nПары: {pairs_str}"
             await tg_send(chat_id, _code(reply))
             return {"ok": True}
 
         # /live on|off
-        if len(parts) == 2 and parts[1].strip().casefold() in ("on", "off"):
-            is_on = parts[1].strip().casefold() == "on"
-            conf = set_live_mode(is_on, STORAGE_DIR)
-            mode_str = "ON" if conf.get("live") else "OFF"
-            pairs = conf.get("pairs") or []
+        arg1 = parts[1].casefold()
+        if len(parts) == 2 and arg1 in ("on", "off"):
+            is_on = arg1 == "on"
+            try:
+                cfg = set_live_mode(is_on)
+            except Exception:
+                cfg = {"live": is_on, "pairs": cfg.get("pairs") or []}
+            live_on = bool(cfg.get("live"))
+            pairs = cfg.get("pairs") or []
+            mode_str = "ON" if live_on else "OFF"
             pairs_str = ", ".join(pairs) if pairs else "—"
             reply = f"Live: {mode_str}\nПары: {pairs_str}"
             await tg_send(chat_id, _code(reply))
             return {"ok": True}
 
-        # /live <pairs...> -> set live pairs list
-        rest = text.split(maxsplit=1)[1].strip() if len(parts) >= 2 else ""
-        if not rest:
-            conf = load_confyg(STORAGE_DIR)
-            mode_str = "ON" if conf.get("live") else "OFF"
-            pairs = conf.get("pairs") or []
-            pairs_str = ", ".join(pairs) if pairs else "—"
-            reply = f"Live: {mode_str}\nПары: {pairs_str}"
+        # /live <pairs...>
+        raw_pairs = [p.strip().upper() for p in parts[1:] if p.strip()]
+
+        try:
+            active_pairs = load_pairs()
+        except Exception:
+            active_pairs = []
+
+        valid: list[str] = []
+        for s in raw_pairs:
+            if not re.fullmatch(r"^[A-Z]+USDC$", s):
+                continue
+            if active_pairs and s not in active_pairs:
+                continue
+            if s not in valid:
+                valid.append(s)
+
+        if not valid:
+            reply = "Не удалось найти ни одной корректной пары среди активных (формат: XXXUSDC, только пары из pairs.json)."
             await tg_send(chat_id, _code(reply))
             return {"ok": True}
 
-        items = [x.strip().upper() for x in rest.split() if x.strip()]
-        # Validate format ^[A-Z]+USDC$
-        valids_format = [s for s in items if re.fullmatch(r"^[A-Z]+USDC$", s)]
-        if not valids_format:
-            await tg_send(chat_id, _code("Не удалось найти ни одной корректной пары (формат: XXXUSDC)."))
-            return {"ok": True}
+        try:
+            cfg = set_live_pairs(valid)
+            pairs = cfg.get("pairs") or []
+        except Exception:
+            pairs = valid
 
-        active_pairs = load_pairs(STORAGE_DIR)
-        if not active_pairs:
-            await tg_send(chat_id, _code("Нет активных пар в pairs.json. Сначала настройте /coins ..."))
-            return {"ok": True}
-
-        active_set = set(active_pairs)
-        valids: list[str] = [s for s in valids_format if s in active_set]
-        if not valids:
-            await tg_send(chat_id, _code("Ни одна из указанных пар не найдена среди активных пар (/coins)."))
-            return {"ok": True}
-
-        # Deduplicate preserving order
-        seen = set()
-        deduped: list[str] = []
-        for s in valids:
-            if s not in seen:
-                seen.add(s)
-                deduped.append(s)
-
-        conf = set_live_pairs(deduped, STORAGE_DIR)
-        pairs = conf.get("pairs") or []
         pairs_str = ", ".join(pairs) if pairs else "—"
-        reply = f"Live пары обновлены:\n{pairs_str}"
+        reply = "Live пары обновлены:\n" + (pairs_str or "—")
         await tg_send(chat_id, _code(reply))
         return {"ok": True}
 
-# Шорткаты вида /BTCUSDC /ETHUSDC ...
+    # Шорткаты вида /BTCUSDC /ETHUSDC ...
     if text_lower.startswith("/") and len(text_norm) > 2:
         sym = text_upper[1:].split()[0].upper()
         if sym not in ("NOW", "MODE", "PORTFOLIO", "COINS", "DATA", "JSON", "INVESTED", "INVEST", "MARKET", "SCHEDULER", "LIVE"):
