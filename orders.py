@@ -591,6 +591,119 @@ def _flag_desc(flag: str) -> str:
 
 
 
+
+
+# ==== LIVE funds ensure (Earn -> Spot) =====================================
+
+def _append_transfer_logs(record: Dict[str, Any]) -> None:
+    try:
+        storage = _storage_dir()
+        # JSONL
+        jpath = os.path.join(storage, "live_transfers_log.jsonl")
+        with open(jpath, "a", encoding="utf-8") as jf:
+            jf.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # CSV
+        cpath = os.path.join(storage, "live_transfers_log.csv")
+        if not os.path.exists(cpath):
+            header = "ts,asset,direction,amount,status,requestId,note\n"
+            with open(cpath, "w", encoding="utf-8") as cf:
+                cf.write(header)
+        line = f"{record.get('ts')},{record.get('asset')},{record.get('direction')},{record.get('amount')},{record.get('status')},{record.get('requestId')},{record.get('note')}\n"
+        with open(cpath, "a", encoding="utf-8") as cf:
+            cf.write(line)
+    except Exception:
+        pass
+
+
+def _tg_info(msg: str) -> None:
+    try:
+        tg_send(msg)
+    except Exception:
+        # silent
+        pass
+
+
+def _get_usdc_balances() -> Tuple[float, float]:
+    """Return (spot_free, earn_flexible) for USDC."""
+    try:
+        p = load_portfolio()
+        usdc = (p or {}).get("USDC") or {}
+        spot = float(usdc.get("spot_free") or 0.0)
+        flex = float(usdc.get("earn_flex") or 0.0)
+        return spot, flex
+    except Exception:
+        return 0.0, 0.0
+
+
+def _ensure_spot_usdc(amount_needed: float, buffer: float = 0.05, timeout_sec: float = 8.0) -> Tuple[bool, str]:
+    """Ensure there is enough USDC on SPOT. If not, redeem from EARN flexible.
+    Returns (ok, note). Sends sequential TG messages in monospace style."""
+    need = max(0.0, float(amount_needed))
+    if need <= 0:
+        return True, "need<=0"
+    spot, flex = _get_usdc_balances()
+    if spot >= need:
+        return True, "enough spot"
+    deficit = round(need - spot + max(buffer, 0.001 * need), 2)
+    if deficit <= 0:
+        return True, "covered by buffer"
+    if flex <= 0.0:
+        return False, "EARN empty"
+
+    # 1) notify
+    _tg_info(f"```\nUSDC: недостаточно средств на SPOT\nПеревожу с EARN → SPOT: {deficit:.2f} USDC...\n```")
+
+    # 2) request redeem (fast)
+    req_id = ""
+    rec = {
+        "ts": int(time.time()),
+        "asset": "USDC",
+        "direction": "EARN_TO_SPOT",
+        "amount": deficit,
+        "status": "REQUESTED",
+        "requestId": "",
+        "note": "",
+    }
+    try:
+        ok, data = binance_redeem_flexible("USDC", deficit)  # expects (ok, payload/requestId)
+        if ok:
+            req_id = str(data.get("requestId") if isinstance(data, dict) else data or "")
+            rec["status"] = "CONFIRMING"
+            rec["requestId"] = req_id
+        else:
+            rec["status"] = "ERROR"
+            rec["note"] = str(data)
+            _append_transfer_logs(rec)
+            _tg_info("```\nUSDC: ошибка при переводе с EARN → SPOT\nОперация отменена\n```")
+            return False, "redeem error"
+    except Exception as e:
+        rec["status"] = "ERROR"
+        rec["note"] = f"exception: {e}"
+        _append_transfer_logs(rec)
+        _tg_info("```\nUSDC: ошибка при переводе с EARN → SPOT\nОперация отменена\n```")
+        return False, "redeem exception"
+
+    _append_transfer_logs(rec)
+
+    # 3) wait for spot balance to increase
+    deadline = time.time() + timeout_sec
+    last_seen = spot
+    while time.time() < deadline:
+        time.sleep(0.4)
+        s, _ = _get_usdc_balances()
+        if s >= need:
+            _tg_info(f"```\nUSDC: перевод с EARN подтверждён (+{deficit:.2f})\nОткрываю ордер...\n```")
+            return True, "redeem ok"
+        last_seen = s
+
+    # timeout
+    rec2 = rec.copy()
+    rec2["status"] = "TIMEOUT"
+    rec2["note"] = f"last_spot={last_seen}"
+    _append_transfer_logs(rec2)
+    _tg_info("```\nUSDC: перевод с EARN не подтвердился вовремя\nОперация отменена\n```")
+    return False, "redeem timeout"
+
 def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol:
