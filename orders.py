@@ -953,21 +953,22 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     msg_limit = (
         f"{symbol} {mon_disp} Wk{week}\n"
         f"{title} • SPOT LIMIT BUY (GTC)\n\n"
-        f"Цена (L{lvl[-1]}): {price_str} USDC  (tick {tick_str})\n"
+        f"Цена (L{lvl[-1]}): {price_str} USDC  \n"
         f"Текущая:   {last_str} USDC  (Δ {pct_str})\n\n"
-        f"Сумма: {available} USDC  →  Qty: {qty_str} {base}  (step {step_str})\n"
-        f"Нотионал: {notional_str} USDC"
+        f"Сумма: {available} USDC  →  Qty: {qty_str} {base} "
     )
 
+
     # Сообщение для MARKET (🟢 по L1)
-    if lvl == "L1" and flag_val == "🟢":
-        est_qty_str = qty_str  # оценка по уровню, достаточно для предварительного вида
+    # Сообщение для MARKET (🟢)
+    if flag_val == "🟢":
+        est_qty_str = qty_str
         msg = (
             f"{symbol} {mon_disp} Wk{week}\n"
             f"{title} • SPOT MARKET BUY\n\n"
-            f"Цена (L1): {price_str} USDC  (tick {tick_str})\n"
-            f"Текущая:   {last_str} USDC  (Δ {pct_str})\n\n"
-            f"Сумма: {available} USDC  →  исполнение по рынку ~ Qty: {est_qty_str} {base}  (step {step_str})"
+            "Исполнение по текущей цене рынка\n"
+            f"Текущая: {last_str} USDC \n\n"
+            f"Сумма: {available} USDC  →  ~Qty: {est_qty_str} {base}"
         )
     else:
         msg = msg_limit
