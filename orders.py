@@ -203,7 +203,9 @@ def _maybe_live_cancel(symbol: str, lvl: str) -> tuple[bool, str]:
                     "price": node.get("price"), "qty": node.get("qty"), "notional": node.get("notional"),
                     "orderId": order_id, "clientOrderId": client_id, "status": "CANCELED (unknown)", "orderType": "LIMIT",
                 })
-                return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
+                        # Синхронизируем виртуальную систему: освободим резерв уровня
+        _virtual_release_all(sym, lvl)
+return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
             return True, f"Ошибка CANCEL: {msg[:200]}"
 
         # OK 200
@@ -1233,6 +1235,46 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
 
 
 
+
+def _virtual_release_all(symbol: str, lvl: str) -> None:
+    """Снимает виртуальный резерв для уровня (L0/L1/L2/L3) 'молча': резерв -> free, обновляет агрегаты и флаги."""
+    try:
+        symbol = (symbol or "").upper().strip()
+        if not symbol:
+            return
+        month = datetime.now().strftime("%Y-%m")
+        levels = get_pair_levels(symbol, month)
+        lvl_state = levels.get(lvl) or {}
+        reserved = int(lvl_state.get("reserved") or 0)
+        # Нечего освобождать
+        if reserved <= 0:
+            return
+        # Снимаем весь резерв
+        try:
+            spent = int(lvl_state.get("spent") or 0)
+        except Exception:
+            spent = 0
+        try:
+            week_quota = int(lvl_state.get("week_quota") or 0)
+        except Exception:
+            week_quota = 0
+        try:
+            last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
+        except Exception:
+            last_fill_week = -1
+
+        levels[lvl] = {
+            "reserved": 0,
+            "spent": spent,
+            "week_quota": week_quota,
+            "last_fill_week": last_fill_week,
+        }
+        save_pair_levels(symbol, month, levels)
+        recompute_pair_aggregates(symbol, month)
+        _recompute_symbol_flags(symbol)
+    except Exception:
+        # молча игнорируем, чтобы не ломать основной flow
+        pass
 def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     """Подтверждение отмены: возвращаем резерв в free."""
     symbol = (symbol or "").upper().strip()
