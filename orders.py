@@ -624,16 +624,23 @@ def _tg_info(msg: str) -> None:
 
 
 def _get_usdc_balances() -> Tuple[float, float]:
-    """Return (spot_free, earn_flexible) for USDC."""
+    """Return (spot_free, earn_flexible) for USDC from portfolio storage.
+    Falls back to 0,0 on any error."""
     try:
-        p = load_portfolio()
-        usdc = (p or {}).get("USDC") or {}
-        spot = float(usdc.get("spot_free") or 0.0)
-        flex = float(usdc.get("earn_flex") or 0.0)
+        storage_dir = os.getenv("STORAGE_DIR", "/data")
+        # try to refresh the cached values (uses real API keys if present)
+        try:
+            refresh_usdc_trade_free(storage_dir)
+        except Exception:
+            pass
+        path = os.path.join(storage_dir, "portfolio.json")
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f) or {}
+        spot = float(state.get("usdc_spot_free") or state.get("spot_free") or 0.0)
+        flex = float(state.get("usdc_earn_flex") or state.get("earn_flex") or 0.0)
         return spot, flex
     except Exception:
         return 0.0, 0.0
-
 
 def _ensure_spot_usdc(amount_needed: float, buffer: float = 0.05, timeout_sec: float = 8.0) -> Tuple[bool, str]:
     """Ensure there is enough USDC on SPOT. If not, redeem from EARN flexible.
