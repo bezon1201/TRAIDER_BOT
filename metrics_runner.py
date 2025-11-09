@@ -107,10 +107,18 @@ async def _fetch_price_and_filters(symbol: str) -> Tuple[float|None, dict]:
                     if syms:
                         fs = syms[0].get("filters") or []
                         for f in fs:
-                            if f.get("filterType") == "PRICE_FILTER":
+                            ftype = f.get("filterType")
+                            if ftype == "PRICE_FILTER":
                                 filters["tickSize"] = f.get("tickSize")
-                            if f.get("filterType") == "LOT_SIZE":
+                            if ftype == "LOT_SIZE":
                                 filters["stepSize"] = f.get("stepSize")
+                                if f.get("minQty") is not None:
+                                    filters["minQty"] = f.get("minQty")
+                            if ftype in ("MIN_NOTIONAL", "NOTIONAL"):
+                                # some markets use MIN_NOTIONAL.minNotional, others NOTIONAL.notional
+                                val = f.get("minNotional") or f.get("notional")
+                                if val is not None:
+                                    filters["minNotional"] = val
                         _exchange_cache[symbol] = (dict(filters), now + 6*3600)
             except Exception:
                 pass
