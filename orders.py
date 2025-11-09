@@ -1839,7 +1839,9 @@ def confirm_cancel_all(symbol: str):
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
-        return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+        return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
+
+def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
