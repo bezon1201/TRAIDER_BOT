@@ -27,6 +27,7 @@ BINANCE_API = "https://api.binance.com"
 
 
 def _sign_binance(query: str, secret: str) -> str:
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
 BINANCE_API = "https://api.binance.com"
 
