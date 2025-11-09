@@ -884,7 +884,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         mon_disp = f"{month[5:]}-{month[:4]}"
 
     # Если автофлаг 🔴 по L1 — сразу блокируем открытие до подтверждения
-    if lvl == "L1" and flag_val == "🔴":
+    if flag_val == "🔴":
         msg = (
             f"{symbol} {mon_disp} Wk{week}\n"
             f"{title} недоступен: автофлаг {flag_val} ({flag_desc})."
@@ -1033,7 +1033,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     flag_val = flags.get(lvl) or "-"
 
     # Если к моменту подтверждения уровень стал 🔴 — полностью блокируем операцию
-    if lvl == "L1" and flag_val == "🔴":
+    if flag_val == "🔴":
         return (
             f"{symbol} {month}\n"
             f"{title}: автофлаг {flag_val} — открытие уровня сейчас заблокировано.",
@@ -1041,7 +1041,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         )
 
     # LIVE-ветка: для live-пары выбираем тип ордера по флагу
-    if lvl == "L1" and _is_live_pair(symbol):
+    if _is_live_pair(symbol):
         # Обязательная проверка наличия средств на SPOT (с возможным redeem с EARN)
         ok_funds, note_funds = _ensure_spot_usdc(float(actual))
         if not ok_funds:
