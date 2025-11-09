@@ -136,6 +136,105 @@ def _save_live_state(state: Dict[str, Any]) -> None:
     _atomic_write_json(_live_state_path(), state)
 
 
+
+def _maybe_live_cancel(symbol: str, lvl: str) -> tuple[bool, str]:
+    """
+    If (lvl) is live and has active LIMIT BUY on exchange, cancel it and update logs/state.
+    Returns (handled, message). Works for L0/L1.
+    """
+    try:
+        if lvl not in ("L0", "L1"):
+            return False, ""
+        # Load live state
+        state = _load_live_state()
+        sym = (symbol or "").upper().strip()
+        s = state.get(sym) if isinstance(state, dict) else None
+        node = (s or {}).get(lvl) if isinstance(s, dict) else None
+        if not isinstance(node, dict):
+            return False, ""
+        status = (node.get("status") or "").upper()
+        if status not in ("NEW", "PARTIALLY_FILLED"):
+            return False, ""
+        order_id = node.get("orderId")
+        client_id = node.get("clientOrderId")
+
+        cfg = load_confyg()
+        key = (cfg.get("binance") or {}).get("key") or os.getenv("BINANCE_API_KEY", "").strip()
+        secret = (cfg.get("binance") or {}).get("secret") or os.getenv("BINANCE_API_SECRET", "").strip()
+        if not key or not secret:
+            return True, "Ошибка: не заданы API ключи Binance."
+
+        # Build DELETE /api/v3/order
+        params = {
+            "symbol": sym,
+            "recvWindow": 20000,
+            "timestamp": int(time.time() * 1000),
+        }
+        if order_id:
+            params["orderId"] = order_id
+        elif client_id:
+            params["origClientOrderId"] = client_id
+        else:
+            return True, "Нет идентификатора ордера для отмены."
+
+        q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+        sig = _sign_binance(q, secret)
+        url = f"{BINANCE_API}/api/v3/order?{q}&signature={sig}"
+        headers = {"X-MBX-APIKEY": key}
+
+        import httpx
+        with httpx.Client(timeout=10.0) as client:
+            r = client.delete(url, headers=headers)
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text, "status_code": r.status_code}
+
+        if r.status_code != 200:
+            code = data.get("code")
+            msg = data.get("msg") or data.get("errmsg") or str(data)
+            # Unknown order: считаем, что уже отменён/исполнился → финализируем локально
+            if code == -2011:
+                node["status"] = "CANCELED (unknown)"
+                _save_live_state(state)
+                _append_live_logs({
+                    "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "symbol": sym, "side": "BUY", "level": lvl,
+                    "price": node.get("price"), "qty": node.get("qty"), "notional": node.get("notional"),
+                    "orderId": order_id, "clientOrderId": client_id, "status": "CANCELED (unknown)", "orderType": "LIMIT",
+                })
+                return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
+            return True, f"Ошибка CANCEL: {msg[:200]}"
+
+        # OK 200
+        server_status = (data.get("status") or "").upper()
+        try:
+            exec_qty = float(data.get("executedQty") or 0)
+            orig_qty = float(data.get("origQty") or (node.get("qty") or 0))
+        except Exception:
+            exec_qty = node.get("executedQty") or 0.0
+            orig_qty = node.get("qty") or 0.0
+
+        # Update state
+        node["status"] = server_status or "CANCELED"
+        node["executedQty"] = exec_qty
+        _save_live_state(state)
+
+        # Log
+        _append_live_logs({
+            "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "symbol": sym, "side": "BUY", "level": lvl,
+            "price": node.get("price"), "qty": node.get("qty"), "notional": node.get("notional"),
+            "orderId": order_id, "clientOrderId": client_id, "status": node["status"], "orderType": "LIMIT",
+        })
+
+        if exec_qty and exec_qty > 0:
+            return True, f"Частично исполнен и отменён остаток: исполнено {exec_qty:.8f} из {orig_qty:.8f}."
+        return True, f"Отменён: {lvl} LIMIT, без исполнений."
+    except Exception as e:
+        return True, f"Ошибка CANCEL: {e}"
+
+
 def _append_live_logs(record: Dict[str, Any]) -> None:
     # CSV
     csv_path = _live_log_csv_path()
@@ -3003,3 +3102,38 @@ def confirm_cancel_all(symbol: str):
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
+
+def prepare_cancel_l1_live(symbol: str):
+    """Карточка подтверждения CANCEL для L1 LIVE."""
+    sym = (symbol or "").upper().strip()
+    state = _load_live_state()
+    n = ((state.get(sym) or {}).get("L1") or {}) if isinstance(state, dict) else {}
+    status = (n.get("status") or "").upper()
+    if status not in ("NEW", "PARTIALLY_FILLED"):
+        return f"{sym}\nL1 LIMIT: активных ордеров нет (статус: {status or '—'}).", {}
+    qty = n.get("qty") or 0
+    price = n.get("price") or 0
+    exec_qty = n.get("executedQty") or 0
+    msg = (
+        f"{sym}\n"
+        f"L1 LIMIT CANCEL\n"
+        f"Цена: {price}, qty: {qty}, исполнено: {exec_qty}"
+    )
+    kb = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Подтвердить отмену", "callback_data": f"ORDERS_CANCEL_L1_LIVE_CONFIRM:{sym}"},
+                {"text": "↩️ Назад", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
+            ]
+        ]
+    }
+    return msg, kb
+
+def confirm_cancel_l1_live(symbol: str, amount_unused: int = 0):
+    """Реальный CANCEL L1 LIMIT на бирже. Возвращает финальный результат без промежуточных сообщений."""
+    sym = (symbol or "").upper().strip()
+    handled, message = _maybe_live_cancel(sym, "L1")
+    if handled:
+        return message, {}
+    return f"{sym}\nL1 LIMIT: активных ордеров нет.", {}
+
