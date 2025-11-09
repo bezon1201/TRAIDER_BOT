@@ -2,7 +2,7 @@ import os, json
 from coin_long_format import build_long_card
 from coin_short_format import build_short_card
 from confyg import load_confyg
-from portfolio import get_usdc_spot_earn_total
+from portfolio import get_usdc_spot_earn_total, refresh_usdc_trade_free
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
@@ -41,9 +41,13 @@ def build_symbol_message(symbol: str) -> str:
     live_balance = None
     if is_live:
         try:
-            live_balance = get_usdc_spot_earn_total(STORAGE_DIR)
+            # quietly refresh free USDC (spot.free + Earn FLEX) before building LIVE card
+            live_balance = refresh_usdc_trade_free(STORAGE_DIR)
         except Exception:
-            live_balance = None
+            try:
+                live_balance = get_usdc_spot_earn_total(STORAGE_DIR)
+            except Exception:
+                live_balance = None
 
     if mode == "LONG":
         return build_long_card(data, is_live=is_live, live_balance=live_balance)
