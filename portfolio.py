@@ -39,6 +39,13 @@ def adjust_invested_total(storage_dir: str, delta: float) -> float:
     _atomic_write(_storage_path(storage_dir), state)
     return float(state["invested_total"])
 
+def get_usdc_spot_earn_total(storage_dir: str) -> float:
+    state = _load_state(storage_dir)
+    try:
+        return float(state.get("usdc_total", 0.0))
+    except Exception:
+        return 0.0
+
 def _sign(query: str, secret: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
@@ -219,6 +226,11 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
 
     total = spot_total + earn_total
     state = _load_state(storage_dir)
+    usdc_spot = float(spot.get("USDC", 0.0))
+    usdc_earn = float(earn.get("USDC", 0.0))
+    state["usdc_spot"] = round(usdc_spot, 8)
+    state["usdc_earn"] = round(usdc_earn, 8)
+    state["usdc_total"] = round(usdc_spot + usdc_earn, 8)
     invested = float(state.get("invested_total", 0.0))
     profit = total - invested
     arrow = "⬆️" if profit > 0.01 else ("⬇️" if profit < -0.01 else "➖")
@@ -233,4 +245,5 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
     profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
     pct_part = f" {profit_pct:.1f}%" if invested > 0 else ""
     summary = [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}"]
+    _atomic_write(_storage_path(storage_dir), state)
     return "```\n" + "\n".join(lines + [""] + summary) + "\n```"
