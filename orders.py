@@ -1,7 +1,58 @@
+from decimal import Decimal
 from __future__ import annotations
 from datetime import datetime
 from typing import Tuple, Dict, Any
 import os, json, time, hmac, hashlib
+def extract_current_usdc(symbol_data: dict, orderbook: dict = None):
+    """
+    Returns Decimal current price in USDC or None if not available.
+    Tries, in order: ticker.last, lastPrice, price, markPrice, then mid from orderbook.
+    """
+    if not symbol_data:
+        return None
+    # nested getters
+    def _get(path):
+        cur = symbol_data
+        for k in path:
+            if not isinstance(cur, dict) or k not in cur:
+                return None
+            cur = cur[k]
+        return cur
+    candidates = [
+        _get(["ticker","last"]),
+        _get(["ticker","lastPrice"]),
+        _get(["lastPrice"]),
+        _get(["price"]),
+        _get(["markPrice"]),
+    ]
+    for v in candidates:
+        if v is None:
+            continue
+        try:
+            d = Decimal(str(v))
+            if d > 0:
+                return d
+        except Exception:
+            pass
+    # try orderbook mid
+    ob = orderbook or symbol_data.get("orderbook") or symbol_data.get("book")
+    if isinstance(ob, dict):
+        bid = ob.get("bid") or ob.get("bestBid") or ob.get("bids", [None])
+        ask = ob.get("ask") or ob.get("bestAsk") or ob.get("asks", [None])
+        def _first(x):
+            if isinstance(x, (list, tuple)) and x:
+                return x[0] if not isinstance(x[0], (list, tuple)) else x[0][0]
+            return x
+        try:
+            b = Decimal(str(_first(bid))) if bid is not None else None
+            a = Decimal(str(_first(ask))) if ask is not None else None
+            if b and a and b > 0 and a > 0:
+                mid = (a + b) / Decimal("2")
+                return mid
+        except Exception:
+            pass
+    return None
+
 
 import httpx
 from confyg import load_confyg
@@ -1836,3 +1887,32 @@ def confirm_cancel_all(symbol: str):
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
+def _format_current_line(symbol_data: dict, tick: Decimal, l1: Decimal = None) -> str:
+    cur = extract_current_usdc(symbol_data)
+    if cur is None:
+        return "Текущая:   —"
+    # normalize to tick
+    try:
+        q = (cur / tick).quantize(Decimal("1"))
+        cur_disp = (q * tick).normalize()
+    except Exception:
+        cur_disp = cur
+    if l1 is not None:
+        try:
+            delta = cur - l1
+            # Arrow: -> if within one tick, else up/down
+            if abs(delta) < tick:
+                arrow = "→"
+            else:
+                arrow = "↑" if delta > 0 else "↓"
+            return f"Текущая:   {cur_disp} USDC  (Δ {arrow})"
+        except Exception:
+            pass
+    return f"Текущая:   {cur_disp} USDC"
+
+
+def _apply_current_line(message_text: str, symbol_data: dict, tick: Decimal, l1: Decimal = None) -> str:
+    if "CURRENT_LINE_PLACEHOLDER" not in message_text:
+        return message_text
+    return message_text.replace("CURRENT_LINE_PLACEHOLDER", _format_current_line(symbol_data, tick, l1))
+
