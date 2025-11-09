@@ -1,7 +1,11 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Tuple, Dict, Any
-import os, json
+import os, json, time, hmac, hashlib
+
+import httpx
+from confyg import load_confyg
+from portfolio import refresh_usdc_trade_free, get_usdc_spot_earn_total
 
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates, set_pair_week
 from auto_flags import compute_all_flags
@@ -14,6 +18,191 @@ WEEKLY_PERCENT = {
     "RANGE":{"OCO": 5,  "L0": 5,  "L1": 10, "L2": 5,  "L3": 0},
     "DOWN": {"OCO": 5,  "L0": 0,  "L1": 5, "L2": 10, "L3": 5},
 }
+
+BINANCE_API = "https://api.binance.com"
+
+
+def _sign_binance(query: str, secret: str) -> str:
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+
+
+def _is_live_pair(symbol: str) -> bool:
+    """
+    Check if live-mode is enabled and the given symbol is in the live pairs list.
+    """
+    symbol = (symbol or "").upper().strip()
+    storage_dir = os.getenv("STORAGE_DIR", "/data")
+    try:
+        cfg = load_confyg(storage_dir)
+    except Exception:
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    if not cfg.get("live"):
+        return False
+    try:
+        pairs = [ (p or "").upper().strip() for p in (cfg.get("pairs") or []) ]
+    except Exception:
+        pairs = []
+    return symbol in pairs
+
+
+def _binance_limit_buy(symbol: str, price: float, qty: float, key: str, secret: str) -> dict:
+    """
+    Place a synchronous SPOT LIMIT BUY order on Binance.
+    """
+    params = {
+        "symbol": symbol,
+        "side": "BUY",
+        "type": "LIMIT",
+        "timeInForce": "GTC",
+        "quantity": f"{qty:.8f}".rstrip("0").rstrip("."),
+        "price": f"{price:.8f}".rstrip("0").rstrip("."),
+        "recvWindow": 10_000,
+        "timestamp": int(time.time() * 1000),
+    }
+    # signature over sorted query string
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign_binance(q, secret)
+    url = f"{BINANCE_API}/api/v3/order?{q}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+    with httpx.Client(timeout=10.0) as client:
+        r = client.post(url, headers=headers)
+        if r.status_code != 200:
+            try:
+                body = r.json()
+                msg = body.get("msg") or body.get("errmsg") or str(body)
+            except Exception:
+                msg = r.text
+            raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+        return r.json()
+
+
+def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: int) -> Tuple[bool, str]:
+    """
+    Validate LIVE-limit order parameters and, if everything is OK, send a real LIMIT BUY to Binance.
+    Returns (ok, message). On failure we DO NOT touch virtual budget/reserves.
+    """
+    storage_dir = os.getenv("STORAGE_DIR", "/data")
+    symbol = (symbol or "").upper().strip()
+    # refresh free USDC (spot.free + Earn FLEX)
+    try:
+        free_trade = float(refresh_usdc_trade_free(storage_dir))
+    except Exception:
+        free_trade = float(get_usdc_spot_earn_total(storage_dir) or 0.0)
+
+    if free_trade <= 0.0:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — нет свободного USDC (spot.free + Earn FLEX)."
+        )
+        return False, msg
+
+    need = float(amount or 0)
+    if need <= 0.0:
+        msg = f"{symbol} {month}\n{title}: LIVE отменён — сумма ордера 0 USDC."
+        return False, msg
+
+    if need > free_trade + 1e-8:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — недостаточно свободного USDC. "
+            f"Нужно ≥ {int(need)} USDC, доступно ~{int(free_trade)} USDC."
+        )
+        return False, msg
+
+    sdata = _load_symbol_data(symbol)
+    if not isinstance(sdata, dict):
+        msg = f"{symbol} {month}\n{title}: LIVE отменён — нет данных по монете."
+        return False, msg
+
+    grid = sdata.get("grid") or {}
+    try:
+        price_lx = float(grid.get(lvl) or 0.0)
+    except Exception:
+        price_lx = 0.0
+    if price_lx <= 0.0:
+        msg = f"{symbol} {month}\n{title}: LIVE отменён — нет цены уровня {lvl}."
+        return False, msg
+
+    filters = sdata.get("filters") or {}
+    try:
+        tick = float(filters.get("tickSize")) if filters.get("tickSize") is not None else 0.0
+    except Exception:
+        tick = 0.0
+    try:
+        step = float(filters.get("stepSize")) if filters.get("stepSize") is not None else 0.0
+    except Exception:
+        step = 0.0
+    try:
+        min_qty = float(filters.get("minQty")) if filters.get("minQty") is not None else 0.0
+    except Exception:
+        min_qty = 0.0
+    try:
+        min_notional = float(filters.get("minNotional")) if filters.get("minNotional") is not None else 0.0
+    except Exception:
+        min_notional = 0.0
+
+    # round price to tick
+    if tick and tick > 0:
+        price_lx = math.floor(price_lx / tick) * tick
+
+    # quantity from amount in USDC
+    qty_raw = need / price_lx if price_lx > 0 else 0.0
+    qty = qty_raw
+    if step and step > 0:
+        qty = math.floor(qty_raw / step) * step
+    qty = float(qty)
+    notional = qty * price_lx
+
+    if qty <= 0.0 or notional <= 0.0:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — после округления шагов объём ордера стал 0."
+        )
+        return False, msg
+
+    if min_qty and qty + 1e-12 < min_qty:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — количество {qty:.8f} меньше минимального {min_qty:g}."
+        )
+        return False, msg
+
+    if min_notional and notional + 1e-8 < min_notional:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — нотионал {notional:.6f} USDC меньше минимума {min_notional:g} USDC."
+        )
+        return False, msg
+
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE невозможен — не заданы BINANCE_API_KEY / BINANCE_API_SECRET."
+        )
+        return False, msg
+
+    try:
+        _binance_limit_buy(symbol, price_lx, qty, key, secret)
+    except Exception as e:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE ошибка Binance ({e.__class__.__name__}). Ордер не создан."
+        )
+        return False, msg
+
+    # success
+    notional_str = f"{notional:.6f}"
+    msg = (
+        f"{symbol} {month}\n"
+        f"{title}: LIVE-ордер отправлен на биржу.\n"
+        f"Сумма ≤ {int(need)} USDC, qty ≈ {qty:.8f}, нотионал ~{notional_str} USDC."
+    )
+    return True, msg
+
 
 LEVEL_KEYS = ("OCO", "L0", "L1", "L2", "L3")
 
@@ -236,6 +425,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
 
 
 
+
 def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol or int(amount) <= 0:
@@ -282,6 +472,14 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     if actual <= 0:
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
 
+    # LIVE-ветка: для live-пары пробуем реальный LIMIT-ордер перед изменением виртуального бюджета
+    if lvl == "L1" and _is_live_pair(symbol):
+        ok, live_msg = _prepare_live_limit(symbol, month, lvl, title, actual)
+        if not ok:
+            # Ошибка LIVE — бюджет/резервы не трогаем, просто возвращаем сообщение
+            return live_msg, {}
+        # Если LIVE прошёл успешно — продолжаем обновлять виртуальные резервы как обычно
+
     new_reserved = int(lvl_state.get("reserved") or 0) + actual
     new_spent = int(lvl_state.get("spent") or 0)
     try:
@@ -298,11 +496,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     save_pair_levels(symbol, month, levels)
     info2 = recompute_pair_aggregates(symbol, month)
 
-    
-    # увеличиваем номер недели
-    new_week = week + 1
-    info3 = get_pair_budget(symbol, month)
-# После изменения резервов обновляем автофлаги (включая ⚠️/✅).
+    # После изменения резервов обновляем автофлаги (включая ⚠️/✅).
     _recompute_symbol_flags(symbol)
 
     try:
@@ -324,15 +518,13 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     except Exception:
         msg = (
             f"{symbol} {month}\n"
-            f"{title}: виртуальный ордер на {actual} USDC учтён в резерве.\n"
+            f"{title}: ордер на {actual} USDC учтён в резерве.\n"
             f"Бюджет: {info2.get('budget')} | "
             f"⏳ {info2.get('reserve')} | "
             f"💸 {info2.get('spent')} | "
             f"🎯 {info2.get('free')}"
         )
         return msg, kb
-
-def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
