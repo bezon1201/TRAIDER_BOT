@@ -207,8 +207,9 @@ def _maybe_live_cancel(symbol: str, lvl: str) -> tuple[bool, str]:
                 _virtual_release_all(sym, lvl)
                 return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
             return True, f"Ошибка CANCEL: {msg[:200]}"
-
+            
         # OK 200
+# OK 200
         server_status = (data.get("status") or "").upper()
         try:
             exec_qty = float(data.get("executedQty") or 0)
@@ -397,14 +398,24 @@ def _binance_limit_buy(symbol: str, price: float, qty: float, key: str, secret: 
     with httpx.Client(timeout=10.0) as client:
         r = client.post(url, headers=headers)
         if r.status_code != 200:
-            try:
-                body = r.json()
-                msg = body.get("msg") or body.get("errmsg") or str(body)
-            except Exception:
-                msg = r.text
-            raise RuntimeError(f"HTTP {r.status_code}: {msg}")
-        return r.json()
-
+            code = data.get("code")
+            msg = data.get("msg") or data.get("errmsg") or str(data)
+            # Unknown order: считаем, что уже отменён/исполнился → финализируем локально
+            if code == -2011:
+                node["status"] = "CANCELED (unknown)"
+                _save_live_state(state)
+                _append_live_logs({
+                    "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "symbol": sym, "side": "BUY", "level": lvl,
+                    "price": node.get("price"), "qty": node.get("qty"), "notional": node.get("notional"),
+                    "orderId": order_id, "clientOrderId": client_id, "status": "CANCELED (unknown)", "orderType": "LIMIT",
+                })
+                # Синхронизируем виртуальную систему: освободим резерв уровня
+                _virtual_release_all(sym, lvl)
+                return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
+            return True, f"Ошибка CANCEL: {msg[:200]}"
+            
+        # OK 200
 
 
 def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: int) -> Tuple[bool, str]:
@@ -595,14 +606,24 @@ def _binance_market_buy(symbol: str, quote_amount: float, key: str, secret: str,
     with httpx.Client(timeout=10.0) as client:
         r = client.post(url, headers=headers)
         if r.status_code != 200:
-            try:
-                body = r.json()
-                msg = body.get("msg") or body.get("errmsg") or str(body)
-            except Exception:
-                msg = r.text
-            raise RuntimeError(f"HTTP {r.status_code}: {msg}")
-        return r.json()
-
+            code = data.get("code")
+            msg = data.get("msg") or data.get("errmsg") or str(data)
+            # Unknown order: считаем, что уже отменён/исполнился → финализируем локально
+            if code == -2011:
+                node["status"] = "CANCELED (unknown)"
+                _save_live_state(state)
+                _append_live_logs({
+                    "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "symbol": sym, "side": "BUY", "level": lvl,
+                    "price": node.get("price"), "qty": node.get("qty"), "notional": node.get("notional"),
+                    "orderId": order_id, "clientOrderId": client_id, "status": "CANCELED (unknown)", "orderType": "LIMIT",
+                })
+                # Синхронизируем виртуальную систему: освободим резерв уровня
+                _virtual_release_all(sym, lvl)
+                return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
+            return True, f"Ошибка CANCEL: {msg[:200]}"
+            
+        # OK 200
 
 def _prepare_live_market(symbol: str, month: str, lvl: str, title: str, amount: int) -> Tuple[bool, str]:
     """
