@@ -27,8 +27,77 @@ BINANCE_API = "https://api.binance.com"
 
 
 def _sign_binance(query: str, secret: str) -> str:
-    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
+BINANCE_API = "https://api.binance.com"
+
+def _binance_signed_get(path: str, key: str, secret: str, params: dict) -> dict:
+    ts = int(time.time() * 1000)
+    q = dict(params or {})
+    q["timestamp"] = ts
+    q.setdefault("recvWindow", 5000)
+    items = "&".join(f"{k}={q[k]}" for k in sorted(q))
+    sig = _sign_binance(items, secret)
+    url = f"{BINANCE_API}{path}?{items}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+    r = httpx.get(url, headers=headers, timeout=15)
+    r.raise_for_status()
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+def _binance_signed_post(path: str, key: str, secret: str, params: dict) -> dict:
+    ts = int(time.time() * 1000)
+    q = dict(params or {})
+    q["timestamp"] = ts
+    q.setdefault("recvWindow", 5000)
+    items = "&".join(f"{k}={q[k]}" for k in sorted(q))
+    sig = _sign_binance(items, secret)
+    url = f"{BINANCE_API}{path}?{items}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key, "Content-Type": "application/x-www-form-urlencoded"}
+    r = httpx.post(url, headers=headers, timeout=15)
+    r.raise_for_status()
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+
+def binance_redeem_flexible(asset: str, amount: float):
+    """
+    Redeem from Simple Earn Flexible for given asset.
+    Returns (ok, data/requestId_or_error).
+    """
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return False, {"error": "no_api_keys"}
+
+    try:
+        pos = _binance_signed_get("/sapi/v1/simple-earn/flexible/position", key, secret, params={"size": 100})
+        rows = pos.get("rows") if isinstance(pos, dict) else pos
+        if not rows:
+            return False, {"error": "no_positions", "response": pos}
+
+        product_id = None
+        for p in rows:
+            a = p.get("asset") or p.get("assetSymbol") or p.get("assetName")
+            if a == asset:
+                product_id = p.get("productId") or p.get("projectId") or p.get("subscriptionId") or p.get("positionId")
+                break
+        if not product_id:
+            return False, {"error": "no_product_id_for_asset", "asset": asset, "response": rows}
+
+        data = _binance_signed_post(
+            "/sapi/v1/simple-earn/flexible/redeem",
+            key, secret,
+            params={"productId": product_id, "amount": str(amount), "redeemAll": "false"}
+        )
+        if isinstance(data, dict) and ("requestId" in data or data.get("success") is True):
+            return True, data
+        return False, data
+    except Exception as e:
+        return False, {"error": "exception", "detail": str(e)}
 
 def _storage_dir() -> str:
     return os.getenv("STORAGE_DIR", "/data")

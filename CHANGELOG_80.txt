@@ -1,0 +1,4 @@
+## 80 (hotfix)
+- Fix: prevent `NameError: spot_free is not defined` (and similar for earn_flex) in `_ensure_spot_usdc()`.
+- Adds safe local defaults so error/notice messages are formatted even if upstream balances are missing.
+- No behavior change to business logic; only stability of confirm flow and messaging.
