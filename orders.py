@@ -151,10 +151,10 @@ def _binance_limit_buy(symbol: str, price: float, qty: float, key: str, secret: 
         return r.json()
 
 
+
 def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: int) -> Tuple[bool, str]:
     """
-    Validate LIVE-limit order parameters and, if everything is OK, send a real LIMIT BUY to Binance.
-    Returns (ok, message). On failure we DO NOT touch virtual budget/reserves.
+    LIVE: создать реальный LIMIT BUY ордер на Binance.
     """
     symbol = (symbol or "").upper().strip()
     storage_dir = _storage_dir()
@@ -296,6 +296,7 @@ def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: i
         "orderId": order_id,
         "clientOrderId": client_id,
         "status": status,
+        "orderType": "LIMIT",
     }
     try:
         state = _load_live_state()
@@ -312,25 +313,190 @@ def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: i
     notional_str = f"{notional:.6f}"
     msg = (
         f"{symbol} {month}\n"
-        f"{title}: LIVE-ордер отправлен на биржу.\n"
+        f"{title}: LIVE LIMIT-ордер отправлен на биржу.\n"
         f"Сумма ≤ {int(need)} USDC, qty ≈ {qty:.8f}, нотионал ~{notional_str} USDC."
     )
     return True, msg
 
 
-LEVEL_KEYS = ("OCO", "L0", "L1", "L2", "L3")
+def _binance_market_buy(symbol: str, quote_amount: float, key: str, secret: str, client_order_id: str | None = None) -> dict:
+    """
+    Отправка SPOT MARKET BUY с quoteOrderQty.
+    """
+    params = {
+        "symbol": symbol,
+        "side": "BUY",
+        "type": "MARKET",
+        "quoteOrderQty": f"{quote_amount:.8f}".rstrip("0").rstrip("."),
+        "recvWindow": 10_000,
+        "timestamp": int(time.time() * 1000),
+    }
+    if client_order_id:
+        params["newClientOrderId"] = client_order_id
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign_binance(q, secret)
+    url = f"{BINANCE_API}/api/v3/order?{q}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+    with httpx.Client(timeout=10.0) as client:
+        r = client.post(url, headers=headers)
+        if r.status_code != 200:
+            try:
+                body = r.json()
+                msg = body.get("msg") or body.get("errmsg") or str(body)
+            except Exception:
+                msg = r.text
+            raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+        return r.json()
 
 
+def _prepare_live_market(symbol: str, month: str, lvl: str, title: str, amount: int) -> Tuple[bool, str]:
+    """
+    LIVE: создать реальный MARKET BUY ордер на сумму USDC (quoteOrderQty).
+    """
+    symbol = (symbol or "").upper().strip()
+    storage_dir = _storage_dir()
+    # refresh free USDC (spot.free + Earn FLEX)
+    try:
+        free_trade = float(refresh_usdc_trade_free(storage_dir))
+    except Exception:
+        free_trade = float(get_usdc_spot_earn_total(storage_dir) or 0.0)
 
-# ---- runtime cache for multi-step ALL actions ----
-# key: (symbol, month, action); value: list[(level_name, quota_usdc)]
-_RUNTIME_PLANS = globals().get('_RUNTIME_PLANS', {})
-# --------------------------------------------------
+    if free_trade <= 0.0:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — нет свободного USDC (spot.free + Earn FLEX)."
+        )
+        return False, msg
 
-def _symbol_data_path(symbol: str) -> str:
-    storage_dir = os.getenv("STORAGE_DIR", "/data")
-    return os.path.join(storage_dir, f"{symbol}.json")
+    need = float(amount or 0)
+    if need <= 0.0:
+        msg = f"{symbol} {month}\n{title}: LIVE отменён — сумма ордера 0 USDC."
+        return False, msg
 
+    if need > free_trade + 1e-8:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — недостаточно свободного USDC. "
+            f"Нужно ≥ {int(need)} USDC, доступно ~{int(free_trade)} USDC."
+        )
+        return False, msg
+
+    sdata = _load_symbol_data(symbol)
+    if not isinstance(sdata, dict):
+        msg = f"{symbol} {month}\n{title}: LIVE отменён — нет данных по монете."
+        return False, msg
+
+    filters = sdata.get("filters") or {}
+    try:
+        min_notional = float(filters.get("minNotional")) if filters.get("minNotional") is not None else 0.0
+    except Exception:
+        min_notional = 0.0
+
+    if min_notional and need + 1e-8 < min_notional:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE отменён — сумма {need:.2f} USDC меньше минимального нотионала {min_notional:g} USDC."
+        )
+        return False, msg
+
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE невозможен — не заданы BINANCE_API_KEY / BINANCE_API_SECRET."
+        )
+        return False, msg
+
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    side = "BUY"
+    client_order_id = f"{symbol}_{side}_{lvl}_M_{ts}"
+
+    try:
+        resp = _binance_market_buy(symbol, need, key, secret, client_order_id=client_order_id)
+    except Exception as e:
+        msg = (
+            f"{symbol} {month}\n"
+            f"{title}: LIVE ошибка Binance ({e.__class__.__name__}). Ордер не создан."
+        )
+        return False, msg
+
+    # Попробуем вытащить примерные price/qty из ответа, если есть
+    price = 0.0
+    qty = 0.0
+    notional = float(need)
+    try:
+        qty = float(resp.get("executedQty") or resp.get("origQty") or 0.0)
+    except Exception:
+        qty = 0.0
+    try:
+        cq = float(resp.get("cummulativeQuoteQty") or 0.0)
+        if cq > 0 and qty > 0:
+            price = cq / qty
+            notional = cq
+    except Exception:
+        pass
+
+    try:
+        fills = resp.get("fills") or []
+        if isinstance(fills, list) and fills and qty <= 0:
+            total_q = 0.0
+            total_n = 0.0
+            for f in fills:
+                try:
+                    fq = float(f.get("qty") or 0.0)
+                    fp = float(f.get("price") or 0.0)
+                except Exception:
+                    continue
+                total_q += fq
+                total_n += fq * fp
+            if total_q > 0:
+                qty = total_q
+                price = total_n / total_q if total_n > 0 else price
+                notional = total_n if total_n > 0 else notional
+    except Exception:
+        pass
+
+    try:
+        order_id = resp.get("orderId")
+    except Exception:
+        order_id = None
+    try:
+        client_id = resp.get("clientOrderId") or client_order_id
+    except Exception:
+        client_id = client_order_id
+    status = resp.get("status", "NEW")
+
+    record = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": side,
+        "level": lvl,
+        "amount_planned": int(amount),
+        "price": price,
+        "qty": qty,
+        "notional": notional,
+        "orderId": order_id,
+        "clientOrderId": client_id,
+        "status": status,
+        "orderType": "MARKET",
+    }
+    try:
+        state = _load_live_state()
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        state[symbol][lvl] = record
+        _save_live_state(state)
+        _append_live_logs(record)
+    except Exception:
+        pass
+
+    msg = (
+        f"{symbol} {month}\n"
+        f"{title}: LIVE MARKET-ордер отправлен на биржу.\n"
+        f"Сумма ≈ {int(need)} USDC (quoteOrderQty), статус Binance: {status}."
+    )
+    return True, msg
 def _load_symbol_data(symbol: str) -> dict:
     try:
         with open(_symbol_data_path(symbol), "r", encoding="utf-8") as f:
@@ -415,6 +581,7 @@ def _flag_desc(flag: str) -> str:
     return "нет автофлага"
 
 
+
 def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol:
@@ -435,18 +602,17 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         mode_key = _mode_key_from_symbol(symbol)
         return (
             f"{symbol} {month}\n"
-            f"Для уровня {title} в режиме {mode_key} доля бюджета 0% — {title} не используется.",
+            f"Для уровня {title} в режиме {mode_key} доля бюджета 0% — {title} недоступен.",
             {}
         )
 
+    # уровни и текущий расход/резерв по Lx
     levels = get_pair_levels(symbol, month) or {}
     lvl_state = levels.get(lvl) or {}
     try:
         week_quota = int(lvl_state.get("week_quota") or 0)
     except Exception:
         week_quota = 0
-
-    # если квота на неделю ещё не установлена (старые данные) — берём базовую
     quota = week_quota if week_quota > 0 else base_quota
 
     reserved = int(lvl_state.get("reserved") or 0)
@@ -479,26 +645,44 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     if len(month) == 7 and month[4] == "-":
         mon_disp = f"{month[5:]}-{month[:4]}"
 
-    # --- Реальное подтверждение LIMIT BUY (без ввода от пользователя) ---
-    # Берём цену уровня из данных монеты (grid[Lx]) и фильтры из filters
-    base = symbol.replace("USDC","").replace("USDT","")
-    filt = (sdata or {}).get("filters") or {}
-    tick = float(filt.get("tickSize") or 0) if isinstance(filt.get("tickSize"), (int,float,str)) else 0.0
-    try: tick = float(filt.get("tickSize")) if filt.get("tickSize") is not None else 0.0
-    except Exception: pass
-    try: step = float(filt.get("stepSize")) if filt.get("stepSize") is not None else 0.0
-    except Exception: step = 0.0
-    grid = (sdata or {}).get("grid") or {}
-    price_lx = None
-    try: price_lx = float(grid.get(lvl)) if grid.get(lvl) is not None else None
-    except Exception: price_lx = None
-    last_price = None
-    try: last_price = float((sdata or {}).get("price"))
-    except Exception: pass
-    # Округлим цену к tickSize, если возможно
-    if price_lx is not None and tick and tick > 0:
-        price_lx = math.floor(price_lx / tick) * tick
-    # Количество из суммы (available)
+    # Если автофлаг 🔴 по L1 — сразу блокируем открытие до подтверждения
+    if lvl == "L1" and flag_val == "🔴":
+        msg = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"{title} недоступен: автофлаг {flag_val} ({flag_desc})."
+        )
+        kb = {
+            "inline_keyboard": [[
+                {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
+            ]]
+        }
+        return msg, kb
+
+    # --- Подготовка данных для отображения подтверждения ---
+    base = symbol.replace("USDC", "").replace("USDT", "")
+    grid = sdata.get("grid") or {}
+    try:
+        price_lx = float(grid.get(lvl) or 0.0)
+    except Exception:
+        price_lx = 0.0
+
+    price_info = sdata.get("price") or {}
+    try:
+        last_price = float(price_info.get("last") or 0.0)
+    except Exception:
+        last_price = 0.0
+
+    filters = sdata.get("filters") or {}
+    try:
+        tick = float(filters.get("tickSize")) if filters.get("tickSize") is not None else 0.0
+    except Exception:
+        tick = 0.0
+    try:
+        step = float(filters.get("stepSize")) if filters.get("stepSize") is not None else 0.0
+    except Exception:
+        step = 0.0
+
+    # qty и нотионал при лимитной цене уровня (для оценки)
     qty = None
     if price_lx and price_lx > 0:
         qty_raw = float(available) / float(price_lx)
@@ -507,11 +691,14 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         else:
             qty = qty_raw
     notional = (qty or 0) * (price_lx or 0)
+
     # Процентное отклонение от текущей цены
     pct = None
     if last_price and price_lx:
-        try: pct = ((price_lx - last_price) / last_price) * 100.0
-        except Exception: pct = None
+        try:
+            pct = ((price_lx - last_price) / last_price) * 100.0
+        except Exception:
+            pct = None
     pct_str = f"{pct:.2f}%" if isinstance(pct, float) else "-"
     tick_str = (f"{tick:g}" if tick else "-")
     step_str = (f"{step:g}" if step else "-")
@@ -520,7 +707,8 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     price_str = (f"{price_lx:.2f}" if isinstance(price_lx, float) else "-")
     notional_str = (f"{notional:.6f}" if isinstance(notional, float) else "-")
 
-    msg = (
+    # Сообщение для LIMIT (🟡 и прочие)
+    msg_limit = (
         f"{symbol} {mon_disp} Wk{week}\n"
         f"{title} • SPOT LIMIT BUY (GTC)\n\n"
         f"Цена (L{lvl[-1]}): {price_str} USDC  (tick {tick_str})\n"
@@ -528,6 +716,20 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         f"Сумма: {available} USDC  →  Qty: {qty_str} {base}  (step {step_str})\n"
         f"Нотионал: {notional_str} USDC"
     )
+
+    # Сообщение для MARKET (🟢 по L1)
+    if lvl == "L1" and flag_val == "🟢":
+        est_qty_str = qty_str  # оценка по уровню, достаточно для предварительного вида
+        msg = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"{title} • SPOT MARKET BUY\n\n"
+            f"Цена (L1): {price_str} USDC  (tick {tick_str})\n"
+            f"Текущая:   {last_str} USDC  (Δ {pct_str})\n\n"
+            f"Сумма: {available} USDC  →  исполнение по рынку ~ Qty: {est_qty_str} {base}  (step {step_str})"
+        )
+    else:
+        msg = msg_limit
+
     cb = f"ORDERS_OPEN_{lvl}_CONFIRM"
     kb = {
         "inline_keyboard": [[
@@ -536,9 +738,6 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         ]]
     }
     return msg, kb
-
-
-
 
 def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
@@ -586,9 +785,25 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
     if actual <= 0:
         return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
 
-    # LIVE-ветка: для live-пары пробуем реальный LIMIT-ордер перед изменением виртуального бюджета
+    # Определяем актуальный автофлаг для безопасности
+    sdata = _load_symbol_data(symbol)
+    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
+    flag_val = flags.get(lvl) or "-"
+
+    # Если к моменту подтверждения уровень стал 🔴 — полностью блокируем операцию
+    if lvl == "L1" and flag_val == "🔴":
+        return (
+            f"{symbol} {month}\n"
+            f"{title}: автофлаг {flag_val} — открытие уровня сейчас заблокировано.",
+            {}
+        )
+
+    # LIVE-ветка: для live-пары выбираем тип ордера по флагу
     if lvl == "L1" and _is_live_pair(symbol):
-        ok, live_msg = _prepare_live_limit(symbol, month, lvl, title, actual)
+        if flag_val == "🟢":
+            ok, live_msg = _prepare_live_market(symbol, month, lvl, title, actual)
+        else:
+            ok, live_msg = _prepare_live_limit(symbol, month, lvl, title, actual)
         if not ok:
             # Ошибка LIVE — бюджет/резервы не трогаем, просто возвращаем сообщение
             return live_msg, {}
