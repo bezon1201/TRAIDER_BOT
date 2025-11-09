@@ -1374,22 +1374,25 @@ def prepare_cancel_l0(symbol: str):   return _prepare_cancel_level(symbol, "L0",
 def confirm_cancel_l0(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
 
 def prepare_cancel_l1(symbol: str):   return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
+
 def confirm_cancel_l1(symbol: str, amount: int):
     """
-    L1: сначала реальная отмена на бирже, затем мягкая отмена виртуалки.
+    CANCEL flow for L1:
+    1) cancel LIVE on Binance by origClientOrderId (preferred) or orderId from live state
+    2) if ok (or unknown order) -> cancel virtual level
+    3) on error -> do NOT touch virtual
     """
-    ok, live_msg = _maybe_live_cancel(symbol, "L1")
-    if not ok:
-        # Не трогаем виртуалку при ошибке живой отмены
-        return live_msg, {
-            "inline_keyboard": [[{"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{(symbol or '').upper().strip()}"}]]
-        }
-    # live ok → чистим виртуалку
+    ok_live, live_msg = _maybe_live_cancel(symbol, "L1")
+    if not ok_live:
+        # return live error and do not modify virtual state
+        kb = {"inline_keyboard": [[{"text": "↩️ Назад", "callback_data": f"ORDERS_BACK_MENU:{symbol}"}]]}
+        return (live_msg or "Ошибка CANCEL"), kb
+
     vmsg, kb = _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
-    # Склеим сообщения аккуратно
     if live_msg:
         vmsg = f"{live_msg}\n\n{vmsg}"
     return vmsg, kb
+
 
 
 def prepare_cancel_l2(symbol: str):   return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
@@ -3110,3 +3113,55 @@ def confirm_cancel_all(symbol: str):
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
+
+def _maybe_live_cancel(symbol: str, lvl: str):
+    """
+    Try cancel LIVE order on Binance for given level.
+    Returns (ok: bool, msg: str).
+    ok=True also for "-2011 Unknown order" (already gone on exchange).
+    """
+    try:
+        # Load live state
+        state = load_json(LIVE_ORDERS_STATE_PATH) or {}
+        pair = state.get(symbol, {})
+        lvl_state = pair.get(lvl, {})
+        order_id = lvl_state.get("orderId")
+        client_oid = lvl_state.get("clientOrderId") or lvl_state.get("origClientOrderId")
+        side = lvl_state.get("side")
+        # Build params
+        params = {"symbol": symbol.replace("_","")}
+        if client_oid:
+            params["origClientOrderId"] = client_oid
+        elif order_id:
+            params["orderId"] = int(order_id)
+        else:
+            return False, f"{lvl} LIMIT: не найден идентификатор ордера в live_state."
+        # Sign & send
+        url = f"{BINANCE_API}/api/v3/order"
+        signed = _sign_params(params)  # assumes existing signing helper
+        headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+        with httpx.Client(timeout=10.0) as client:
+            r = client.delete(url, params=signed, headers=headers)
+        # Parse
+        if r.status_code == 200:
+            # mark as canceled in state
+            lvl_state["status"] = "CANCELED"
+            pair[lvl] = lvl_state
+            state[symbol] = pair
+            save_json(LIVE_ORDERS_STATE_PATH, state)
+            _append_live_logs(symbol, lvl, "CANCEL", r.json())
+            return True, f"Отменён на бирже: {lvl} LIMIT, clientId={client_oid or order_id}."
+        else:
+            try:
+                js = r.json()
+                code = js.get("code")
+                msg = js.get("msg","")
+            except Exception:
+                code, msg = None, r.text
+            if code == -2011:
+                _append_live_logs(symbol, lvl, "CANCEL", {"note": "unknown order"})
+                return True, f"{lvl} LIMIT: уже отсутствует на бирже — помечен локально как отменён."
+            return False, f"Ошибка CANCEL: {str(msg)[:200]}"
+    except Exception as e:
+        return False, f"Ошибка CANCEL (exception): {e}"
+
