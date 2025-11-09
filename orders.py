@@ -751,7 +751,7 @@ def _ensure_spot_usdc(amount_needed: float, buffer: float = 0.05, timeout_sec: f
             rec["note"] = str(data)
             _append_transfer_logs(rec)
             _tg_info("```\nUSDC: ошибка при переводе с EARN → SPOT\nОперация отменена\n```")
-            return False, "redeem error"
+            return False, f"redeem error: {str(data)[:200]}"
     except Exception as e:
         rec["status"] = "ERROR"
         rec["note"] = f"exception: {e}"
