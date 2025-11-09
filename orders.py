@@ -648,7 +648,7 @@ def _ensure_spot_usdc(amount_needed: float, buffer: float = 0.05, timeout_sec: f
     if deficit <= 0:
         return True, "covered by buffer"
     if flex <= 0.0:
-        return False, "EARN empty"
+        return False, f"EARN empty (spot={spot_free:.4f}, earn={earn_flex:.4f}, need={need:.4f})"
 
     # 1) notify
     _tg_info(f"```\nUSDC: недостаточно средств на SPOT\nПеревожу с EARN → SPOT: {deficit:.2f} USDC...\n```")
