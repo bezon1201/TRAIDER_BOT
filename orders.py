@@ -26,14 +26,85 @@ def _sign_binance(query: str, secret: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
 
+def _storage_dir() -> str:
+    return os.getenv("STORAGE_DIR", "/data")
+
+
+def _live_state_path() -> str:
+    return os.path.join(_storage_dir(), "live_orders_state.json")
+
+
+def _live_log_csv_path() -> str:
+    return os.path.join(_storage_dir(), "live_orders_log.csv")
+
+
+def _live_log_jsonl_path() -> str:
+    return os.path.join(_storage_dir(), "live_orders_log.jsonl")
+
+
+def _atomic_write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def _load_live_state() -> Dict[str, Any]:
+    try:
+        with open(_live_state_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_live_state(state: Dict[str, Any]) -> None:
+    _atomic_write_json(_live_state_path(), state)
+
+
+def _append_live_logs(record: Dict[str, Any]) -> None:
+    # CSV
+    csv_path = _live_log_csv_path()
+    header = "ts,symbol,side,level,amount_planned,price,qty,notional,orderId,clientOrderId,status\n"
+    line = (
+        f"{record.get('ts')},"
+        f"{record.get('symbol')},"
+        f"{record.get('side')},"
+        f"{record.get('level')},"
+        f"{record.get('amount_planned')},"
+        f"{record.get('price')},"
+        f"{record.get('qty')},"
+        f"{record.get('notional')},"
+        f"{record.get('orderId')},"
+        f"{record.get('clientOrderId')},"
+        f"{record.get('status')}\n"
+    )
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    need_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+    with open(csv_path, "a", encoding="utf-8") as f:
+        if need_header:
+            f.write(header)
+        f.write(line)
+
+    # JSONL
+    jsonl_path = _live_log_jsonl_path()
+    os.makedirs(os.path.dirname(jsonl_path) or ".", exist_ok=True)
+    try:
+        payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        # best effort: fallback to str()
+        payload = str(record)
+    with open(jsonl_path, "a", encoding="utf-8") as f:
+        f.write(payload + "\n")
+
+
 def _is_live_pair(symbol: str) -> bool:
     """
     Check if live-mode is enabled and the given symbol is in the live pairs list.
     """
     symbol = (symbol or "").upper().strip()
-    storage_dir = os.getenv("STORAGE_DIR", "/data")
     try:
-        cfg = load_confyg(storage_dir)
+        cfg = load_confyg(_storage_dir())
     except Exception:
         return False
     if not isinstance(cfg, dict):
@@ -47,7 +118,7 @@ def _is_live_pair(symbol: str) -> bool:
     return symbol in pairs
 
 
-def _binance_limit_buy(symbol: str, price: float, qty: float, key: str, secret: str) -> dict:
+def _binance_limit_buy(symbol: str, price: float, qty: float, key: str, secret: str, client_order_id: str | None = None) -> dict:
     """
     Place a synchronous SPOT LIMIT BUY order on Binance.
     """
@@ -61,6 +132,8 @@ def _binance_limit_buy(symbol: str, price: float, qty: float, key: str, secret: 
         "recvWindow": 10_000,
         "timestamp": int(time.time() * 1000),
     }
+    if client_order_id:
+        params["newClientOrderId"] = client_order_id
     # signature over sorted query string
     q = "&".join(f"{k}={params[k]}" for k in sorted(params))
     sig = _sign_binance(q, secret)
@@ -83,8 +156,8 @@ def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: i
     Validate LIVE-limit order parameters and, if everything is OK, send a real LIMIT BUY to Binance.
     Returns (ok, message). On failure we DO NOT touch virtual budget/reserves.
     """
-    storage_dir = os.getenv("STORAGE_DIR", "/data")
     symbol = (symbol or "").upper().strip()
+    storage_dir = _storage_dir()
     # refresh free USDC (spot.free + Earn FLEX)
     try:
         free_trade = float(refresh_usdc_trade_free(storage_dir))
@@ -185,14 +258,55 @@ def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: i
         )
         return False, msg
 
+    # build clientOrderId
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    side = "BUY"
+    client_order_id = f"{symbol}_{side}_{lvl}_{ts}"
+
     try:
-        _binance_limit_buy(symbol, price_lx, qty, key, secret)
+        resp = _binance_limit_buy(symbol, price_lx, qty, key, secret, client_order_id=client_order_id)
     except Exception as e:
         msg = (
             f"{symbol} {month}\n"
             f"{title}: LIVE ошибка Binance ({e.__class__.__name__}). Ордер не создан."
         )
         return False, msg
+
+    # Extract identifiers for logging
+    try:
+        order_id = resp.get("orderId")
+    except Exception:
+        order_id = None
+    try:
+        client_id = resp.get("clientOrderId") or client_order_id
+    except Exception:
+        client_id = client_order_id
+    status = resp.get("status", "NEW")
+
+    # Log to state + logs
+    record = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": side,
+        "level": lvl,
+        "amount_planned": int(amount),
+        "price": price_lx,
+        "qty": qty,
+        "notional": notional,
+        "orderId": order_id,
+        "clientOrderId": client_id,
+        "status": status,
+    }
+    try:
+        state = _load_live_state()
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        state[symbol][lvl] = record
+        _save_live_state(state)
+        _append_live_logs(record)
+    except Exception:
+        # логирование не должно ломать основной поток
+        pass
 
     # success
     notional_str = f"{notional:.6f}"
@@ -720,192 +834,6 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
         return msg, kb
 
 
-
-def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    week = int(info.get("week") or 0)
-
-    levels = get_pair_levels(symbol, month)
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-
-    mon_disp = month
-    if len(month) == 7 and month[4] == "-":
-        mon_disp = f"{month[5:]}-{month[:4]}"
-
-    if reserved <= 0:
-        msg = (
-            f"{symbol} {mon_disp} Wk{week}\n"
-            f"{title} CANCEL\n\n"
-            f"Нет виртуального ордера на уровне {title} (в резерве 0 USDC)."
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    msg = (
-        f"{symbol} {mon_disp} Wk{week}\n"
-        f"{title} CANCEL\n\n"
-        f"Сейчас в резерве: {reserved} USDC\n"
-        f"Вернуть в free:   {reserved} USDC\n\n"
-        f"Отменить виртуальный {title} на {reserved} USDC?"
-    )
-    cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
-    kb = {
-        "inline_keyboard": [[
-            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
-            {"text": "↩️", "callback_data": f"ORDERS_CANCEL:{symbol}"},
-        ]]
-    }
-    return msg, kb
-
-
-
-def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подтверждение отмены: возвращаем резерв в free."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректные параметры операции.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    levels = get_pair_levels(symbol, month)
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-
-    if reserved <= 0:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        msg = (
-            f"{symbol} {mon_disp} Wk?\n"
-            f"{title} CANCEL\n\n"
-            f"Нечего отменять: резерв уже 0 USDC."
-        )
-        sym = symbol
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
-                ],
-                [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    try:
-        requested = int(amount)
-    except Exception:
-        requested = 0
-    if requested <= 0:
-        requested = reserved
-    actual = min(reserved, requested)
-    new_reserved = reserved - actual
-    if new_reserved < 0:
-        new_reserved = 0
-
-    # сохраняем только резерв, остальные поля (spent/week_quota/last_fill_week) не трогаем
-    try:
-        spent = int(lvl_state.get("spent") or 0)
-    except Exception:
-        spent = 0
-    try:
-        week_quota = int(lvl_state.get("week_quota") or 0)
-    except Exception:
-        week_quota = 0
-    try:
-        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
-    except Exception:
-        last_fill_week = -1
-
-    levels[lvl] = {
-        "reserved": new_reserved,
-        "spent": spent,
-        "week_quota": week_quota,
-        "last_fill_week": last_fill_week,
-    }
-    save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
-
-    # После изменения резервов обновляем автофлаги (⚠️/✅/авто).
-    _recompute_symbol_flags(symbol)
-
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
-                ],
-                [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return card, kb
-    except Exception:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        msg = (
-            f"{symbol} {mon_disp}\n"
-            f"{title}: отменён виртуальный ордер на {actual} USDC.\n"
-            f"Бюджет: {info2.get('budget')} | "
-            f"⏳ {info2.get('reserve')} | "
-            f"💸 {info2.get('spent')} | "
-            f"🎯 {info2.get('free')}"
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-
-
-# Публичные API для уровней
-
-# Публичные API для уровней
 
 # Публичные API для уровней
 
