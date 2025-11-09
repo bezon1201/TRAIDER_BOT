@@ -28,8 +28,8 @@ from orders import (
     confirm_cancel_oco,
     prepare_cancel_l0,
     confirm_cancel_l0,
-    prepare_cancel_l1_live,
-    confirm_cancel_l1_live,
+    prepare_cancel_l1,
+    confirm_cancel_l1,
     prepare_cancel_l2,
     confirm_cancel_l2,
     prepare_cancel_l3,
@@ -896,7 +896,7 @@ async def _answer_callback(callback: dict) -> dict:
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
-        msg, kb = prepare_cancel_l1_live(symbol)
+        msg, kb = prepare_cancel_l1(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
@@ -986,7 +986,7 @@ async def _answer_callback(callback: dict) -> dict:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        msg, kb = confirm_cancel_l1_live(symbol, amount)
+        msg, kb = confirm_cancel_l1(symbol, amount)
         await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
