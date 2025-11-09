@@ -140,10 +140,10 @@ def _save_live_state(state: Dict[str, Any]) -> None:
 def _maybe_live_cancel(symbol: str, lvl: str) -> tuple[bool, str]:
     """
     If (lvl) is live and has active LIMIT BUY on exchange, cancel it and update logs/state.
-    Returns (handled, message). Works for L0/L1.
+    Returns (handled, message). Works for L1 (and L0 на будущее).
     """
     try:
-        if lvl not in ("L0", "L1"):
+        if lvl not in ("L1", "L0"):
             return False, ""
         # Load live state
         state = _load_live_state()

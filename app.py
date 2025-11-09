@@ -896,7 +896,7 @@ async def _answer_callback(callback: dict) -> dict:
         symbol = (sym_raw or "").upper().strip()
         if not symbol:
             return {"ok": True}
-        msg, kb = prepare_cancel_l1(symbol)
+        msg, kb = prepare_cancel_l1_live(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
@@ -986,7 +986,7 @@ async def _answer_callback(callback: dict) -> dict:
             amount = int(amount_str)
         except Exception:
             amount = 0
-        msg, kb = confirm_cancel_l1(symbol, amount)
+        msg, kb = confirm_cancel_l1_live(symbol, amount)
         await tg_send(chat_id, _code(msg), reply_markup=kb or None)
         return {"ok": True}
 
