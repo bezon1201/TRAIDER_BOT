@@ -1388,9 +1388,7 @@ def confirm_cancel_l1(symbol: str, amount: int):
     vmsg, kb = _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
     # Склеим сообщения аккуратно
     if live_msg:
-        vmsg = f"{live_msg}
-
-{vmsg}"
+        vmsg = f\"{live_msg}\n\n{vmsg}\"
     return vmsg, kb
 
 
