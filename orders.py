@@ -3,6 +3,10 @@ from datetime import datetime
 from typing import Tuple, Dict, Any
 import os, json, time, hmac, hashlib
 
+# ---- Levels constant (used across orders module) ----
+LEVEL_KEYS = ['L0','L1','L2','L3']
+
+
 import httpx
 from confyg import load_confyg
 from portfolio import refresh_usdc_trade_free, get_usdc_spot_earn_total
