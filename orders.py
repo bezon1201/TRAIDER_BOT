@@ -497,6 +497,11 @@ def _prepare_live_market(symbol: str, month: str, lvl: str, title: str, amount: 
         f"Сумма ≈ {int(need)} USDC (quoteOrderQty), статус Binance: {status}."
     )
     return True, msg
+
+def _symbol_data_path(symbol: str) -> str:
+    return os.path.join(_storage_dir(), f"{symbol}.json")
+
+
 def _load_symbol_data(symbol: str) -> dict:
     try:
         with open(_symbol_data_path(symbol), "r", encoding="utf-8") as f:
