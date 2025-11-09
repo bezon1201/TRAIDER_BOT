@@ -65,7 +65,7 @@ def _save_live_state(state: Dict[str, Any]) -> None:
 def _append_live_logs(record: Dict[str, Any]) -> None:
     # CSV
     csv_path = _live_log_csv_path()
-    header = "ts,symbol,side,level,amount_planned,price,qty,notional,orderId,clientOrderId,status\n"
+    header = "ts,symbol,side,level,amount_planned,price,qty,notional,orderId,clientOrderId,status,orderType\n"
     line = (
         f"{record.get('ts')},"
         f"{record.get('symbol')},"
@@ -77,7 +77,7 @@ def _append_live_logs(record: Dict[str, Any]) -> None:
         f"{record.get('notional')},"
         f"{record.get('orderId')},"
         f"{record.get('clientOrderId')},"
-        f"{record.get('status')}\n"
+        f"{record.get('status')}," + f"{record.get('orderType')}\n"
     )
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     need_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
@@ -1839,136 +1839,7 @@ def confirm_cancel_all(symbol: str):
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
-        return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    symbol = (symbol or "").upper().strip()
-    if not symbol or int(amount) <= 0:
-        return "Некорректные параметры операции.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    free = int(info.get("free") or 0)
-    week = int(info.get("week") or 0)
-
-    if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл не запущен или бюджет 0 — операция отменена.", {}
-
-    base_quota = _compute_base_quota(symbol, month, lvl, budget)
-    if base_quota <= 0:
-        mode_key = _mode_key_from_symbol(symbol)
-        return (
-            f"{symbol} {month}\n"
-            f"Для уровня {title} в режиме {mode_key} доля бюджета 0% — операция отменена.",
-            {}
-        )
-
-    levels = get_pair_levels(symbol, month) or {}
-    lvl_state = levels.get(lvl) or {}
-    try:
-        week_quota = int(lvl_state.get("week_quota") or 0)
-    except Exception:
-        week_quota = 0
-    quota = week_quota if week_quota > 0 else base_quota
-
-    reserved = int(lvl_state.get("reserved") or 0)
-    spent = int(lvl_state.get("spent") or 0)
-    try:
-        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
-    except Exception:
-        last_fill_week = -1
-    used = reserved + (spent if last_fill_week == week else 0)
-    available = quota - used
-    if available <= 0 or free <= 0:
-        return f"{symbol} {month}\nЛимит по {title} или свободный бюджет уже исчерпаны — операция отменена.", {}
-
-    actual = min(int(amount), available, free)
-    if actual <= 0:
-        return f"{symbol} {month}\nФактическая доступная сумма 0 USDC — операция отменена.", {}
-
-    # Определяем актуальный автофлаг для безопасности
-    sdata = _load_symbol_data(symbol)
-    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    flag_val = flags.get(lvl) or "-"
-
-    # Если к моменту подтверждения уровень стал 🔴 — полностью блокируем операцию
-    if lvl == "L1" and flag_val == "🔴":
-        return (
-            f"{symbol} {month}\n"
-            f"{title}: автофлаг {flag_val} — открытие уровня сейчас заблокировано.",
-            {}
-        )
-
-    # LIVE-ветка: для live-пары выбираем тип ордера по флагу
-    if lvl == "L1" and _is_live_pair(symbol):
-        if flag_val == "🟢":
-            ok, live_msg = _prepare_live_market(symbol, month, lvl, title, actual)
-        else:
-            ok, live_msg = _prepare_live_limit(symbol, month, lvl, title, actual)
-        if not ok:
-            # Ошибка LIVE — бюджет/резервы не трогаем, просто возвращаем сообщение
-            return live_msg, {}
-        # Если LIVE прошёл успешно — продолжаем обновлять виртуальные резервы как обычно
-
-    new_reserved = int(lvl_state.get("reserved") or 0) + actual
-    new_spent = int(lvl_state.get("spent") or 0)
-    try:
-        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
-    except Exception:
-        last_fill_week = -1
-
-    levels[lvl] = {
-        "reserved": new_reserved,
-        "spent": new_spent,
-        "week_quota": week_quota if week_quota > 0 else quota,
-        "last_fill_week": last_fill_week,
-    }
-    save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
-
-    # После изменения резервов обновляем автофлаги (включая ⚠️/✅).
-    _recompute_symbol_flags(symbol)
-
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {"inline_keyboard": [
-            [
-                {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{sym}"},
-                {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{sym}"},
-                {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{sym}"},
-                {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{sym}"},
-                {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{sym}"},
-            ],
-            [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-            ],
-        ]}
-        return card, kb
-    except Exception:
-        msg = (
-            f"{symbol} {month}\n"
-            f"{title}: ордер на {actual} USDC учтён в резерве.\n"
-            f"Бюджет: {info2.get('budget')} | "
-            f"⏳ {info2.get('reserve')} | "
-            f"💸 {info2.get('spent')} | "
-            f"🎯 {info2.get('free')}"
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_OPEN_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_OPEN_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_OPEN_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_OPEN_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_OPEN_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
+        return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
