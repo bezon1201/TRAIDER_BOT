@@ -1323,30 +1323,24 @@ def prepare_cancel_oco(symbol: str):  return _prepare_cancel_level(symbol, "OCO"
 def confirm_cancel_oco(symbol: str, amount: int):  return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
 
 def prepare_cancel_l0(symbol: str):   return _prepare_cancel_level(symbol, "L0", "LIMIT 0")
-
 def confirm_cancel_l0(symbol: str, amount: int):
     """CANCEL → LIMIT 0: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "LIVE: некорректный символ — виртуалка не отменена.", {}
-
     key = os.getenv("BINANCE_API_KEY", "").strip()
     secret = os.getenv("BINANCE_API_SECRET", "").strip()
     if not key or not secret:
         return "LIVE: нет API ключей — виртуалка не отменена.", {}
-
     if not _is_live_pair(symbol):
         return "LIVE: ордер L0 не найден — виртуалка не отменена.", {}
-
     state = _load_live_state() or {}
     rec = ((state.get(symbol) or {}).get("L0") or {})
     if not rec:
         return "LIVE: ордер L0 не найден — виртуалка не отменена.", {}
-
     st = str(rec.get("status") or "").upper()
     if st in {"FILLED", "CANCELED"}:
         return "LIVE: ордер L0 уже исполнен/закрыт — виртуалка не отменена.", {}
-
     base = {
         "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "symbol": symbol,
@@ -1365,7 +1359,6 @@ def confirm_cancel_l0(symbol: str, amount: int):
         _append_live_logs(dict(base))
     except Exception:
         pass
-
     try:
         result = _binance_cancel_order(
             symbol,
@@ -1380,7 +1373,6 @@ def confirm_cancel_l0(symbol: str, amount: int):
         except Exception:
             pass
         return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
-
     new_status = str((result or {}).get("status") or "").upper()
     if new_status != "CANCELED":
         try:
@@ -1389,10 +1381,9 @@ def confirm_cancel_l0(symbol: str, amount: int):
         except Exception:
             pass
         return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
-
     try:
         if symbol not in state or not isinstance(state.get(symbol), dict):
-            state[symbol] = {} 
+            state[symbol] = {}
         rec2 = dict(rec)
         rec2["status"] = "CANCELED"
         state[symbol]["L0"] = rec2
@@ -1401,8 +1392,8 @@ def confirm_cancel_l0(symbol: str, amount: int):
         _append_live_logs(base2)
     except Exception:
         pass
-
     return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
+
 
 
 def prepare_cancel_l1(symbol: str):   return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
@@ -1489,30 +1480,24 @@ def confirm_cancel_l1(symbol: str, amount: int):
 
 
 def prepare_cancel_l2(symbol: str):   return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
-
 def confirm_cancel_l2(symbol: str, amount: int):
     """CANCEL → LIMIT 2: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "LIVE: некорректный символ — виртуалка не отменена.", {}
-
     key = os.getenv("BINANCE_API_KEY", "").strip()
     secret = os.getenv("BINANCE_API_SECRET", "").strip()
     if not key or not secret:
         return "LIVE: нет API ключей — виртуалка не отменена.", {}
-
     if not _is_live_pair(symbol):
         return "LIVE: ордер L2 не найден — виртуалка не отменена.", {}
-
     state = _load_live_state() or {}
     rec = ((state.get(symbol) or {}).get("L2") or {})
     if not rec:
         return "LIVE: ордер L2 не найден — виртуалка не отменена.", {}
-
     st = str(rec.get("status") or "").upper()
     if st in {"FILLED", "CANCELED"}:
         return "LIVE: ордер L2 уже исполнен/закрыт — виртуалка не отменена.", {}
-
     base = {
         "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "symbol": symbol,
@@ -1531,7 +1516,6 @@ def confirm_cancel_l2(symbol: str, amount: int):
         _append_live_logs(dict(base))
     except Exception:
         pass
-
     try:
         result = _binance_cancel_order(
             symbol,
@@ -1546,7 +1530,6 @@ def confirm_cancel_l2(symbol: str, amount: int):
         except Exception:
             pass
         return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
-
     new_status = str((result or {}).get("status") or "").upper()
     if new_status != "CANCELED":
         try:
@@ -1555,10 +1538,9 @@ def confirm_cancel_l2(symbol: str, amount: int):
         except Exception:
             pass
         return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
-
     try:
         if symbol not in state or not isinstance(state.get(symbol), dict):
-            state[symbol] = {} 
+            state[symbol] = {}
         rec2 = dict(rec)
         rec2["status"] = "CANCELED"
         state[symbol]["L2"] = rec2
@@ -1567,35 +1549,29 @@ def confirm_cancel_l2(symbol: str, amount: int):
         _append_live_logs(base2)
     except Exception:
         pass
-
     return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
 
 
-def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
 
+def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
 def confirm_cancel_l3(symbol: str, amount: int):
     """CANCEL → LIMIT 3: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "LIVE: некорректный символ — виртуалка не отменена.", {}
-
     key = os.getenv("BINANCE_API_KEY", "").strip()
     secret = os.getenv("BINANCE_API_SECRET", "").strip()
     if not key or not secret:
         return "LIVE: нет API ключей — виртуалка не отменена.", {}
-
     if not _is_live_pair(symbol):
         return "LIVE: ордер L3 не найден — виртуалка не отменена.", {}
-
     state = _load_live_state() or {}
     rec = ((state.get(symbol) or {}).get("L3") or {})
     if not rec:
         return "LIVE: ордер L3 не найден — виртуалка не отменена.", {}
-
     st = str(rec.get("status") or "").upper()
     if st in {"FILLED", "CANCELED"}:
         return "LIVE: ордер L3 уже исполнен/закрыт — виртуалка не отменена.", {}
-
     base = {
         "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "symbol": symbol,
@@ -1614,7 +1590,6 @@ def confirm_cancel_l3(symbol: str, amount: int):
         _append_live_logs(dict(base))
     except Exception:
         pass
-
     try:
         result = _binance_cancel_order(
             symbol,
@@ -1629,7 +1604,6 @@ def confirm_cancel_l3(symbol: str, amount: int):
         except Exception:
             pass
         return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
-
     new_status = str((result or {}).get("status") or "").upper()
     if new_status != "CANCELED":
         try:
@@ -1638,10 +1612,9 @@ def confirm_cancel_l3(symbol: str, amount: int):
         except Exception:
             pass
         return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
-
     try:
         if symbol not in state or not isinstance(state.get(symbol), dict):
-            state[symbol] = {} 
+            state[symbol] = {}
         rec2 = dict(rec)
         rec2["status"] = "CANCELED"
         state[symbol]["L3"] = rec2
@@ -1650,8 +1623,8 @@ def confirm_cancel_l3(symbol: str, amount: int):
         _append_live_logs(base2)
     except Exception:
         pass
-
     return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
+
 
 
 
@@ -2607,7 +2580,77 @@ def prepare_cancel_oco(symbol: str):  return _prepare_cancel_level(symbol, "OCO"
 def confirm_cancel_oco(symbol: str, amount: int):  return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
 
 def prepare_cancel_l0(symbol: str):   return _prepare_cancel_level(symbol, "L0", "LIMIT 0")
-def confirm_cancel_l0(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
+def confirm_cancel_l0(symbol: str, amount: int):
+    """CANCEL → LIMIT 0: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L0 не найден — виртуалка не отменена.", {}
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L0") or {})
+    if not rec:
+        return "LIVE: ордер L0 не найден — виртуалка не отменена.", {}
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L0 уже исполнен/закрыт — виртуалка не отменена.", {}
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L0",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L0"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+    return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
+
 
 def prepare_cancel_l1(symbol: str):   return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
 
@@ -2693,10 +2736,150 @@ def confirm_cancel_l1(symbol: str, amount: int):
 
 
 def prepare_cancel_l2(symbol: str):   return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
-def confirm_cancel_l2(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
+def confirm_cancel_l2(symbol: str, amount: int):
+    """CANCEL → LIMIT 2: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L2 не найден — виртуалка не отменена.", {}
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L2") or {})
+    if not rec:
+        return "LIVE: ордер L2 не найден — виртуалка не отменена.", {}
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L2 уже исполнен/закрыт — виртуалка не отменена.", {}
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L2",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L2"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+    return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
+
 
 def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
-def confirm_cancel_l3(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
+def confirm_cancel_l3(symbol: str, amount: int):
+    """CANCEL → LIMIT 3: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L3 не найден — виртуалка не отменена.", {}
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L3") or {})
+    if not rec:
+        return "LIVE: ордер L3 не найден — виртуалка не отменена.", {}
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L3 уже исполнен/закрыт — виртуалка не отменена.", {}
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L3",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L3"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+    return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
+
 
 
 def recompute_flags_for_symbol(symbol: str) -> None:
