@@ -273,9 +273,9 @@ async def _collect_one_stub(symbol: str):
     
     # OCO for LONG
     try:
-        from oco_calc import compute_oco_sell
+        from oco_calc import compute_oco_buy
         if (data.get("trade_mode") or "").upper() == "LONG":
-            oco = compute_oco_sell(data)
+            oco = compute_oco_buy(data)
             if oco:
                 data["oco"] = oco
             # grid levels for LONG
