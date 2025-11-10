@@ -142,7 +142,17 @@ def build_long_card(data: dict, is_live: bool = False, live_balance=None) -> str
     if all(k in oco for k in ("tp_limit", "sl_trigger", "sl_limit")):
         pf = flags.get("OCO", "")
         prefix = _amt_prefix("OCO", pf)
-        lines.append(f"{prefix}TP {_i(oco['tp_limit'])}$ SLt {_i(oco['sl_trigger'])}$ SL {_i(oco['sl_limit'])}$")
+        tp_raw = oco.get('tp_limit')
+        st_raw = oco.get('sl_trigger')
+        sl_raw = oco.get('sl_limit')
+        vals = [v for v in (tp_raw, st_raw, sl_raw) if v is not None]
+        if len(vals) == 3:
+            lo = min(vals)
+            hi_sorted = sorted(vals)[1:]
+            slt, sll = hi_sorted[0], hi_sorted[1]
+            lines.append(f"{prefix}TP {_i(lo)}$ SLt {_i(slt)}$ SL {_i(sll)}$")
+        else:
+            lines.append(f"{prefix}TP {_i(tp_raw)}$ SLt {_i(st_raw)}$ SL {_i(sl_raw)}$")
 
     grid = data.get("grid") or {}
     for k in ("L0", "L1", "L2", "L3"):
