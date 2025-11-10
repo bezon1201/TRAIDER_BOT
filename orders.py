@@ -2061,15 +2061,15 @@ def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
         week_quota = int(st.get("week_quota") or 0)
         last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
 
-# LIVE: quietly open real LIMIT order for this level before virtual reservation
-if lvl in ("L0","L1","L2","L3") and _is_live_pair(symbol):
-    ok_funds, note_funds = _ensure_spot_usdc(float(a))
-    if not ok_funds:
-        return f"{symbol} {month}\nLIMIT {lvl[-1]}: LIVE отменён — {note_funds}.", {}
-    ok_live, live_msg = _prepare_live_limit(symbol, month, lvl, f"LIMIT {lvl[-1]}", int(a))
-    if not ok_live:
-        return live_msg, {}
-levels[lvl] = {
+        # LIVE: quietly open real LIMIT order for this level before virtual reservation
+        if lvl in ("L0","L1","L2","L3") and _is_live_pair(symbol):
+            ok_funds, note_funds = _ensure_spot_usdc(float(a))
+            if not ok_funds:
+                return f"{symbol} {month}\nLIMIT {lvl[-1]}: LIVE отменён — {note_funds}.", {}
+            ok_live, live_msg = _prepare_live_limit(symbol, month, lvl, f"LIMIT {lvl[-1]}", int(a))
+            if not ok_live:
+                return live_msg, {}
+        levels[lvl] = {
             "reserved": reserved + a,
             "spent": spent,
             "week_quota": week_quota,
