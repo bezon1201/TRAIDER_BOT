@@ -1587,9 +1587,59 @@ async def telegram_webhook(update: Request):
             
         # /data import new_name — берём один файл из закрепа активного канала
         if parts[1].strip().lower() == "import":
-            if len(parts) < 3:
-                await tg_send(chat_id, _code("Укажите имя файла: /data import <name>"))
+            # Импортируем из закрепа; имя файла можно не указывать
+            new_name = None
+            if len(parts) >= 3:
+                new_name = os.path.basename(parts[2].strip()) or None
+            # Получаем закреп
+            try:
+                r = await client.get(f"{TELEGRAM_API}/getChat", params={"chat_id": chat_id})
+                j = r.json() if r else None
+            except Exception:
+                j = None
+            if not j or not j.get("ok"):
+                await tg_send(chat_id, _code("Не удалось получить закреп"))
                 return {"ok": True}
+            pinned = (j.get("result") or {}).get("pinned_message") or {}
+            doc = pinned.get("document")
+            if not doc or not doc.get("file_id"):
+                await tg_send(chat_id, _code("В закрепе нет документа"))
+                return {"ok": True}
+            file_id = doc["file_id"]
+            # Если имя не указано — пробуем взять из имени документа
+            if not new_name:
+                new_name = os.path.basename(str(doc.get("file_name") or "").strip()) or None
+            # Получаем путь файла
+            try:
+                r2 = await client.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id})
+                j2 = r2.json() if r2 else None
+            except Exception:
+                j2 = None
+            if not j2 or not j2.get("ok"):
+                await tg_send(chat_id, _code("Не удалось получить файл"))
+                return {"ok": True}
+            file_path = (j2.get("result") or {}).get("file_path")
+            # Если имя всё ещё не определено — берём из пути файла или file_id
+            if not new_name:
+                new_name = os.path.basename(str(file_path or "").strip()) or file_id
+            # Скачиваем и сохраняем (перезапись без подтверждения)
+            file_api = (TELEGRAM_API or "").replace("/bot", "/file/bot")
+            try:
+                r3 = await client.get(f"{file_api}/{file_path}")
+                data = r3.content if r3 and r3.status_code == 200 else None
+            except Exception:
+                data = None
+            if not data:
+                await tg_send(chat_id, _code("Не удалось скачать файл"))
+                return {"ok": True}
+            dst = os.path.join(STORAGE_DIR, new_name)
+            try:
+                with open(dst, "wb") as fh:
+                    fh.write(data)
+                await tg_send(chat_id, _code(f"Импортировано: {new_name}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка импорта: {e.__class__.__name__}"))
+            return {"ok": True}
             new_name = os.path.basename(parts[2].strip())
             if not new_name:
                 await tg_send(chat_id, _code("Некорректное имя файла"))
