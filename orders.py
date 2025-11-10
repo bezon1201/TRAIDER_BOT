@@ -1,5 +1,5 @@
 from __future__ import annotations
-from oco_calc import compute_oco_sell
+from oco_calc import compute_oco_buy
 from datetime import datetime
 from typing import Tuple, Dict, Any
 import os, json, time, hmac, hashlib
@@ -1014,7 +1014,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
             )
         else:
             try:
-                oco = compute_oco_sell(sdata) or {}
+                oco = compute_oco_buy(sdata) or {}
             except Exception:
                 oco = {}
             def _fmt(x):

@@ -105,3 +105,49 @@ def compute_oco_sell(data: Dict[str, Any]) -> Optional[Dict[str, float]]:
         "r": round(r, 6),
         "b": round(b, 6),
     }
+
+
+
+def compute_oco_buy(sdata: dict) -> dict:
+    """BUY-OCO prices: tp_limit (below), sl_trigger (above), sl_limit = sl_trigger + 2*tick"""
+    filters = sdata.get("filters", {}) if isinstance(sdata, dict) else {}
+    try:
+        tick = float(filters.get("tickSize") or 0.0)
+    except Exception:
+        tick = 0.0
+    if not tick:
+        tick = 0.01
+    try:
+        last = float(sdata.get("last") or 0.0)
+    except Exception:
+        last = 0.0
+    base = {}
+    try:
+        base = compute_oco_sell(sdata) or {}
+    except Exception:
+        base = {}
+    def _f(x, d=0.0):
+        try: return float(x)
+        except Exception: return d
+    a = _f(base.get("tp_limit"), 0.0)
+    b = _f(base.get("sl_trigger"), 0.0)
+    c = _f(base.get("sl_limit"), 0.0)
+    lo = min(a,b,c)
+    hi = max(a,b,c)
+    sl_trigger = hi
+    if last and sl_trigger <= last:
+        sl_trigger = last + tick
+    k = 2
+    sl_limit = sl_trigger + k*tick
+    def round_up(x, step):
+        if step <= 0: return x
+        n = int((x + 1e-15)/step + 0.999999)
+        return n*step
+    def round_dn(x, step):
+        if step <= 0: return x
+        n = int((x + 1e-15)/step)
+        return n*step
+    tp_limit = round_dn(lo, tick)
+    sl_trigger = round_up(sl_trigger, tick)
+    sl_limit = round_up(sl_limit, tick)
+    return {"tp_limit": tp_limit, "sl_trigger": sl_trigger, "sl_limit": sl_limit}
