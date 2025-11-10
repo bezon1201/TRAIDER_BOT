@@ -1933,6 +1933,7 @@ def _calc_available_for_level(symbol: str, month: str, week: int, lvl: str, budg
 
 
 def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    global _RUNTIME_PLANS
     """Подготовка: открыть все лимитные уровни (🟡).
     Если свободных средств меньше общей суммы — предупреждаем и предлагаем
     открыть только ПОЛНЫЕ квоты сверху вниз (без частичных).
@@ -2021,6 +2022,7 @@ def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
     return msg, kb
 
 def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
+    global _RUNTIME_PLANS
     symbol = (symbol or "").upper().strip()
     if not symbol:
         return "Некорректный символ.", {}
