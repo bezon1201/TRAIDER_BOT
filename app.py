@@ -664,25 +664,25 @@ async def _answer_callback(callback: dict) -> dict:
         msg, kb = prepare_open_oco(symbol)
         await tg_send(chat_id, _code(msg), reply_markup=kb if kb else None)
         return {"ok": True}
-
     # ORDERS → OPEN → подтверждение OCO
-if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
-    try:
-        _, payload = data.split(":", 1)
-        sym_raw, amount_raw = payload.split(":", 1)
-    except ValueError:
+    if data.startswith("ORDERS_OPEN_OCO_CONFIRM:"):
+        try:
+            _, payload = data.split(":", 1)
+            sym_raw, amount_raw = payload.split(":", 1)
+        except ValueError:
+            return {"ok": True}
+        symbol = (sym_raw or "").upper().strip()
+        try:
+            amount = int(amount_raw)
+        except Exception:
+            amount = 0
+        if not symbol or amount <= 0:
+            return {"ok": True}
+        from orders import confirm_open_oco
+        msg, kb = confirm_open_oco(symbol, amount)
+        await tg_send(chat_id, _code(msg), reply_markup=(kb if kb else None))
         return {"ok": True}
-    symbol = (sym_raw or "").upper().strip()
-    try:
-        amount = int(amount_raw)
-    except Exception:
-        amount = 0
-    if not symbol or amount <= 0:
-        return {"ok": True}
-    from orders import confirm_open_oco
-    msg, kb = confirm_open_oco(symbol, amount)
-    await tg_send(chat_id, _code(msg), reply_markup=(kb if kb else None))
-    return {"ok": True}
+
     if data.startswith("ORDERS_OPEN_L0:"):
         try:
             _, sym_raw = data.split(":", 1)
