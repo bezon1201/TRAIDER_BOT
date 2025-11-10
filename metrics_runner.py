@@ -404,19 +404,36 @@ def _save_pair_levels(symbol: str, levels: dict):
     return save_pair_levels(_storage_dir(), symbol, levels)
 
 def _mark_level_filled(symbol: str, level: str, quote_amount: float):
-    from symbol_info import recompute_pair_aggregates
-    levels = _load_pair_levels(symbol) or {}
-    node = (levels.get(level) or {})
-    reserved = float(node.get("reserved") or 0.0)
-    spent = float(node.get("spent") or 0.0)
-    delta = reserved if quote_amount<=0 else min(reserved, float(quote_amount))
-    node["reserved"] = max(0.0, reserved - delta)
-    node["spent"] = spent + delta
-    node["flag"] = "✅"
-    levels[level] = node
-    _save_pair_levels(symbol, levels)
-    recompute_pair_aggregates(_storage_dir(), symbol)
-
+    """Apply fill by reusing the same path as virtual FILL confirm to keep flags/rollover identical."""
+    try:
+        # Use the same confirm helper to avoid diverging logic of flags/quotas/week rollovers
+        from orders import _confirm_fill_level
+        # level title is informational; pass canonical level as title
+        title = f"{level} FILL (auto)"
+        # amount in USDC as integer for UI parity
+        amt = int(round(float(quote_amount or 0.0)))
+        if amt <= 0:
+            # fallback: move all reserved
+            from symbol_info import get_pair_levels, save_pair_levels, recompute_pair_aggregates
+            levels = get_pair_levels(_storage_dir(), symbol) or {}
+            node = (levels.get(level) or {})
+            amt = int(round(float(node.get("reserved") or 0.0)))
+        _confirm_fill_level(symbol, amt, level, title)
+    except Exception:
+        # Fallback to direct move reserved->spent if import/confirm fails
+        from symbol_info import get_pair_levels, save_pair_levels, recompute_pair_aggregates
+        levels = get_pair_levels(_storage_dir(), symbol) or {}
+        node = (levels.get(level) or {})
+        reserved = float(node.get("reserved") or 0.0)
+        spent = float(node.get("spent") or 0.0)
+        delta = reserved if (quote_amount or 0)<=0 else min(reserved, float(quote_amount or 0))
+        node["reserved"] = max(0.0, reserved - delta)
+        node["spent"] = spent + delta
+        node["flag"] = "✅"
+        levels[level] = node
+        save_pair_levels(_storage_dir(), symbol, levels)
+        recompute_pair_aggregates(_storage_dir(), symbol)
+    # next def
 def _cfg_keys():
     cfg = load_confyg(_storage_dir())
     b = cfg.get("binance") or {}
