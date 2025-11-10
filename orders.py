@@ -1356,7 +1356,7 @@ def confirm_cancel_l0(symbol: str, amount: int):
         "status": "CANCEL_REQUESTED",
     }
     try:
-        _append_live_logs(dict(base))
+        pass
     except Exception:
         pass
     try:
@@ -1436,7 +1436,7 @@ def confirm_cancel_l1(symbol: str, amount: int):
         "status": "CANCEL_REQUESTED",
     }
     try:
-        _append_live_logs(dict(base))
+        pass
     except Exception:
         pass
 
@@ -1513,7 +1513,7 @@ def confirm_cancel_l2(symbol: str, amount: int):
         "status": "CANCEL_REQUESTED",
     }
     try:
-        _append_live_logs(dict(base))
+        pass
     except Exception:
         pass
     try:
@@ -1587,7 +1587,7 @@ def confirm_cancel_l3(symbol: str, amount: int):
         "status": "CANCEL_REQUESTED",
     }
     try:
-        _append_live_logs(dict(base))
+        pass
     except Exception:
         pass
     try:
@@ -2375,4 +2375,3 @@ def confirm_cancel_all(symbol: str):
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
-
