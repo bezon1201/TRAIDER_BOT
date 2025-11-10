@@ -2223,7 +2223,8 @@ def confirm_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
     except Exception:
         # Фоллбек: текстовое подтверждение, если сборка карточки упала
         mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-        return f"{symbol} {mon_disp}\nОперация выполнена.", kb
+        return f"{symbol} {mon_disp}
+Операция выполнена.", {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_OPEN:{symbol}"}]]}
 
 # -------------------------
 
