@@ -1049,7 +1049,7 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         )
 
     # LIVE-ветка: для live-пары выбираем тип ордера по флагу
-    if _is_live_pair(symbol):
+    if _is_live_pair(symbol) and lvl in ("L0","L1","L2","L3"):
         # Обязательная проверка наличия средств на SPOT (с возможным redeem с EARN)
         ok_funds, note_funds = _ensure_spot_usdc(float(actual))
         if not ok_funds:
@@ -1082,6 +1082,44 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
 
     # После изменения резервов обновляем автофлаги (включая ⚠️/✅).
     _recompute_symbol_flags(symbol)
+    # OCO: override confirmation message format for virtual open
+    if lvl == "OCO":
+        sdata = get_symbol_data(symbol) or {}
+        oco = (sdata.get("oco") or {}) if isinstance(sdata, dict) else {}
+        def _f(x):
+            try: return float(x or 0.0)
+            except Exception: return 0.0
+        tp  = _f(oco.get("tp_limit"))
+        slt = _f(oco.get("sl_trigger"))
+        sll = _f(oco.get("sl_limit"))
+
+        price_info = sdata.get("price") if isinstance(sdata, dict) else None
+        try:
+            if isinstance(price_info, dict):
+                last_price = float(price_info.get("last") or 0.0)
+            elif isinstance(price_info, (int, float)):
+                last_price = float(price_info or 0.0)
+            else:
+                last_price = 0.0
+        except Exception:
+            last_price = 0.0
+
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+
+        text = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"OCO • ОСО BUY (GTC)\n\n"
+            f"TP Limit:  {tp:.2f} USDC\n"
+            f"SL Trigger: {slt:.2f} USDC\n"
+            f"SL Limit:  {sll:.2f} USDC\n  \n"
+            f"Текущая:   {last_price:.2f} USDC\n\n"
+            f"Сумма: {actual} USDC  →  Qty: {_fmt_qty(qty)} {base}"
+        )
+        kb = {"inline_keyboard": [[{"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"}]]}
+        return text, kb
+
 
     try:
         card = build_symbol_message(symbol)
