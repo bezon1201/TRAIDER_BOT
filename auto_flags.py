@@ -69,28 +69,38 @@ def _budget_flag_for_level(data: dict, level_key: str) -> str | None:
 
 
 def compute_oco_flag(data: dict) -> str:
-    # Сначала смотрим на состояние бюджета: ✅/⚠️ имеют приоритет над автофлагами.
-    manual = _budget_flag_for_level(data, "OCO")
-    if manual:
-        return manual
 
-    tf12 = (data.get("tf") or {}).get("12h") or {}
-    P = float(_pick(data, "price") or _pick(tf12, "close_last") or 0.0)
-    TP = float(_pick(data.get("oco") or {}, "tp_limit", default=0.0) or 0.0)
-    SLt = float(_pick(data.get("oco") or {}, "sl_trigger", default=0.0) or 0.0)
-    MA30 = float(_pick(tf12, "MA30", default=0.0) or 0.0)
-    ATR = float(_pick(tf12, "ATR14", default=0.0) or 0.0)
-    b = float(_pick(data.get("oco") or {}, "b", default=0.0) or 0.0)
-    mm = data.get("market_mode")
-    mode = (mm.get("12h") if isinstance(mm, dict) else mm) or "RANGE"
-    α, δ = _mode_alpha_delta(mode)
-    red_thresh = MA30 + α * ATR + b
-    red2 = TP + δ * ATR
-    if P > red_thresh and P > red2:
-        return "🔴"
-    if P <= SLt:
+    # keep budget overlays (✅/⚠️) as-is
+    if data.get("budget_flag") in ("✅", "⚠️"):
+        return data.get("budget_flag")
+
+    f = (data.get("filters") or {})
+    try:
+        tick = float(f.get("tickSize") or 0.0)
+    except Exception:
+        tick = 0.0
+    if not tick:
+        tick = 0.01
+
+    P = float(data.get("last") or data.get("price") or 0.0)
+    oco = (data.get("oco") or {})
+    TP  = float(oco.get("tp_limit")   or 0.0)
+    SLt = float(oco.get("sl_trigger") or 0.0)
+
+    # if missing values, default to cautious OCO
+    if P <= 0 or TP <= 0 or SLt <= 0:
+        return "🟡"
+
+    # tolerance: 2 ticks or ~3bp of price
+    eps = max(2.0 * tick, 0.0003 * P)
+
+    # Order: 🟢 then 🔴 then 🟡
+    if P <= TP + eps:
         return "🟢"
-    return "🟡"
+    elif P >= SLt - eps:
+        return "🔴"
+    else:
+        return "🟡"
 
 def compute_L_flag(data: dict, level_key: str) -> str:
     # Приоритет бюджетных флагов: ✅ (spent>0), ⚠️ (reserved>0).
