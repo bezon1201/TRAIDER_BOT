@@ -14,6 +14,13 @@ from portfolio import refresh_usdc_trade_free, get_usdc_spot_earn_total
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates, set_pair_week
 from auto_flags import compute_all_flags
 from symbol_info import build_symbol_message
+
+# ---- Runtime plans (prepare/confirm handoff) ----
+# Used to carry the '⚠️ ALL (лимит)' plan from prepare_open_all_limit() to confirm_open_all_limit().
+# Key: (symbol, month, "limit_all_full")  Value: list[tuple[level, amount]]
+# NOTE: process-local and ephemeral; cleared on restart/deploy.
+_RUNTIME_PLANS: Dict[tuple, list[tuple[str,int]]] = {}
+
 import math
 
 # Недельные доли по режиму рынка
