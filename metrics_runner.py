@@ -370,7 +370,7 @@ def _state_path():
 def _log_csv_path():
     return os.path.join(_storage_dir(), "live_orders_log.csv")
 
-def _read_json(path, default):
+def _read_json(path, default=None):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
