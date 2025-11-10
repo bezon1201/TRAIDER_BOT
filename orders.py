@@ -14,6 +14,13 @@ from portfolio import refresh_usdc_trade_free, get_usdc_spot_earn_total
 from budget import get_pair_budget, get_pair_levels, save_pair_levels, recompute_pair_aggregates, set_pair_week
 from auto_flags import compute_all_flags
 from symbol_info import build_symbol_message
+
+# ---- Runtime plans (prepare/confirm handoff) ----
+# Used to carry the '⚠️ ALL (лимит)' plan from prepare_open_all_limit() to confirm_open_all_limit().
+# Key: (symbol, month, "limit_all_full")  Value: list[tuple[level, amount]]
+# NOTE: process-local and ephemeral; cleared on restart/deploy.
+_RUNTIME_PLANS: Dict[tuple, list[tuple[str,int]]] = {}
+
 import math
 
 # Недельные доли по режиму рынка
@@ -423,6 +430,45 @@ def _binance_market_buy(symbol: str, quote_amount: float, key: str, secret: str,
         return r.json()
 
 
+
+def _binance_cancel_order(symbol: str, key: str, secret: str, *, order_id: int | None = None, orig_client_order_id: str | None = None) -> dict:
+    """Cancel a SPOT order on Binance by orderId or origClientOrderId.
+    Returns parsed JSON or raises RuntimeError on HTTP!=200."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        raise ValueError("symbol is required")
+    if not order_id and not orig_client_order_id:
+        raise ValueError("order_id or orig_client_order_id is required")
+
+    # Build signed query
+    params = {
+        "symbol": symbol,
+        "recvWindow": 10_000,
+        "timestamp": int(time.time() * 1000),
+    }
+    if order_id:
+        params["orderId"] = order_id
+    if orig_client_order_id and not order_id:
+        params["origClientOrderId"] = orig_client_order_id
+
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign_binance(q, secret)
+    url = f"{BINANCE_API}/api/v3/order?{q}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+
+    with httpx.Client(timeout=10.0) as client:
+        r = client.delete(url, headers=headers)
+        if r.status_code != 200:
+            try:
+                body = r.json()
+                msg = body.get("msg") or body.get("errmsg") or str(body)
+            except Exception:
+                msg = r.text
+            raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+        try:
+            return r.json()
+        except Exception:
+            return {"raw": r.text}
 def _prepare_live_market(symbol: str, month: str, lvl: str, title: str, amount: int) -> Tuple[bool, str]:
     """
     LIVE: создать реальный MARKET BUY ордер на сумму USDC (quoteOrderQty).
@@ -1118,10 +1164,8 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
 
     msg = (
         f"{symbol} {mon_disp} Wk{week}\n"
-        f"{title} CANCEL\n\n"
-        f"Сейчас в резерве: {reserved} USDC\n"
-        f"Вернуть в free:   {reserved} USDC\n\n"
-        f"Отменить виртуальный {title} на {reserved} USDC?"
+        f"{title} CANCEL\n\n\n"
+        f"Отменить {title} на {reserved} USDC?"
     )
     cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
     kb = {
@@ -1131,7 +1175,6 @@ def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[
         ]]
     }
     return msg, kb
-
 
 
 def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
@@ -1280,16 +1323,309 @@ def prepare_cancel_oco(symbol: str):  return _prepare_cancel_level(symbol, "OCO"
 def confirm_cancel_oco(symbol: str, amount: int):  return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
 
 def prepare_cancel_l0(symbol: str):   return _prepare_cancel_level(symbol, "L0", "LIMIT 0")
-def confirm_cancel_l0(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
+def confirm_cancel_l0(symbol: str, amount: int):
+    """CANCEL → LIMIT 0: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L0 не найден — виртуалка не отменена.", {}
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L0") or {})
+    if not rec:
+        return "LIVE: ордер L0 не найден — виртуалка не отменена.", {}
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L0 уже исполнен/закрыт — виртуалка не отменена.", {}
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L0",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L0"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+    return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
+
+
 
 def prepare_cancel_l1(symbol: str):   return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
-def confirm_cancel_l1(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
+
+def confirm_cancel_l1(symbol: str, amount: int):
+    """CANCEL → LIMIT 1: First cancel LIVE order; only then virtual."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L1 не найден — виртуалка не отменена.", {}
+
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L1") or {})
+    if not rec:
+        return "LIVE: ордер L1 не найден — виртуалка не отменена.", {}
+
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L1 уже исполнен/закрыт — виртуалка не отменена.", {}
+
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L1",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L1"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+
+    return _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
+
 
 def prepare_cancel_l2(symbol: str):   return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
-def confirm_cancel_l2(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
+def confirm_cancel_l2(symbol: str, amount: int):
+    """CANCEL → LIMIT 2: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L2 не найден — виртуалка не отменена.", {}
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L2") or {})
+    if not rec:
+        return "LIVE: ордер L2 не найден — виртуалка не отменена.", {}
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L2 уже исполнен/закрыт — виртуалка не отменена.", {}
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L2",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L2"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+    return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
+
+
 
 def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
-def confirm_cancel_l3(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
+def confirm_cancel_l3(symbol: str, amount: int):
+    """CANCEL → LIMIT 3: First cancel LIVE order; only then virtual. Mirrors L1 logic."""
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        return "LIVE: некорректный символ — виртуалка не отменена.", {}
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        return "LIVE: нет API ключей — виртуалка не отменена.", {}
+    if not _is_live_pair(symbol):
+        return "LIVE: ордер L3 не найден — виртуалка не отменена.", {}
+    state = _load_live_state() or {}
+    rec = ((state.get(symbol) or {}).get("L3") or {})
+    if not rec:
+        return "LIVE: ордер L3 не найден — виртуалка не отменена.", {}
+    st = str(rec.get("status") or "").upper()
+    if st in {"FILLED", "CANCELED"}:
+        return "LIVE: ордер L3 уже исполнен/закрыт — виртуалка не отменена.", {}
+    base = {
+        "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "symbol": symbol,
+        "side": rec.get("side") or "BUY",
+        "level": "L3",
+        "amount_planned": int(rec.get("amount_planned") or (amount or 0)),
+        "price": rec.get("price"),
+        "qty": rec.get("qty"),
+        "notional": rec.get("notional"),
+        "orderId": rec.get("orderId"),
+        "clientOrderId": rec.get("clientOrderId"),
+        "orderType": "CANCEL",
+        "status": "CANCEL_REQUESTED",
+    }
+    try:
+        _append_live_logs(dict(base))
+    except Exception:
+        pass
+    try:
+        result = _binance_cancel_order(
+            symbol,
+            key, secret,
+            order_id=rec.get("orderId"),
+            orig_client_order_id=None if rec.get("orderId") else rec.get("clientOrderId"),
+        )
+    except Exception:
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    new_status = str((result or {}).get("status") or "").upper()
+    if new_status != "CANCELED":
+        try:
+            base2 = dict(base); base2["status"] = "CANCEL_FAILED"
+            _append_live_logs(base2)
+        except Exception:
+            pass
+        return "LIVE: ошибка отмены на бирже — виртуалка не отменена.", {}
+    try:
+        if symbol not in state or not isinstance(state.get(symbol), dict):
+            state[symbol] = {}
+        rec2 = dict(rec)
+        rec2["status"] = "CANCELED"
+        state[symbol]["L3"] = rec2
+        _save_live_state(state)
+        base2 = dict(base); base2["status"] = "CANCELED"
+        _append_live_logs(base2)
+    except Exception:
+        pass
+    return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
+
+
 
 
 def recompute_flags_for_symbol(symbol: str) -> None:
@@ -2040,966 +2376,3 @@ def confirm_cancel_all(symbol: str):
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
 
-def _prepare_cancel_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовка отмены виртуального ордера: показ суммы в резерве и подтверждение."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    week = int(info.get("week") or 0)
-
-    levels = get_pair_levels(symbol, month)
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-
-    mon_disp = month
-    if len(month) == 7 and month[4] == "-":
-        mon_disp = f"{month[5:]}-{month[:4]}"
-
-    if reserved <= 0:
-        msg = (
-            f"{symbol} {mon_disp} Wk{week}\n"
-            f"{title} CANCEL\n\n"
-            f"Нет виртуального ордера на уровне {title} (в резерве 0 USDC)."
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    msg = (
-        f"{symbol} {mon_disp} Wk{week}\n"
-        f"{title} CANCEL\n\n"
-        f"Сейчас в резерве: {reserved} USDC\n"
-        f"Вернуть в free:   {reserved} USDC\n\n"
-        f"Отменить виртуальный {title} на {reserved} USDC?"
-    )
-    cb = f"ORDERS_CANCEL_{lvl}_CONFIRM"
-    kb = {
-        "inline_keyboard": [[
-            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
-            {"text": "↩️", "callback_data": f"ORDERS_CANCEL:{symbol}"},
-        ]]
-    }
-    return msg, kb
-
-
-
-def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подтверждение отмены: возвращаем резерв в free."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректные параметры операции.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    levels = get_pair_levels(symbol, month)
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-
-    if reserved <= 0:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        msg = (
-            f"{symbol} {mon_disp} Wk?\n"
-            f"{title} CANCEL\n\n"
-            f"Нечего отменять: резерв уже 0 USDC."
-        )
-        sym = symbol
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
-                ],
-                [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    try:
-        requested = int(amount)
-    except Exception:
-        requested = 0
-    if requested <= 0:
-        requested = reserved
-    actual = min(reserved, requested)
-    new_reserved = reserved - actual
-    if new_reserved < 0:
-        new_reserved = 0
-
-    # сохраняем только резерв, остальные поля (spent/week_quota/last_fill_week) не трогаем
-    try:
-        spent = int(lvl_state.get("spent") or 0)
-    except Exception:
-        spent = 0
-    try:
-        week_quota = int(lvl_state.get("week_quota") or 0)
-    except Exception:
-        week_quota = 0
-    try:
-        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
-    except Exception:
-        last_fill_week = -1
-
-    levels[lvl] = {
-        "reserved": new_reserved,
-        "spent": spent,
-        "week_quota": week_quota,
-        "last_fill_week": last_fill_week,
-    }
-    save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
-
-    # После изменения резервов обновляем автофлаги (⚠️/✅/авто).
-    _recompute_symbol_flags(symbol)
-
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
-                ],
-                [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return card, kb
-    except Exception:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        msg = (
-            f"{symbol} {mon_disp}\n"
-            f"{title}: отменён виртуальный ордер на {actual} USDC.\n"
-            f"Бюджет: {info2.get('budget')} | "
-            f"⏳ {info2.get('reserve')} | "
-            f"💸 {info2.get('spent')} | "
-            f"🎯 {info2.get('free')}"
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-
-
-# Публичные API для уровней
-
-# Публичные API для уровней
-def prepare_open_oco(symbol: str):  return _prepare_open_level(symbol, "OCO", "OCO")
-def confirm_open_oco(symbol: str, amount: int):  return _confirm_open_level(symbol, amount, "OCO", "OCO")
-
-def prepare_open_l0(symbol: str):   return _prepare_open_level(symbol, "L0", "LIMIT 0")
-def confirm_open_l0(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L0", "LIMIT 0")
-
-def prepare_open_l1(symbol: str):   return _prepare_open_level(symbol, "L1", "LIMIT 1")
-def confirm_open_l1(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L1", "LIMIT 1")
-
-def prepare_open_l2(symbol: str):   return _prepare_open_level(symbol, "L2", "LIMIT 2")
-def confirm_open_l2(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L2", "LIMIT 2")
-
-def prepare_open_l3(symbol: str):   return _prepare_open_level(symbol, "L3", "LIMIT 3")
-def confirm_open_l3(symbol: str, amount: int):   return _confirm_open_level(symbol, amount, "L3", "LIMIT 3")
-
-def prepare_cancel_oco(symbol: str):  return _prepare_cancel_level(symbol, "OCO", "OCO")
-def confirm_cancel_oco(symbol: str, amount: int):  return _confirm_cancel_level(symbol, amount, "OCO", "OCO")
-
-def prepare_cancel_l0(symbol: str):   return _prepare_cancel_level(symbol, "L0", "LIMIT 0")
-def confirm_cancel_l0(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L0", "LIMIT 0")
-
-def prepare_cancel_l1(symbol: str):   return _prepare_cancel_level(symbol, "L1", "LIMIT 1")
-def confirm_cancel_l1(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L1", "LIMIT 1")
-
-def prepare_cancel_l2(symbol: str):   return _prepare_cancel_level(symbol, "L2", "LIMIT 2")
-def confirm_cancel_l2(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L2", "LIMIT 2")
-
-def prepare_cancel_l3(symbol: str):   return _prepare_cancel_level(symbol, "L3", "LIMIT 3")
-def confirm_cancel_l3(symbol: str, amount: int):   return _confirm_cancel_level(symbol, amount, "L3", "LIMIT 3")
-
-
-def recompute_flags_for_symbol(symbol: str) -> None:
-    """Публичный помощник для пересчёта флагов по монете."""
-    _recompute_symbol_flags(symbol)
-
-
-def _prepare_fill_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовка пометки уровня как исполненного (FILL)."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    week = int(info.get("week") or 0)
-
-    levels = get_pair_levels(symbol, month)
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-
-    mon_disp = month
-    if len(month) == 7 and month[4] == "-":
-        mon_disp = f"{month[5:]}-{month[:4]}"
-
-    if week <= 0:
-        msg = (
-            f"{symbol} {mon_disp} Wk{week}\n"
-            f"{title} FILL\n\n"
-            f"Цикл ещё не запущен — пометка исполнения недоступна."
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    if reserved <= 0:
-        msg = (
-            f"{symbol} {mon_disp} Wk{week}\n"
-            f"{title} FILL\n\n"
-            f"Нет открытого виртуального ордера на уровне {title} (в резерве 0 USDC)."
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    msg = (
-        f"{symbol} {mon_disp} Wk{week}\n"
-        f"{title} FILL\n\n"
-        f"Сейчас в резерве: {reserved} USDC\n"
-        f"Перевести в spent: {reserved} USDC?\n\n"
-        f"Пометить виртуальный {title} как полностью исполненный?"
-    )
-    cb = f"ORDERS_FILL_{lvl}_CONFIRM"
-    kb = {
-        "inline_keyboard": [[
-            {"text": "CONFIRM", "callback_data": f"{cb}:{symbol}:{reserved}"},
-            {"text": "↩️", "callback_data": f"ORDERS_FILL:{symbol}"},
-        ]]
-    }
-    return msg, kb
-
-
-def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
-    """Подтверждение FILL: переводим резерв в spent."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректные параметры операции.", {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    week = int(info.get("week") or 0)
-
-    levels = get_pair_levels(symbol, month)
-    lvl_state = levels.get(lvl) or {}
-    reserved = int(lvl_state.get("reserved") or 0)
-    try:
-        spent = int(lvl_state.get("spent") or 0)
-    except Exception:
-        spent = 0
-    try:
-        week_quota = int(lvl_state.get("week_quota") or 0)
-    except Exception:
-        week_quota = 0
-    try:
-        last_fill_week = int(lvl_state.get("last_fill_week") if lvl_state.get("last_fill_week") is not None else -1)
-    except Exception:
-        last_fill_week = -1
-
-    if reserved <= 0:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        msg = (
-            f"{symbol} {mon_disp} Wk{week}\n"
-            f"{title} FILL\n\n"
-            f"Нечего помечать: резерв уже 0 USDC."
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-    try:
-        requested = int(amount)
-    except Exception:
-        requested = 0
-    if requested <= 0:
-        requested = reserved
-    actual = min(reserved, requested)
-    new_reserved = reserved - actual
-    if new_reserved < 0:
-        new_reserved = 0
-    new_spent = spent + actual
-
-    # помечаем, что исполнение было в текущую неделю
-    if actual > 0 and week > 0:
-        last_fill_week = week
-
-    levels[lvl] = {
-        "reserved": new_reserved,
-        "spent": new_spent,
-        "week_quota": week_quota,
-        "last_fill_week": last_fill_week,
-    }
-    save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
-
-    # После изменения резервов обновляем автофлаги (⚠️/✅/авто).
-    _recompute_symbol_flags(symbol)
-
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{sym}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{sym}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{sym}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{sym}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{sym}"},
-                ],
-                [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return card, kb
-    except Exception:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        msg = (
-            f"{symbol} {mon_disp}\n"
-            f"{title}: помечен как исполненный на {actual} USDC.\n"
-            f"Бюджет: {info2.get('budget')} | "
-            f"⏳ {info2.get('reserve')} | "
-            f"💸 {info2.get('spent')} | "
-            f"🎯 {info2.get('free')}"
-        )
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_FILL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_FILL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_FILL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_FILL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_FILL_L3:{symbol}"},
-                ],
-                [
-                    {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
-                ],
-            ]
-        }
-        return msg, kb
-
-
-def perform_rollover(symbol: str) -> Dict[str, Any]:
-    """Роловер недели: снять виртуальные ордера, перерасчитать недельные квоты и увеличить week."""
-
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return {}
-
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    week = int(info.get("week") or 0)
-
-    if budget <= 0 or week <= 0:
-        # цикл не запущен
-        return info
-
-    # читаем уровни
-    levels = get_pair_levels(symbol, month) or {}
-
-    for lvl in LEVEL_KEYS:
-        st = levels.get(lvl) or {}
-        try:
-            reserved = int(st.get("reserved") or 0)
-        except Exception:
-            reserved = 0
-        try:
-            spent = int(st.get("spent") or 0)
-        except Exception:
-            spent = 0
-        try:
-            week_quota = int(st.get("week_quota") or 0)
-        except Exception:
-            week_quota = 0
-        try:
-            last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
-        except Exception:
-            last_fill_week = -1
-
-        # базовая квота на следующую неделю
-        base = _compute_base_quota(symbol, month, lvl, budget)
-
-        had_fill = (last_fill_week == week)
-        if had_fill:
-            next_week_quota = base
-        else:
-            quota_prev = week_quota if week_quota > 0 else base
-            next_week_quota = base + quota_prev
-            if base > 0:
-                max_quota = 4 * base
-                if next_week_quota > max_quota:
-                    next_week_quota = max_quota
-
-        if next_week_quota < 0:
-            next_week_quota = 0
-
-        levels[lvl] = {
-            "reserved": 0,  # все ордера снимаем → деньги вернутся в free
-            "spent": spent,
-            "week_quota": next_week_quota,
-            "last_fill_week": -1,  # новая неделя — ещё не исполнялось
-        }
-
-    # сохраняем уровни и пересчитываем агрегаты
-    save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
-
-    # ensure week increment and fresh state
-    info3 = info2
-    try:
-        new_week = week + 1
-        set_pair_week(symbol, month, new_week)
-        info3 = get_pair_budget(symbol, month)
-    except Exception:
-        # fallback: return aggregates before week increment if anything fails
-        pass
-# после ролловера пересчитаем флаги
-    _recompute_symbol_flags(symbol)
-
-    return info3
-
-
-# -------------------------
-# OPEN ALL helpers
-
-def _calc_available_for_level(symbol: str, month: str, week: int, lvl: str, budget: int) -> int:
-    """Доступная сумма к открытию по уровню с учётом квот и already used/filled этой недели."""
-    levels = get_pair_levels(symbol, month) or {}
-    base_quota = _compute_base_quota(symbol, month, lvl, budget)
-    if base_quota <= 0:
-        return 0
-    st = levels.get(lvl) or {}
-    try:
-        week_quota = int(st.get("week_quota") or 0)
-    except Exception:
-        week_quota = 0
-    quota = week_quota if week_quota > 0 else base_quota
-    try:
-        last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
-    except Exception:
-        last_fill_week = -1
-    reserved = int(st.get("reserved") or 0)
-    spent_curr = int(st.get("spent") or 0) if last_fill_week == week else 0
-    available = quota - (reserved + spent_curr)
-    return available if available > 0 else 0
-
-
-def prepare_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовка: открыть все лимитные уровни (🟡).
-    Если свободных средств меньше общей суммы — предупреждаем и предлагаем
-    открыть только ПОЛНЫЕ квоты сверху вниз (без частичных).
-    """
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    free = int(info.get("free") or 0)
-    week = int(info.get("week") or 0)
-    if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл ещё не запущен — ALL недоступен.", {}
-
-    # собираем список уровней со статусом 🟡 (включая OCO) в порядке сверху-вниз
-    sdata = _load_symbol_data(symbol)
-    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
-    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
-
-    # базовый план: для каждого уровня доступное «a» к открытию
-    items: list[tuple[str,int]] = []
-    total = 0
-    for lvl in levels_list:
-        a = _calc_available_for_level(symbol, month, week, lvl, budget)
-        if a > 0:
-            items.append((lvl, a))
-            total += a
-
-    if total <= 0:
-        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
-        return f"{symbol} {month}\nALL (лимит) — нечего открывать.", kb
-
-    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-
-    if free >= total:
-        # хватает на всё — обычное подтверждение
-        parts = ", ".join([f"{lvl} {amt}" for lvl,amt in items])
-        msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
-               f"Открыть {len(items)} ордера на сумму {total} USDC?\nСписок: {parts}")
-        kb = {"inline_keyboard":[
-            [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CONFIRM:{symbol}"}],
-            [{"text":"MANUAL","callback_data":f"ORDERS_OPEN:{symbol}"}],
-        ]}
-        # сохраним план в оперативке
-        try:
-            _RUNTIME_PLANS[(symbol, month, "limit_all_full")] = items.copy()
-        except Exception:
-            pass
-        return msg, kb
-
-    # Не хватает средств — предложим открыть ПОЛНЫЕ квоты сверху вниз
-    selected: list[tuple[str,int]] = []
-    sel_sum = 0
-    for lvl, a in items:
-        if sel_sum + a <= free:
-            selected.append((lvl, a))
-            sel_sum += a
-        else:
-            continue
-
-    if not selected:
-        msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
-               f"Доступно: {free} USDC, нужно: {total}. Недостаточно средств для любых уровней.\n"
-               f"Откройте по одному или пополните баланс.")
-        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_OPEN:{symbol}"}]]}
-        return msg, kb
-
-    plan = ", ".join(f"{k} {q}" for k,q in items)
-    will = ", ".join(f"{k} {q}" for k,q in selected)
-    miss_items = [(k,q) for k,q in items if (k,q) not in selected]
-    miss = ", ".join(f"{k} {q}" for k,q in miss_items) if miss_items else "—"
-    msg = (f"{symbol} {mon_disp} Wk{week}\n⚠️ ALL (лимит)\n\n"
-           f"Доступно: {free} USDC, нужно: {total} (не хватает {total-free}).\n"
-           f"Открыть ПОЛНЫЕ квоты сверху вниз, без частичных?\n\n"
-           f"План: {plan}\nБудет открыто: {will}\nПропущены: {miss}")
-    kb = {"inline_keyboard":[
-        [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_LIMIT_CONFIRM:{symbol}"}],
-        [{"text":"MANUAL","callback_data":f"ORDERS_OPEN:{symbol}"}],
-    ]}
-    try:
-        _RUNTIME_PLANS[(symbol, month, "limit_all_full")] = selected.copy()
-    except Exception:
-        pass
-    return msg, kb
-
-def confirm_open_all_limit(symbol: str) -> Tuple[str, Dict[str, Any]]:
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    free = int(info.get("free") or 0)
-    week = int(info.get("week") or 0)
-    if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл ещё не запущен — операция отменена.", {}
-
-    # загрузим сохранённый план (если есть), иначе сформируем по текущим 🟡
-    plan = _RUNTIME_PLANS.pop((symbol, month, "limit_all_full"), None)
-    if plan is None:
-        sdata = _load_symbol_data(symbol)
-        flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-        yellow = {k for k,v in (flags or {}).items() if v == "🟡"}
-        levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in yellow]
-        plan = []
-        for lvl in levels_list:
-            a = _calc_available_for_level(symbol, month, week, lvl, budget)
-            if a > 0:
-                plan.append((lvl, a))
-
-    levels = get_pair_levels(symbol, month) or {}
-    applied: list[tuple[str,int]] = []
-    total = 0
-
-    for lvl, a in plan:
-        if a <= 0:
-            continue
-        if free < a:
-            # без частичных
-            continue
-        st = levels.get(lvl) or {}
-        reserved = int(st.get("reserved") or 0)
-        spent = int(st.get("spent") or 0)
-        week_quota = int(st.get("week_quota") or 0)
-        last_fill_week = int(st.get("last_fill_week") if st.get("last_fill_week") is not None else -1)
-        levels[lvl] = {
-            "reserved": reserved + a,
-            "spent": spent,
-            "week_quota": week_quota,
-            "last_fill_week": last_fill_week,
-        }
-        free -= a
-        total += a
-        applied.append((lvl, a))
-
-    save_pair_levels(symbol, month, levels)
-    recompute_pair_aggregates(symbol, month)
-    _recompute_symbol_flags(symbol)
-
-    # Пересобираем карточку и остаёмся в OPEN
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard":[
-                [
-                    {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{sym}"},
-                    {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{sym}"},
-                    {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{sym}"},
-                    {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{sym}"},
-                    {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{sym}"},
-                ],
-                [
-                    {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{sym}"},
-                    {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{sym}"},
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                    {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return card, kb
-    except Exception:
-        # Фоллбек
-        mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-        parts = ", ".join(f"{k} {q}" for k,q in applied) if applied else "—"
-        return (f"{symbol} {mon_disp}\n⚠️ ALL выполнен. Открыто: {parts} на {total} USDC.",
-                {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_OPEN:{symbol}"}]]})
-
-def prepare_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
-    """Подготовка: маркет-исполнение (🟢) всех доступных уровней на их квоты."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    week = int(info.get("week") or 0)
-    if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл ещё не запущен — ALL недоступен.", {}
-
-    sdata = _load_symbol_data(symbol)
-    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    green = {k for k,v in (flags or {}).items() if v == "🟢"}
-    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in green]
-
-    items = []
-    total = 0
-    for lvl in levels_list:
-        a = _calc_available_for_level(symbol, month, week, lvl, budget)
-        if a > 0:
-            items.append((lvl, a))
-            total += a
-
-    if total <= 0:
-        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
-        return f"{symbol} {month}\n✅ ALL — нечего исполнять.", kb
-
-    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in items])
-    msg = (f"{symbol} {mon_disp} Wk{week}\n✅ ALL (маркет)\n\n"
-           f"Исполнить {len(items)} ордеров на сумму {total} USDC?\nСписок: {parts}")
-    kb = {"inline_keyboard":[
-        [{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_ALL_MKT_CONFIRM:{symbol}"}],
-        [{"text":"CANCEL","callback_data":f"ORDERS_OPEN_ALL_MKT_CANCEL:{symbol}"}],
-    ]}
-    return msg, kb
-
-
-def confirm_open_all_mkt(symbol: str) -> Tuple[str, Dict[str, Any]]:
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = datetime.now().strftime("%Y-%m")
-    info = get_pair_budget(symbol, month)
-    budget = int(info.get("budget") or 0)
-    week = int(info.get("week") or 0)
-    if week <= 0 or budget <= 0:
-        return f"{symbol} {month}\nЦикл ещё не запущен — операция отменена.", {}
-
-    levels = get_pair_levels(symbol, month) or {}
-    sdata = _load_symbol_data(symbol)
-    flags = compute_all_flags(sdata) if isinstance(sdata, dict) else {}
-    green = {k for k,v in (flags or {}).items() if v == "🟢"}
-    levels_list = [k for k in ("OCO","L0","L1","L2","L3") if k in green]
-
-    applied = []
-    total = 0
-    for lvl in levels_list:
-        a = _calc_available_for_level(symbol, month, week, lvl, budget)
-        if a <= 0:
-            continue
-        st = levels.get(lvl) or {}
-        reserved = int(st.get("reserved") or 0)
-        try:
-            spent = int(st.get("spent") or 0)
-        except Exception:
-            spent = 0
-        try:
-            week_quota = int(st.get("week_quota") or 0)
-        except Exception:
-            week_quota = 0
-        # FILL: перевод в spent и фиксация недели
-        levels[lvl] = {
-            "reserved": reserved,
-            "spent": spent + a,
-            "week_quota": week_quota,
-            "last_fill_week": week,
-        }
-        total += a
-        applied.append((lvl, a))
-
-    save_pair_levels(symbol, month, levels)
-    info2 = recompute_pair_aggregates(symbol, month)
-    _recompute_symbol_flags(symbol)
-
-    if total <= 0:
-        kb = {"inline_keyboard":[[{"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"}]]}
-        return f"{symbol} {month}\n✅ ALL — ничего не исполнено.", kb
-
-    mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-    parts = ", ".join([f"{lvl} {amt}" for lvl,amt in applied])
-    msg = (f"{symbol} {mon_disp} Wk{week}\n✅ ALL (маркет)\n\n"
-           f"Исполнено {len(applied)} на сумму {total} USDC.\nСписок: {parts}")
-    
-    # После изменений пересобираем карточку и остаёмся в подменю OPEN
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard":[
-                [
-                    {"text":"OCO","callback_data":f"ORDERS_OPEN_OCO:{sym}"},
-                    {"text":"LIMIT 0","callback_data":f"ORDERS_OPEN_L0:{sym}"},
-                    {"text":"LIMIT 1","callback_data":f"ORDERS_OPEN_L1:{sym}"},
-                    {"text":"LIMIT 2","callback_data":f"ORDERS_OPEN_L2:{sym}"},
-                    {"text":"LIMIT 3","callback_data":f"ORDERS_OPEN_L3:{sym}"},
-                ],
-                [
-                    {"text":"✅ ALL","callback_data":f"ORDERS_OPEN_ALL_MKT:{sym}"},
-                    {"text":"⚠️ ALL","callback_data":f"ORDERS_OPEN_ALL_LIMIT:{sym}"},
-                    {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{sym}"},
-                ],
-            ]
-        }
-        return card, kb
-    except Exception:
-        # Фоллбек: текстовое подтверждение, если сборка карточки упала
-        mon_disp = f"{month[5:]}-{month[:4]}" if len(month)==7 and month[4]=="-" else month
-        return f"{symbol} {mon_disp}\nОперация выполнена.", kb
-
-# -------------------------
-
-# Публичные обёртки для FILL
-def prepare_fill_oco(symbol: str):  return _prepare_fill_level(symbol, "OCO", "OCO")
-def confirm_fill_oco(symbol: str, amount: int):  return _confirm_fill_level(symbol, amount, "OCO", "OCO")
-
-def prepare_fill_l0(symbol: str):   return _prepare_fill_level(symbol, "L0", "LIMIT 0")
-def confirm_fill_l0(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L0", "LIMIT 0")
-
-def prepare_fill_l1(symbol: str):   return _prepare_fill_level(symbol, "L1", "LIMIT 1")
-def confirm_fill_l1(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L1", "LIMIT 1")
-
-def prepare_fill_l2(symbol: str):   return _prepare_fill_level(symbol, "L2", "LIMIT 2")
-def confirm_fill_l2(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L2", "LIMIT 2")
-
-def prepare_fill_l3(symbol: str):   return _prepare_fill_level(symbol, "L3", "LIMIT 3")
-def confirm_fill_l3(symbol: str, amount: int):   return _confirm_fill_level(symbol, amount, "L3", "LIMIT 3")
-
-def prepare_cancel_all(symbol: str):
-    """Подготовка отмены всех открытых (⚠️ reserved>0) ордеров: OCO, L0–L3."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректный символ.", {}
-    month = datetime.now().strftime("%Y-%m")
-    mon_disp = month
-    if len(month) == 7 and month[4] == "-":
-        mon_disp = f"{month[5:]}-{month[:4]}"
-    levels = get_pair_levels(symbol, month)
-    if not isinstance(levels, dict):
-        levels = {}
-    order_keys = ["OCO","L0","L1","L2","L3"]
-    items = []
-    total = 0
-    for k in order_keys:
-        st = levels.get(k) or {}
-        r = int(st.get("reserved") or 0)
-        if r > 0:
-            items.append(f"{k} {r}")
-            total += r
-    if total <= 0:
-        return (f"{symbol} {mon_disp}\n"
-                f"❌ ALL — нечего отменять."), {
-            "inline_keyboard":[
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{symbol}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{symbol}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{symbol}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{symbol}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{symbol}"},
-                ],
-                [
-                    {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{symbol}"},
-                    {"text":"↩️","callback_data":f"ORDERS_BACK_MENU:{symbol}"},
-                ]
-            ]
-        }
-    msg = (f"{symbol} {mon_disp}\n"
-           f"❌ ALL (cancel)\n\n"
-           f"Отменить {len(items)} ордера на сумму {total} USDC?\n"
-           f"Список: {', '.join(items)}")
-    kb = {
-        "inline_keyboard":[[
-            {"text":"CONFIRM","callback_data":f"ORDERS_CANCEL_ALL_CONFIRM:{symbol}"},
-            {"text":"↩️","callback_data":f"ORDERS_CANCEL:{symbol}"},
-        ]]
-    }
-    return msg, kb
-
-
-def confirm_cancel_all(symbol: str):
-    """Отмена всех открытых (⚠️) ордеров — reserved→0, пересбор карточки и подменю CANCEL."""
-    symbol = (symbol or "").upper().strip()
-    if not symbol:
-        return "Некорректные параметры операции.", {}
-    month = datetime.now().strftime("%Y-%m")
-    levels = get_pair_levels(symbol, month)
-    if not isinstance(levels, dict):
-        levels = {}
-    changed = False
-    total = 0
-    for k in ["OCO","L0","L1","L2","L3"]:
-        st = levels.get(k) or {}
-        r = int(st.get("reserved") or 0)
-        if r > 0:
-            total += r
-            changed = True
-            levels[k] = {
-                "reserved": 0,
-                "spent": int(st.get("spent") or 0),
-                "week_quota": int(st.get("week_quota") or 0),
-                "last_fill_week": int(st.get("last_fill_week") or 0),
-            }
-    if not changed:
-        # Нечего отменять — просто вернуть текущее подменю CANCEL
-        try:
-            card = build_symbol_message(symbol)
-            sym = (symbol or "").upper()
-            kb = {
-                "inline_keyboard": [
-                    [
-                        {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
-                        {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
-                        {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
-                        {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
-                        {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
-                    ],
-                    [
-                        {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                        {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                    ],
-                ]
-            }
-            return card, kb
-        except Exception:
-            return "❌ ALL — нечего отменять.", {}
-    # Сохраняем и пересчитываем агрегаты/флаги
-    save_pair_levels(symbol, month, levels)
-    recompute_pair_aggregates(symbol, month)
-    _recompute_symbol_flags(symbol)
-    # Пересобираем карточку и остаёмся в CANCEL
-    try:
-        card = build_symbol_message(symbol)
-        sym = (symbol or "").upper()
-        kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "OCO", "callback_data": f"ORDERS_CANCEL_OCO:{sym}"},
-                    {"text": "LIMIT 0", "callback_data": f"ORDERS_CANCEL_L0:{sym}"},
-                    {"text": "LIMIT 1", "callback_data": f"ORDERS_CANCEL_L1:{sym}"},
-                    {"text": "LIMIT 2", "callback_data": f"ORDERS_CANCEL_L2:{sym}"},
-                    {"text": "LIMIT 3", "callback_data": f"ORDERS_CANCEL_L3:{sym}"},
-                ],
-                [
-                        {"text":"❌ ALL","callback_data":f"ORDERS_CANCEL_ALL:{sym}"},
-                        {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{sym}"},
-                    ],
-            ]
-        }
-        return card, kb
-    except Exception:
-        mon_disp = month
-        if len(month) == 7 and month[4] == "-":
-            mon_disp = f"{month[5:]}-{month[:4]}"
-        return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
