@@ -151,3 +151,57 @@ def compute_oco_buy(sdata: dict) -> dict:
     sl_trigger = round_up(sl_trigger, tick)
     sl_limit = round_up(sl_limit, tick)
     return {"tp_limit": tp_limit, "sl_trigger": sl_trigger, "sl_limit": sl_limit}
+
+
+
+def compute_oco_buy(sdata: dict) -> dict:
+    """
+    BUY-OCO calculation (mirrors SELL bands):
+      - use SELL upper band as SL Trigger (above market),
+      - use SELL lower band as TP Limit (below market),
+      - SL Limit = SL Trigger + sl_gap, sl_gap = max(3*tick, 0.0005*last).
+    Values are rounded to tick; also enforce SL Trigger > last.
+    """
+    def _to_float(x, default=0.0):
+        try:
+            return float(x)
+        except Exception:
+            return default
+
+    filters = sdata.get("filters", {}) if isinstance(sdata, dict) else {}
+    tick = _to_float(filters.get("tickSize"), 0.0) or 0.01
+    last = _to_float(sdata.get("last"), 0.0)
+
+    # Use SELL calculator to get band representatives
+    base = {}
+    try:
+        base = compute_oco_sell(sdata) or {}
+    except Exception:
+        base = {}
+
+    upper_band = _to_float(base.get("tp_limit"), 0.0)
+    lower_band = _to_float(base.get("sl_trigger"), 0.0)
+
+    tp_basis = lower_band
+    slt_basis = max(upper_band, last + tick)
+
+    price_ref = last if last > 0 else _to_float(sdata.get("price"), 0.0)
+    sl_gap = max(3.0 * tick, 0.0005 * price_ref if price_ref > 0 else 0.0)
+
+    try:
+        tp_limit = _tick_round_down(tp_basis, tick)
+    except Exception:
+        tp_limit = (int(tp_basis / tick) * tick) if tick > 0 else tp_basis
+
+    try:
+        sl_trigger = _tick_round_up(slt_basis, tick)
+    except Exception:
+        sl_trigger = (int((slt_basis + tick - 1e-15) / tick) * tick) if tick > 0 else slt_basis
+
+    try:
+        sl_limit = _tick_round_up(sl_trigger + sl_gap, tick)
+    except Exception:
+        val = sl_trigger + sl_gap
+        sl_limit = (int((val + tick - 1e-15) / tick) * tick) if tick > 0 else val
+
+    return {"tp_limit": tp_limit, "sl_trigger": sl_trigger, "sl_limit": sl_limit}
