@@ -1539,107 +1539,107 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
 
     # /data ...
-        if text_lower.startswith("/data"):
-            parts = text.split()
-            # /data — список файлов
-            if len(parts) == 1:
-                files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)])
-                msg = "Файлы: " + (", ".join(files) if files else "—")
-                await tg_send(chat_id, _code(msg))
-                return {"ok": True}
+    if text_lower.startswith("/data"):
+        parts = text.split()
+        # /data — список файлов
+        if len(parts) == 1:
+            files = sorted([os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p)])
+            msg = "Файлы: " + (", ".join(files) if files else "—")
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
             
-            # /data delete name1, name2, ...
-            if parts[1].strip().lower() == "delete":
-                args_str = (text.split(None, 2)[2] if len(parts) >= 3 else "").strip()
-                names = [os.path.basename(x.strip()) for x in args_str.split(",") if x.strip()]
-                if not names:
-                    await tg_send(chat_id, _code("Укажите имена файлов через запятую"))
-                    return {"ok": True}
-                files_all = set(os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p))
-                lines = []
-                for name in names:
-                    if name not in files_all:
-                        lines.append(f"Файл не найден: {name}")
-                        continue
-                    path = os.path.join(STORAGE_DIR, name)
-                    try:
-                        os.remove(path)
-                        lines.append(f"Удалено: {name}")
-                    except Exception as e:
-                        lines.append(f"Ошибка удаления: {name}: {e.__class__.__name__}")
-                await tg_send(chat_id, _code("\n".join(lines)))
+        # /data delete name1, name2, ...
+        if parts[1].strip().lower() == "delete":
+            args_str = (text.split(None, 2)[2] if len(parts) >= 3 else "").strip()
+            names = [os.path.basename(x.strip()) for x in args_str.split(",") if x.strip()]
+            if not names:
+                await tg_send(chat_id, _code("Укажите имена файлов через запятую"))
                 return {"ok": True}
-            
-            # /data export name1, name2, ...
-            if parts[1].strip().lower() == "export":
-                args_str = (text.split(None, 2)[2] if len(parts) >= 3 else "").strip()
-                names = [os.path.basename(x.strip()) for x in args_str.split(",") if x.strip()]
-                if not names:
-                    await tg_send(chat_id, _code("Укажите имена файлов через запятую"))
-                    return {"ok": True}
-                for name in names:
-                    path = os.path.join(STORAGE_DIR, name)
-                    if not (os.path.exists(path) and os.path.isfile(path)):
-                        await tg_send(chat_id, _code(f"Файл не найден: {name}"))
-                        continue
-                    await tg_send_file(chat_id, path, filename=name, caption=name)
-                return {"ok": True}
-            
-            # /data import new_name — берём один файл из закрепа активного канала
-            if parts[1].strip().lower() == "import":
-                if len(parts) < 3:
-                    await tg_send(chat_id, _code("Укажите имя файла: /data import <name>"))
-                    return {"ok": True}
-                new_name = os.path.basename(parts[2].strip())
-                if not new_name:
-                    await tg_send(chat_id, _code("Некорректное имя файла"))
-                    return {"ok": True}
-                # Получаем закреп
+            files_all = set(os.path.basename(p) for p in glob.glob(os.path.join(STORAGE_DIR, "*")) if os.path.isfile(p))
+            lines = []
+            for name in names:
+                if name not in files_all:
+                    lines.append(f"Файл не найден: {name}")
+                    continue
+                path = os.path.join(STORAGE_DIR, name)
                 try:
-                    r = await client.get(f"{TELEGRAM_API}/getChat", params={"chat_id": chat_id})
-                    j = r.json() if r else None
-                except Exception:
-                    j = None
-                if not j or not j.get("ok"):
-                    await tg_send(chat_id, _code("Не удалось получить закреп"))
-                    return {"ok": True}
-                pinned = (j.get("result") or {}).get("pinned_message") or {}
-                doc = pinned.get("document")
-                if not doc or not doc.get("file_id"):
-                    await tg_send(chat_id, _code("В закрепе нет документа"))
-                    return {"ok": True}
-                file_id = doc["file_id"]
-                # Получаем путь файла
-                try:
-                    r2 = await client.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id})
-                    j2 = r2.json() if r2 else None
-                except Exception:
-                    j2 = None
-                if not j2 or not j2.get("ok"):
-                    await tg_send(chat_id, _code("Не удалось получить файл"))
-                    return {"ok": True}
-                file_path = (j2.get("result") or {}).get("file_path")
-                if not file_path:
-                    await tg_send(chat_id, _code("Не найден путь файла"))
-                    return {"ok": True}
-                # Скачиваем и сохраняем
-                file_api = (TELEGRAM_API or "").replace("/bot", "/file/bot")
-                try:
-                    r3 = await client.get(f"{file_api}/{file_path}")
-                    data = r3.content if r3 and r3.status_code == 200 else None
-                except Exception:
-                    data = None
-                if not data:
-                    await tg_send(chat_id, _code("Не удалось скачать файл"))
-                    return {"ok": True}
-                dst = os.path.join(STORAGE_DIR, new_name)
-                try:
-                    with open(dst, "wb") as fh:
-                        fh.write(data)
-                    await tg_send(chat_id, _code(f"Импортировано: {new_name}"))
+                    os.remove(path)
+                    lines.append(f"Удалено: {name}")
                 except Exception as e:
-                    await tg_send(chat_id, _code(f"Ошибка импорта: {e.__class__.__name__}"))
+                    lines.append(f"Ошибка удаления: {name}: {e.__class__.__name__}")
+            await tg_send(chat_id, _code("\n".join(lines)))
+            return {"ok": True}
+            
+        # /data export name1, name2, ...
+        if parts[1].strip().lower() == "export":
+            args_str = (text.split(None, 2)[2] if len(parts) >= 3 else "").strip()
+            names = [os.path.basename(x.strip()) for x in args_str.split(",") if x.strip()]
+            if not names:
+                await tg_send(chat_id, _code("Укажите имена файлов через запятую"))
                 return {"ok": True}
+            for name in names:
+                path = os.path.join(STORAGE_DIR, name)
+                if not (os.path.exists(path) and os.path.isfile(path)):
+                    await tg_send(chat_id, _code(f"Файл не найден: {name}"))
+                    continue
+                await tg_send_file(chat_id, path, filename=name, caption=name)
+            return {"ok": True}
+            
+        # /data import new_name — берём один файл из закрепа активного канала
+        if parts[1].strip().lower() == "import":
+            if len(parts) < 3:
+                await tg_send(chat_id, _code("Укажите имя файла: /data import <name>"))
+                return {"ok": True}
+            new_name = os.path.basename(parts[2].strip())
+            if not new_name:
+                await tg_send(chat_id, _code("Некорректное имя файла"))
+                return {"ok": True}
+            # Получаем закреп
+            try:
+                r = await client.get(f"{TELEGRAM_API}/getChat", params={"chat_id": chat_id})
+                j = r.json() if r else None
+            except Exception:
+                j = None
+            if not j or not j.get("ok"):
+                await tg_send(chat_id, _code("Не удалось получить закреп"))
+                return {"ok": True}
+            pinned = (j.get("result") or {}).get("pinned_message") or {}
+            doc = pinned.get("document")
+            if not doc or not doc.get("file_id"):
+                await tg_send(chat_id, _code("В закрепе нет документа"))
+                return {"ok": True}
+            file_id = doc["file_id"]
+            # Получаем путь файла
+            try:
+                r2 = await client.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id})
+                j2 = r2.json() if r2 else None
+            except Exception:
+                j2 = None
+            if not j2 or not j2.get("ok"):
+                await tg_send(chat_id, _code("Не удалось получить файл"))
+                return {"ok": True}
+            file_path = (j2.get("result") or {}).get("file_path")
+            if not file_path:
+                await tg_send(chat_id, _code("Не найден путь файла"))
+                return {"ok": True}
+            # Скачиваем и сохраняем
+            file_api = (TELEGRAM_API or "").replace("/bot", "/file/bot")
+            try:
+                r3 = await client.get(f"{file_api}/{file_path}")
+                data = r3.content if r3 and r3.status_code == 200 else None
+            except Exception:
+                data = None
+            if not data:
+                await tg_send(chat_id, _code("Не удалось скачать файл"))
+                return {"ok": True}
+            dst = os.path.join(STORAGE_DIR, new_name)
+            try:
+                with open(dst, "wb") as fh:
+                    fh.write(data)
+                await tg_send(chat_id, _code(f"Импортировано: {new_name}"))
+            except Exception as e:
+                await tg_send(chat_id, _code(f"Ошибка импорта: {e.__class__.__name__}"))
+            return {"ok": True}
     # /scheduler ...
     if text_lower.startswith("/scheduler"):
         parts = (text or "").strip().split()
