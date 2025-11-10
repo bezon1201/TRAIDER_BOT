@@ -971,14 +971,16 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
+        from auto_flags import compute_all_flags
+        flag_val = compute_all_flags(symbol).get("OCO", "🟡")
         msg = (
             f"{symbol} {mon_disp} Wk{week}\n"
-            ("OCO • MARKET BUY (виртуально)\n\n" if flag_val == "🟢" else "OCO • ОСО BUY (GTC)\n\n")
-            f"TP Limit:  {tp:.2f} USDC\n"
-            f"SL Trigger: {slt:.2f} USDC\n"
-            f"SL Limit:  {sll:.2f} USDC\n\n"
-            f"Текущая:   {last:.2f} USDC\n\n"
-            f"Сумма: {available} USDC  →  Qty: - {base}"
+            + ("OCO • MARKET BUY (виртуально)\n\n" if flag_val == "🟢" else "OCO • ОСО BUY (GTC)\n\n")
+            + f"TP Limit:  {tp:.2f} USDC\n"
+            + f"SL Trigger: {slt:.2f} USDC\n"
+            + f"SL Limit:  {sll:.2f} USDC\n\n"
+            + f"Текущая:   {last:.2f} USDC\n\n"
+            + f"Сумма: {available} USDC  →  Qty: - {base}"
         )
         kb = {"inline_keyboard":[[{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"}]]}
         return msg, kb
@@ -1256,6 +1258,8 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
+        from auto_flags import compute_all_flags
+        flag_val = compute_all_flags(symbol).get("OCO", "🟡")
         msg = (
             f"{symbol} {mon_disp} Wk?\n"
             f"{title} CANCEL\n\n"
@@ -1339,6 +1343,8 @@ def _confirm_cancel_level(symbol: str, amount: int, lvl: str, title: str) -> Tup
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
+        from auto_flags import compute_all_flags
+        flag_val = compute_all_flags(symbol).get("OCO", "🟡")
         msg = (
             f"{symbol} {mon_disp}\n"
             f"{title}: отменён виртуальный ордер на {actual} USDC.\n"
@@ -1799,6 +1805,8 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
+        from auto_flags import compute_all_flags
+        flag_val = compute_all_flags(symbol).get("OCO", "🟡")
         msg = (
             f"{symbol} {mon_disp} Wk{week}\n"
             f"{title} FILL\n\n"
@@ -1871,6 +1879,8 @@ def _confirm_fill_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         mon_disp = month
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
+        from auto_flags import compute_all_flags
+        flag_val = compute_all_flags(symbol).get("OCO", "🟡")
         msg = (
             f"{symbol} {mon_disp}\n"
             f"{title}: помечен как исполненный на {actual} USDC.\n"
