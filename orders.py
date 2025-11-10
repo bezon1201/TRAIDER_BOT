@@ -401,6 +401,44 @@ def _prepare_live_limit(symbol: str, month: str, lvl: str, title: str, amount: i
     return True, msg
 
 
+
+def _binance_oco_buy(symbol: str, qty: float, price: float, stop_price: float, stop_limit_price: float,
+                     key: str, secret: str,
+                     list_client_order_id: str | None = None,
+                     limit_client_order_id: str | None = None,
+                     stop_client_order_id: str | None = None) -> dict:
+    """Place a synchronous SPOT OCO BUY on Binance."""
+    # Build signed params
+    params = {
+        "symbol": symbol,
+        "side": "BUY",
+        "quantity": f"{qty:.8f}".rstrip("0").rstrip("."),
+        "price": f"{price:.8f}".rstrip("0").rstrip("."),
+        "stopPrice": f"{stop_price:.8f}".rstrip("0").rstrip("."),
+        "stopLimitPrice": f"{stop_limit_price:.8f}".rstrip("0").rstrip("."),
+        "stopLimitTimeInForce": "GTC",
+        "recvWindow": 10_000,
+        "timestamp": int(time.time() * 1000),
+    }
+    if list_client_order_id:  params["listClientOrderId"] = list_client_order_id
+    if limit_client_order_id: params["limitClientOrderId"] = limit_client_order_id
+    if stop_client_order_id:  params["stopClientOrderId"] = stop_client_order_id
+
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign_binance(q, secret)
+    url = f"{BINANCE_API}/api/v3/order/oco?{q}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+    import httpx
+    with httpx.Client(timeout=10.0) as client:
+        r = client.post(url, headers=headers)
+        if r.status_code != 200:
+            try:
+                body = r.json()
+                msg = body.get("msg") or body.get("errmsg") or str(body)
+            except Exception:
+                msg = r.text
+            raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+        return r.json()
 def _binance_market_buy(symbol: str, quote_amount: float, key: str, secret: str, client_order_id: str | None = None) -> dict:
     """
     Отправка SPOT MARKET BUY с quoteOrderQty.
@@ -828,6 +866,90 @@ def _ensure_spot_usdc(amount_needed: float, buffer: float = 0.05, timeout_sec: f
     _tg_info("```\nUSDC: перевод с EARN не подтвердился вовремя\nОперация отменена\n```")
     return False, "redeem timeout"
 
+
+def _prepare_live_oco(symbol: str, month: str, title: str, amount: int) -> Tuple[bool, str]:
+    """LIVE: создать реальный OCO BUY (qty от суммы по TP)."""
+    symbol = (symbol or "").upper().strip()
+    storage_dir = _storage_dir()
+    # баланс
+    try:
+        free_trade = float(refresh_usdc_trade_free(storage_dir))
+    except Exception:
+        free_trade = float(get_usdc_spot_earn_total(storage_dir) or 0.0)
+    if free_trade <= 0.0:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — нет свободного USDC (spot.free + Earn FLEX)."
+    need = float(amount or 0)
+    if need <= 0.0:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — сумма ордера 0 USDC."
+    if need > free_trade + 1e-8:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — недостаточно свободного USDC. Нужно ≥ {int(need)} USDC, доступно ~{int(free_trade)} USDC."
+
+    sdata = _load_symbol_data(symbol)
+    if not isinstance(sdata, dict):
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — нет данных по монете."
+    oco = sdata.get("oco") or {}
+    filters = sdata.get("filters") or {}
+    try:
+        tp = float(oco.get("tp_limit") or 0.0)
+        slt = float(oco.get("sl_trigger") or 0.0)
+        sll = float(oco.get("sl_limit") or 0.0)
+    except Exception:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — неверные параметры OCO."
+    tick = float(filters.get("tickSize") or 0.01)
+    step = float(filters.get("stepSize") or 0.00001)
+    min_notional = float(filters.get("minNotional") or 5.0)
+    min_qty = float(filters.get("minQty") or 0.0)
+
+    # qty по TP
+    qty = max(0.0, need / max(tp, 1e-9))
+    # округление вниз к step
+    if step > 0:
+        qty = (int(qty / step)) * step
+    if qty <= 0.0:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — qty после округления 0."
+    notional = qty * tp
+    if notional < min_notional - 1e-9:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — notional {notional:.2f} < minNotional {min_notional}."
+    if min_qty and qty < min_qty - 1e-12:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — qty {qty} < minQty {min_qty}."
+
+    cfg = load_confyg(_storage_dir())
+    key = (cfg.get("binance") or {}).get("key") or ""
+    sec = (cfg.get("binance") or {}).get("secret") or ""
+    if not key or not sec:
+        return False, f"{symbol} {month}\n{title}: LIVE отменён — не настроены Binance API ключи."
+
+    # Ids
+    ts = time.strftime("%Y%m%d%H%M%S")
+    base = f"{symbol}_BUY_OCO_{ts}"
+    list_id = base + "_LIST"
+    limit_id = base + "_LMT"
+    stop_id  = base + "_STP"
+
+    try:
+        resp = _binance_oco_buy(symbol, qty, tp, slt, sll, key, sec, list_id, limit_id, stop_id)
+        # Логи и state
+        rec = {
+            "ts": int(time.time()),
+            "symbol": symbol,
+            "type": "OCO",
+            "side": "BUY",
+            "listClientOrderId": list_id,
+            "limitClientOrderId": limit_id,
+            "stopClientOrderId": stop_id,
+            "qty": qty,
+            "price": tp,
+            "stopPrice": slt,
+            "stopLimitPrice": sll,
+            "response": resp,
+            "status": "NEW",
+            "amount": int(need),
+        }
+        _append_live_logs(rec)
+    except Exception as e:
+        return False, f"{symbol} {month}\n{title}: LIVE ошибка Binance ({e.__class__.__name__}). Ордер не создан."
+
+    return True, f"{symbol} {month}\n{title}: OCO отправлен на биржу. Сумма ≤ {int(need)} USDC, qty ≈ {qty:.8f}."
 def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
     symbol = (symbol or "").upper().strip()
     if not symbol:
@@ -1095,16 +1217,24 @@ def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple
         )
 
     # LIVE-ветка: для live-пары выбираем тип ордера по флагу
-    if _is_live_pair(symbol) and (lvl in {"L0","L1","L2","L3"}):
+    if _is_live_pair(symbol) and (lvl in {"L0","L1","L2","L3","OCO"}):
         # Обязательная проверка наличия средств на SPOT (с возможным redeem с EARN)
         ok_funds, note_funds = _ensure_spot_usdc(float(actual))
         if not ok_funds:
             return note_funds, {}
 
-        if flag_val == "🟢":
-            ok, live_msg = _prepare_live_market(symbol, month, lvl, title, actual)
+        if lvl == "OCO":
+            if flag_val == "🟢":
+                ok, live_msg = _prepare_live_market(symbol, month, lvl, title, actual)
+            elif flag_val == "🟡":
+                ok, live_msg = _prepare_live_oco(symbol, month, title, actual)
+            else:
+                return (f"{symbol} {month}\n{title}: автофлаг {flag_val} — LIVE отменён.", {} )
         else:
-            ok, live_msg = _prepare_live_limit(symbol, month, lvl, title, actual)
+            if flag_val == "🟢":
+                ok, live_msg = _prepare_live_market(symbol, month, lvl, title, actual)
+            else:
+                ok, live_msg = _prepare_live_limit(symbol, month, lvl, title, actual)
         if not ok:
             # Ошибка LIVE — бюджет/резервы не трогаем, просто возвращаем сообщение
             return live_msg, {}
