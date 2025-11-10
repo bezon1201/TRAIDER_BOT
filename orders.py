@@ -993,7 +993,7 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
         )
         kb = {"inline_keyboard":[[{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"}]]}
         return msg, kb
-msg_limit = (
+    msg_limit = (
         f"{symbol} {mon_disp} Wk{week}\n"
         f"{title} • SPOT LIMIT BUY (GTC)\n\n"
         f"Цена (L{lvl[-1]}): {price_str} USDC  \n"
@@ -2450,4 +2450,5 @@ def confirm_cancel_all(symbol: str):
         if len(month) == 7 and month[4] == "-":
             mon_disp = f"{month[5:]}-{month[:4]}"
         return f"{symbol} {mon_disp}\nОтменено на сумму {total} USDC.", {}
+
 
