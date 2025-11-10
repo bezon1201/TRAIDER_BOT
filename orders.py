@@ -677,6 +677,12 @@ def _compute_base_quota(symbol: str, month: str, lvl: str, budget: int) -> int:
         p = int(perc.get(lvl) or 0)
     except Exception:
         p = 0
+    # Fallback for OCO: if not configured, reuse L1 then L0
+    if p <= 0 and lvl == "OCO":
+        try:
+            p = int(perc.get("OCO") or perc.get("L1") or perc.get("L0") or 0)
+        except Exception:
+            p = 0
     if p <= 0:
         return 0
     quota = int(round(budget * p / 100.0))
@@ -957,7 +963,37 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
     notional_str = (f"{notional:.6f}" if isinstance(notional, float) else "-")
 
     # Сообщение для LIMIT (🟡 и прочие)
-    msg_limit = (
+    
+    # OCO-specific preview message
+    if lvl == "OCO":
+        sdata = _load_symbol_data(symbol) or {}
+        oco = (sdata.get("oco") or {}) if isinstance(sdata, dict) else {}
+        def _f(x):
+            try: return float(x or 0.0)
+            except Exception: return 0.0
+        tp  = _f(oco.get("tp_limit"))
+        slt = _f(oco.get("sl_trigger"))
+        sll = _f(oco.get("sl_limit"))
+        price_info = sdata.get("price") if isinstance(sdata, dict) else None
+        try:
+            last = float((price_info or {}).get("last") if isinstance(price_info, dict) else price_info or 0.0)
+        except Exception:
+            last = 0.0
+        mon_disp = month
+        if len(month) == 7 and month[4] == "-":
+            mon_disp = f"{month[5:]}-{month[:4]}"
+        msg = (
+            f"{symbol} {mon_disp} Wk{week}\n"
+            f"OCO • ОСО BUY (GTC)\n\n"
+            f"TP Limit:  {tp:.2f} USDC\n"
+            f"SL Trigger: {slt:.2f} USDC\n"
+            f"SL Limit:  {sll:.2f} USDC\n\n"
+            f"Текущая:   {last:.2f} USDC\n\n"
+            f"Сумма: {available} USDC  →  Qty: - {base}"
+        )
+        kb = {"inline_keyboard":[[{"text":"CONFIRM","callback_data":f"ORDERS_OPEN_OCO_CONFIRM:{symbol}:{available}"}]]}
+        return msg, kb
+msg_limit = (
         f"{symbol} {mon_disp} Wk{week}\n"
         f"{title} • SPOT LIMIT BUY (GTC)\n\n"
         f"Цена (L{lvl[-1]}): {price_str} USDC  \n"
