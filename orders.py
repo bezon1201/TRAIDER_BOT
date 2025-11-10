@@ -1,4 +1,5 @@
 from __future__ import annotations
+from oco_calc import compute_oco_sell
 from datetime import datetime
 from typing import Tuple, Dict, Any
 import os, json, time, hmac, hashlib
@@ -986,6 +987,52 @@ def _prepare_open_level(symbol: str, lvl: str, title: str) -> Tuple[str, Dict[st
             {"text": "↩️", "callback_data": f"ORDERS_BACK_MENU:{symbol}"},
         ]]
     }
+
+    # --- OCO-specific message override (virtual), by flag ---
+    if lvl == "OCO":
+        # month pretty
+        mon_disp = month
+        try:
+            if len(month) == 7 and month[4] == "-":
+                mon_disp = f"{month[5:]}-{month[:4]}"
+        except Exception:
+            pass
+        # lot step
+        filters = sdata.get("filters") if isinstance(sdata, dict) else {}
+        try:
+            step = float((filters or {}).get("stepSize")) if (filters or {}).get("stepSize") is not None else 0.0
+        except Exception:
+            step = 0.0
+        step_str = (f"{step:g}" if step else "-")
+        base = symbol.replace("USDC", "").replace("USDT", "")
+        qty_str2 = qty_str if 'qty_str' in locals() else "-"
+        if flag_val == "🟢":
+            msg = (
+                f"{symbol} {mon_disp} Wk{week}\n"
+                f"OCO • MARKET BUY (quoteOrderQty)\n\n"
+                f"Сумма: {available} USDC  →  Qty: {qty_str2} {base}  (step {step_str})"
+            )
+        else:
+            try:
+                oco = compute_oco_sell(sdata) or {}
+            except Exception:
+                oco = {}
+            def _fmt(x):
+                try:
+                    return f"{float(x):.2f}"
+                except Exception:
+                    return "-"
+            tp_limit = _fmt((oco or {}).get("tp_limit"))
+            sl_trigger = _fmt((oco or {}).get("sl_trigger"))
+            sl_limit = _fmt((oco or {}).get("sl_limit"))
+            msg = (
+                f"{symbol} {mon_disp} Wk{week}\n"
+                f"OCO • OCO BUY (GTC)\n\n"
+                f"TP Limit {tp_limit} USDC\n"
+                f"SL Trigger {sl_trigger} USDC\n"
+                f"SL Limit  {sl_limit} USDC\n\n"
+                f"Сумма: {available} USDC  →  Qty: {qty_str2} {base}  (step {step_str})"
+            )
     return msg, kb
 
 def _confirm_open_level(symbol: str, amount: int, lvl: str, title: str) -> Tuple[str, Dict[str, Any]]:
