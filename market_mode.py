@@ -51,7 +51,7 @@ def append_raw_snapshot(storage_dir: str, symbol_lc: str, overall_raw: str, tf_s
     os.makedirs(storage_dir, exist_ok=True)
     rec = {"ts": _now_ts(), "overall_raw": overall_raw, "tf": tf_signals}
     with open(_raw_log_path(storage_dir, symbol_lc), "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\\n")
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 def _read_recent_raw(storage_dir: str, symbol_lc: str, hours: int) -> List[Dict]:
     path = _raw_log_path(storage_dir, symbol_lc)

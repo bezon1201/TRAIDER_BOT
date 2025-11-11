@@ -2,13 +2,20 @@
 import os
 import json
 import time
+import asyncio
 from typing import List, Tuple
 
 import httpx
 from fastapi import FastAPI, Request, Response, status
 
 from data import handle_cmd_data
-from metric_runner import run_now_for_all, run_now_for_symbol, normalize_symbol, collect_symbol_metrics, write_json
+from metric_runner import (
+    run_now_for_all,
+    run_now_for_symbol,
+    normalize_symbol,
+    collect_symbol_metrics,
+    write_json,
+)
 from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
 from scheduler import load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults, human_period, human_hours
 
@@ -163,9 +170,6 @@ def parse_command(text: str):
 
 from scheduler import human_period, human_hours, load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults
 
-SCHED_FILE = None
-SCHED_LOG = None
-
 def sched_print(cfg: dict) -> str:
     return (
         "/scheduler\n"
@@ -253,19 +257,107 @@ async def handle_cmd_scheduler(chat_id: str, args: List[str]) -> None:
                          "/scheduler jitter <sec>1-3\n"
                          "/scheduler on|off")
 
-from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
-from metric_runner import collect_symbol_metrics, write_json, normalize_symbol
+def _now_ts() -> int:
+    return int(time.time())
+
+def _log_scheduler(status: str, msg: str):
+    rec = {"ts": _now_ts(), "status": status, "msg": msg}
+    try:
+        print(json.dumps(rec, ensure_ascii=False), flush=True)
+    except Exception:
+        pass
+    try:
+        with open(SCHED_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+async def _run_once_with_cfg(cfg: dict) -> tuple[int, int]:
+    from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
+    from metric_runner import collect_symbol_metrics, write_json, normalize_symbol
+    coins = read_coins()
+    delay_ms = int(cfg.get("delay_ms", 2))
+    processed = 0
+    errors = 0
+    for s in coins:
+        s_norm = normalize_symbol(s)
+        try:
+            metrics = await collect_symbol_metrics(s_norm)
+            write_json(STORAGE_DIR, s_norm, metrics)
+            raw_mode, tf_signals = compute_overall_mode_from_metrics(metrics)
+            append_raw_snapshot(STORAGE_DIR, s_norm, raw_mode, tf_signals)
+            publish_if_due(STORAGE_DIR, s_norm, cfg)
+            processed += 1
+        except Exception as e:
+            errors += 1
+            _log_scheduler("error", f"{s_norm}:{e}")
+        if delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
+    return processed, errors
+
+_bg_task = None
+_bg_lock = asyncio.Lock()
+
+async def _scheduler_loop():
+    _log_scheduler("start", "scheduler loop started")
+    while True:
+        try:
+            cfg = load_scheduler_cfg(SCHED_FILE) or scheduler_defaults()
+            now = _now_ts()
+            if cfg.get("next_due_utc") is None:
+                cfg["next_due_utc"] = now + 2
+            if cfg.get("next_publish_utc") is None:
+                cfg["next_publish_utc"] = now + int(cfg.get("publish_hours", 24)) * 3600
+            save_scheduler_cfg(SCHED_FILE, cfg)
+
+            if not cfg.get("enabled", True):
+                _log_scheduler("stop", "disabled")
+                await asyncio.sleep(5)
+                continue
+
+            next_due = int(cfg.get("next_due_utc", now))
+            if now >= next_due:
+                _log_scheduler("start", "run begin")
+                processed, errors = await _run_once_with_cfg(cfg)
+                _log_scheduler("success", f"run ok; coins={processed}; errors={errors}")
+                period = int(cfg.get("period_sec", 900))
+                jitter = int(cfg.get("jitter_sec", 2))
+                cfg["last_run_utc"] = now
+                cfg["next_due_utc"] = now + period + (0 if jitter <= 0 else (now % (jitter + 1)))
+                if cfg.get("next_publish_utc") is None:
+                    cfg["next_publish_utc"] = now + int(cfg.get("publish_hours", 24)) * 3600
+                save_scheduler_cfg(SCHED_FILE, cfg)
+                await asyncio.sleep(1)
+            else:
+                await asyncio.sleep(max(1, min(next_due - now, 30)))
+
+        except asyncio.CancelledError:
+            _log_scheduler("stop", "scheduler loop cancelled")
+            raise
+        except Exception as e:
+            _log_scheduler("error", f"loop exception: {e}")
+            await asyncio.sleep(3)
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    global SCHED_FILE, SCHED_LOG, STORAGE_DIR
-    STORAGE_DIR = get_env("STORAGE_DIR", "/mnt/data")
-    SCHED_FILE = os.path.join(STORAGE_DIR, "scheduler.json")
-    SCHED_LOG = os.path.join(STORAGE_DIR, "scheduler_log.jsonl")
     ensure_storage()
     if not os.path.exists(SCHED_FILE):
         save_scheduler_cfg(SCHED_FILE, scheduler_defaults())
     await tg_set_webhook()
+    global _bg_task
+    async with _bg_lock:
+        if _bg_task is None or _bg_task.done():
+            _bg_task = asyncio.create_task(_scheduler_loop())
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    global _bg_task
+    if _bg_task and not _bg_task.done():
+        _bg_task.cancel()
+        try:
+            await _bg_task
+        except asyncio.CancelledError:
+            pass
 
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
@@ -322,24 +414,6 @@ async def telegram_webhook(request: Request) -> Response:
 
     return Response(status_code=status.HTTP_200_OK)
 
-async def _sleep_ms(ms: int):
-    await httpx.AsyncClient().aclose()
-    time.sleep(ms / 1000.0)
-
-def _log_scheduler(status: str, msg: str):
-    rec = {"ts": int(time.time()), "status": status, "msg": msg}
-    # render (stdout) log
-    try:
-        print(json.dumps(rec, ensure_ascii=False), flush=True)
-    except Exception:
-        pass
-    # file log (kept)
-    try:
-        with open(SCHED_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
 @app.post("/cron/run", include_in_schema=False)
 async def cron_run(request: Request) -> Response:
     key = request.query_params.get("key") or ""
@@ -347,45 +421,22 @@ async def cron_run(request: Request) -> Response:
         return Response(status_code=status.HTTP_403_FORBIDDEN)
 
     cfg = load_scheduler_cfg(SCHED_FILE) or scheduler_defaults()
-    now = int(time.time())
+    now = _now_ts()
 
     if not cfg.get("enabled", True):
-        _log_scheduler("stop", "disabled")
+        _log_scheduler("stop", "disabled (manual)")
         return Response(status_code=status.HTTP_200_OK)
 
-    next_due = cfg.get("next_due_utc")
-    if next_due and now < next_due:
-        return Response(status_code=status.HTTP_200_OK)
-
-    _log_scheduler("start", "run begin")
-    coins = read_coins()
-    delay_ms = int(cfg.get("delay_ms", 2))
-
-    errors = []
-    try:
-        for s in coins:
-            s_norm = normalize_symbol(s)
-            try:
-                metrics = await collect_symbol_metrics(s_norm)
-                write_json(STORAGE_DIR, s_norm, metrics)
-                raw_mode, tf_signals = compute_overall_mode_from_metrics(metrics)
-                append_raw_snapshot(STORAGE_DIR, s_norm, raw_mode, tf_signals)
-                publish_if_due(STORAGE_DIR, s_norm, cfg)
-            except Exception as e:
-                errors.append(f"{s_norm}:{e}")
-            if delay_ms > 0:
-                await _sleep_ms(delay_ms)
-        _log_scheduler("success", f"run ok; coins={len(coins)}; errors={len(errors)}")
-    except Exception as e:
-        errors.append(str(e))
-        _log_scheduler("error", "; ".join(errors))
+    _log_scheduler("start", "manual run begin")
+    processed, errors = await _run_once_with_cfg(cfg)
+    _log_scheduler("success", f"manual run ok; coins={processed}; errors={errors}")
 
     period = int(cfg.get("period_sec", 900))
     jitter = int(cfg.get("jitter_sec", 2))
     cfg["last_run_utc"] = now
-    cfg["next_due_utc"] = now + period + (0 if jitter <= 0 else (int(time.time()) % (jitter+1)))
+    cfg["next_due_utc"] = now + period + (0 if jitter <= 0 else (now % (jitter + 1)))
     if cfg.get("next_publish_utc") is None:
         cfg["next_publish_utc"] = now + int(cfg.get("publish_hours", 24)) * 3600
-
     save_scheduler_cfg(SCHED_FILE, cfg)
+
     return Response(status_code=status.HTTP_200_OK)

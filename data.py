@@ -1,5 +1,6 @@
+
 import os
-from typing import List, Tuple
+from typing import List
 import httpx
 import glob
 
@@ -7,7 +8,6 @@ TELEGRAM_API_BASE = "https://api.telegram.org"
 
 BOT_TOKEN = (os.getenv("TRAIDER_BOT_TOKEN") or "").strip()
 STORAGE_DIR = (os.getenv("STORAGE_DIR") or "/mnt/data").strip() or "/mnt/data"
-
 
 async def tg_send_message(chat_id: str, text: str) -> None:
     if not BOT_TOKEN or not chat_id:
@@ -20,7 +20,6 @@ async def tg_send_message(chat_id: str, text: str) -> None:
             await client.post(url, json=payload)
         except Exception:
             pass
-
 
 async def tg_send_document(chat_id: str, file_path: str, caption: str | None = None) -> None:
     if not BOT_TOKEN or not chat_id:
@@ -41,7 +40,6 @@ async def tg_send_document(chat_id: str, file_path: str, caption: str | None = N
         except Exception:
             await tg_send_message(chat_id, f"не удалось отправить файл: {os.path.basename(file_path)}")
 
-
 def list_storage_files() -> List[str]:
     try:
         entries = os.listdir(STORAGE_DIR)
@@ -54,19 +52,16 @@ def list_storage_files() -> List[str]:
             files.append(name)
     return sorted(files)
 
-
 def normalize_pattern(p: str) -> str:
     p = (p or "").strip()
     if not p or p.startswith("/") or ".." in p:
         return ""
     return p
 
-
 def resolve_patterns(patterns: List[str]) -> tuple[list[str], list[str]]:
     matched: list[str] = []
     invalid: list[str] = []
     seen: set[str] = set()
-
     for raw in patterns:
         pat = normalize_pattern(raw)
         if not pat:
@@ -82,7 +77,6 @@ def resolve_patterns(patterns: List[str]) -> tuple[list[str], list[str]]:
                 seen.add(hp)
                 matched.append(hp)
     return matched, invalid
-
 
 async def handle_cmd_data(chat_id: str, args: List[str]) -> None:
     if not args:

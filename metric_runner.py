@@ -4,6 +4,7 @@ from typing import Dict, List
 from datetime import datetime, timezone
 
 import httpx
+import asyncio
 
 BINANCE_BASE = "https://api.binance.com"
 
@@ -135,3 +136,11 @@ def write_json(storage_dir: str, symbol_lc: str, payload: Dict) -> None:
     import json
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
+
+async def run_now_for_all(symbols: List[str], storage_dir: str) -> None:
+    for s in symbols:
+        await run_now_for_symbol(s, storage_dir)
+
+async def run_now_for_symbol(symbol_lc: str, storage_dir: str) -> None:
+    m = await collect_symbol_metrics(symbol_lc)
+    write_json(storage_dir, symbol_lc, m)
