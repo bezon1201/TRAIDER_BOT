@@ -48,11 +48,19 @@ SCHED_FILE = os.path.join(STORAGE_DIR, "scheduler.json")
 SCHED_LOG = os.path.join(STORAGE_DIR, "scheduler_log.jsonl")
 
 # ---------------- Telegram utils ----------------
-async def tg_send_message(chat_id: str, text: str) -> None:
+async def tg_send_message(chat_id: str, text: str, reply_markup: dict | None = None, as_pre: bool = True) -> None:
     if not BOT_TOKEN or not chat_id:
         return
     url = f"{TELEGRAM_API_BASE}/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
+    payload = {"chat_id": chat_id}
+    content = text or ""
+    if as_pre:
+        payload["text"] = f"<pre>{content}</pre>"
+        payload["parse_mode"] = "HTML"
+    else:
+        payload["text"] = content
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     timeout = httpx.Timeout(10.0, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
@@ -71,6 +79,7 @@ async def tg_set_webhook() -> None:
         try:
             await client.post(url, json=payload)
         except Exception:
+                pass
             
 async def tg_answer_callback(callback_query_id: str) -> None:
     if not BOT_TOKEN or not callback_query_id:
