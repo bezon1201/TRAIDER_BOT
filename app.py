@@ -9,6 +9,7 @@ import httpx
 from fastapi import FastAPI, Request, Response, status
 
 from data import handle_cmd_data
+from card_format import load_mode, save_mode, render_main_card, render_mode_menu, render_mode_confirm
 from metric_runner import (
     run_now_for_all,
     run_now_for_symbol,
@@ -70,7 +71,20 @@ async def tg_set_webhook() -> None:
         try:
             await client.post(url, json=payload)
         except Exception:
+            
+async def tg_answer_callback(callback_query_id: str) -> None:
+    if not BOT_TOKEN or not callback_query_id:
+        return
+    url = f"{TELEGRAM_API_BASE}/bot{BOT_TOKEN}/answerCallbackQuery"
+    payload = {"callback_query_id": callback_query_id}
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            await client.post(url, json=payload)
+        except Exception:
             pass
+
+pass
 
 # ---------------- Storage helpers ----------------
 def ensure_storage() -> None:
@@ -460,6 +474,48 @@ async def handle_cmd_market(chat_id: str, args: List[str]) -> None:
             lines.append(f"{s_norm}: {mode}  [{updated}]")
     await tg_send_message(chat_id, "\n".join(lines))
 
+
+# ---------------- Callback utils ----------------
+def parse_callback(data: str) -> dict:
+    # expects "k=v;k2=v2" (case-insensitive keys)
+    out = {}
+    if not data:
+        return out
+    for chunk in str(data).split(";"):
+        if not chunk:
+            continue
+        if "=" in chunk:
+            k, v = chunk.split("=", 1)
+            out[k.strip().casefold()] = v.strip()
+        else:
+            out[chunk.strip().casefold()] = ""
+    return out
+
+async def handle_callback(chat_id: str, cb_id: str, data: str) -> None:
+    args = parse_callback(data)
+    a = (args.get("a") or "").casefold()
+    if a == "mode_menu":
+        mode = load_mode(STORAGE_DIR)
+        text, kb = render_mode_menu(mode)
+        await tg_send_message(chat_id, text, reply_markup=kb, as_pre=True)
+        await tg_answer_callback(cb_id)
+        return
+    if a == "mode_set":
+        v = (args.get("v") or "").casefold()
+        new_mode = "live" if v == "live" else "sim"
+        save_mode(STORAGE_DIR, new_mode)
+        text, kb = render_mode_confirm(new_mode)
+        await tg_send_message(chat_id, text, reply_markup=kb, as_pre=True)
+        await tg_answer_callback(cb_id)
+        return
+    if a == "mode_back":
+        mode = load_mode(STORAGE_DIR)
+        text, kb = render_main_card(mode)
+        await tg_send_message(chat_id, text, reply_markup=kb, as_pre=True)
+        await tg_answer_callback(cb_id)
+        return
+    # default: ack silently
+    await tg_answer_callback(cb_id)
 # ---------------- HTTP routes ----------------
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
@@ -473,6 +529,18 @@ async def telegram_webhook(request: Request) -> Response:
     except Exception:
         return Response(status_code=status.HTTP_200_OK)
 
+
+    # Handle callback queries
+    cb = update.get("callback_query") or {}
+    if cb:
+        cb_id = str(cb.get("id") or "")
+        msg = cb.get("message") or {}
+        chat = msg.get("chat") or {}
+        chat_id = str(chat.get("id") or "")
+        data = cb.get("data") or ""
+        if chat_id and data:
+            await handle_callback(chat_id, cb_id, data)
+        return Response(status_code=status.HTTP_200_OK)
     message = update.get("message") or {}
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id") or "")
@@ -509,14 +577,14 @@ async def telegram_webhook(request: Request) -> Response:
         await handle_cmd_market(chat_id, args)
         return Response(status_code=status.HTTP_200_OK)
 
+    
     if cmd.startswith("/now"):
-        if len(args) == 0:
-            symbols = read_coins()
-            await run_now_for_all(symbols, storage_dir=STORAGE_DIR)
-        else:
-            sym = normalize_symbol(args[0])
-            await run_now_for_symbol(sym, storage_dir=STORAGE_DIR)
+        # Render global card
+        mode = load_mode(STORAGE_DIR)
+        text, kb = render_main_card(mode)
+        await tg_send_message(chat_id, text, reply_markup=kb, as_pre=True)
         return Response(status_code=status.HTTP_200_OK)
+ Response(status_code=status.HTTP_200_OK)
 
     return Response(status_code=status.HTTP_200_OK)
 
