@@ -16,7 +16,13 @@ from metric_runner import (
     collect_symbol_metrics,
     write_json,
 )
-from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
+from market_mode import (
+    compute_overall_mode_from_metrics,
+    append_raw_snapshot,
+    publish_if_due,
+    compute_mode_from_raw,
+    force_publish_now,
+)
 from scheduler import load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults, human_period, human_hours
 
 app = FastAPI()
@@ -39,6 +45,7 @@ COINS_FILE = os.path.join(STORAGE_DIR, "coins.txt")
 SCHED_FILE = os.path.join(STORAGE_DIR, "scheduler.json")
 SCHED_LOG = os.path.join(STORAGE_DIR, "scheduler_log.jsonl")
 
+# ---------------- Telegram utils ----------------
 async def tg_send_message(chat_id: str, text: str) -> None:
     if not BOT_TOKEN or not chat_id:
         return
@@ -64,6 +71,7 @@ async def tg_set_webhook() -> None:
         except Exception:
             pass
 
+# ---------------- Storage helpers ----------------
 def ensure_storage() -> None:
     try:
         os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -168,6 +176,7 @@ def parse_command(text: str):
     args = parts[1:]
     return cmd, args
 
+# ---------------- Scheduler config UI ----------------
 from scheduler import human_period, human_hours, load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults
 
 def sched_print(cfg: dict) -> str:
@@ -257,24 +266,29 @@ async def handle_cmd_scheduler(chat_id: str, args: List[str]) -> None:
                          "/scheduler jitter <sec>1-3\n"
                          "/scheduler on|off")
 
+# ---------------- RAW/Publish utilities ----------------
 def _now_ts() -> int:
     return int(time.time())
 
 def _log_scheduler(status: str, msg: str):
     rec = {"ts": _now_ts(), "status": status, "msg": msg}
+    # stdout (Render)
     try:
         print(json.dumps(rec, ensure_ascii=False), flush=True)
     except Exception:
         pass
+    # file log
     try:
         with open(SCHED_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
+async def _sleep_ms(ms: int):
+    await asyncio.sleep(ms / 1000.0)
+
 async def _run_once_with_cfg(cfg: dict) -> tuple[int, int]:
-    from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
-    from metric_runner import collect_symbol_metrics, write_json, normalize_symbol
+    """Return (processed_count, errors_count)."""
     coins = read_coins()
     delay_ms = int(cfg.get("delay_ms", 2))
     processed = 0
@@ -292,18 +306,23 @@ async def _run_once_with_cfg(cfg: dict) -> tuple[int, int]:
             errors += 1
             _log_scheduler("error", f"{s_norm}:{e}")
         if delay_ms > 0:
-            await asyncio.sleep(delay_ms / 1000.0)
+            await _sleep_ms(delay_ms)
     return processed, errors
 
-_bg_task = None
+# ---------------- Background scheduler ----------------
+_bg_task: asyncio.Task | None = None
 _bg_lock = asyncio.Lock()
 
 async def _scheduler_loop():
+    """Self-starting loop: runs on app startup."""
+    global _bg_task
     _log_scheduler("start", "scheduler loop started")
     while True:
         try:
             cfg = load_scheduler_cfg(SCHED_FILE) or scheduler_defaults()
             now = _now_ts()
+
+            # init missing fields to force first run shortly after boot
             if cfg.get("next_due_utc") is None:
                 cfg["next_due_utc"] = now + 2
             if cfg.get("next_publish_utc") is None:
@@ -320,16 +339,22 @@ async def _scheduler_loop():
                 _log_scheduler("start", "run begin")
                 processed, errors = await _run_once_with_cfg(cfg)
                 _log_scheduler("success", f"run ok; coins={processed}; errors={errors}")
+
+                # reschedule
                 period = int(cfg.get("period_sec", 900))
                 jitter = int(cfg.get("jitter_sec", 2))
                 cfg["last_run_utc"] = now
+                # simple jitter: use modulo of current ts to add [0..jitter]
                 cfg["next_due_utc"] = now + period + (0 if jitter <= 0 else (now % (jitter + 1)))
                 if cfg.get("next_publish_utc") is None:
                     cfg["next_publish_utc"] = now + int(cfg.get("publish_hours", 24)) * 3600
                 save_scheduler_cfg(SCHED_FILE, cfg)
+                # small nap before next check
                 await asyncio.sleep(1)
             else:
-                await asyncio.sleep(max(1, min(next_due - now, 30)))
+                # sleep until next_due (capped so config changes are picked up quickly)
+                sleep_for = max(1, min(next_due - now, 30))
+                await asyncio.sleep(sleep_for)
 
         except asyncio.CancelledError:
             _log_scheduler("stop", "scheduler loop cancelled")
@@ -338,12 +363,16 @@ async def _scheduler_loop():
             _log_scheduler("error", f"loop exception: {e}")
             await asyncio.sleep(3)
 
+# ---------------- FastAPI lifecycle ----------------
 @app.on_event("startup")
 async def on_startup() -> None:
     ensure_storage()
+    # create default scheduler config if missing
     if not os.path.exists(SCHED_FILE):
         save_scheduler_cfg(SCHED_FILE, scheduler_defaults())
+    # set webhook
     await tg_set_webhook()
+    # start background scheduler (single instance)
     global _bg_task
     async with _bg_lock:
         if _bg_task is None or _bg_task.done():
@@ -359,6 +388,7 @@ async def on_shutdown() -> None:
         except asyncio.CancelledError:
             pass
 
+# ---------------- HTTP routes ----------------
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
 async def healthcheck() -> Response:
@@ -403,6 +433,10 @@ async def telegram_webhook(request: Request) -> Response:
         await handle_cmd_scheduler(chat_id, args)
         return Response(status_code=status.HTTP_200_OK)
 
+    if cmd.startswith("/market"):
+        await handle_cmd_market(chat_id, args)
+        return Response(status_code=status.HTTP_200_OK)
+
     if cmd.startswith("/now"):
         if len(args) == 0:
             symbols = read_coins()
@@ -414,6 +448,59 @@ async def telegram_webhook(request: Request) -> Response:
 
     return Response(status_code=status.HTTP_200_OK)
 
+# ---------------- /market commands ----------------
+async def handle_cmd_market(chat_id: str, args: List[str]) -> None:
+    cfg = load_scheduler_cfg(SCHED_FILE)
+
+    if args and args[0].casefold() == "publish":
+        # force publish for all coins
+        coins = read_coins()
+        updated = 0
+        for s in coins:
+            try:
+                force_publish_now(STORAGE_DIR, normalize_symbol(s), cfg)
+                updated += 1
+            except Exception:
+                pass
+        save_scheduler_cfg(SCHED_FILE, cfg)
+        await tg_send_message(chat_id, f"/market publish — обновлено: {updated}")
+        return
+
+    # show modes
+    coins = read_coins()
+    if not coins:
+        await tg_send_message(chat_id, "/market — список монет пуст")
+        return
+
+    lines = ["/market — режимы:"]
+    for s in coins:
+        s_norm = normalize_symbol(s)
+        path = os.path.join(STORAGE_DIR, f"{s_norm}.json")
+        mode = None
+        updated = None
+        tf = None
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                mode = data.get("market_mode")
+                updated = data.get("mode_updated_utc")
+                tf = data.get("signals")
+        except Exception:
+            pass
+
+        if mode is None:
+            # compute preview from RAW without writing
+            preview_mode, last_tf = compute_mode_from_raw(STORAGE_DIR, s_norm, int(cfg.get("publish_hours", 24)))
+            if preview_mode is None:
+                lines.append(f"{s_norm}: N/A")
+            else:
+                lines.append(f"{s_norm}: {preview_mode} (preview)")
+        else:
+            lines.append(f"{s_norm}: {mode}  [{updated}]")
+    await tg_send_message(chat_id, "\n".join(lines))
+
+# Optional manual trigger retained for diagnostics (not required for normal work)
 @app.post("/cron/run", include_in_schema=False)
 async def cron_run(request: Request) -> Response:
     key = request.query_params.get("key") or ""
@@ -431,6 +518,7 @@ async def cron_run(request: Request) -> Response:
     processed, errors = await _run_once_with_cfg(cfg)
     _log_scheduler("success", f"manual run ok; coins={processed}; errors={errors}")
 
+    # reschedule next_due_utc after manual run too
     period = int(cfg.get("period_sec", 900))
     jitter = int(cfg.get("jitter_sec", 2))
     cfg["last_run_utc"] = now

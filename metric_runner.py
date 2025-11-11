@@ -137,6 +137,7 @@ def write_json(storage_dir: str, symbol_lc: str, payload: Dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
 
+# Convenience used by /now
 async def run_now_for_all(symbols: List[str], storage_dir: str) -> None:
     for s in symbols:
         await run_now_for_symbol(s, storage_dir)

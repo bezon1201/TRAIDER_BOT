@@ -89,6 +89,11 @@ def publish_if_due(storage_dir: str, symbol_lc: str, cfg: Dict) -> None:
     next_pub = cfg.get("next_publish_utc")
     if next_pub is None or now_ts < next_pub:
         return
+    _publish(storage_dir, symbol_lc, publish_hours)
+    cfg["last_publish_utc"] = now_ts
+    cfg["next_publish_utc"] = now_ts + publish_hours * 3600
+
+def _publish(storage_dir: str, symbol_lc: str, publish_hours: int) -> None:
     recs = _read_recent_raw(storage_dir, symbol_lc, publish_hours)
     final_mode = _majority_mode(recs)
     path = os.path.join(storage_dir, f"{symbol_lc}.json")
@@ -106,5 +111,17 @@ def publish_if_due(storage_dir: str, symbol_lc: str, cfg: Dict) -> None:
             json.dump(data, f, ensure_ascii=False)
     except Exception:
         pass
+
+# --- new helpers for /market ---
+def compute_mode_from_raw(storage_dir: str, symbol_lc: str, hours: int) -> Tuple[str | None, Dict | None]:
+    recs = _read_recent_raw(storage_dir, symbol_lc, hours)
+    if not recs:
+        return None, None
+    return _majority_mode(recs), (recs[-1].get("tf") if recs else None)
+
+def force_publish_now(storage_dir: str, symbol_lc: str, cfg: Dict) -> None:
+    hours = int(cfg.get("publish_hours", 24))
+    _publish(storage_dir, symbol_lc, hours)
+    now_ts = int(time.time())
     cfg["last_publish_utc"] = now_ts
-    cfg["next_publish_utc"] = now_ts + publish_hours * 3600
+    cfg["next_publish_utc"] = now_ts + hours * 3600
