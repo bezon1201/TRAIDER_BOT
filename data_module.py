@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 from aiogram import Router, types
+from aiogram.types import FSInputFile
 from aiogram.filters import Command, CommandObject
 from utils import mono
 
@@ -53,18 +54,34 @@ async def cmd_data(msg: types.Message, command: CommandObject):
     sub = (parts[0] or "").casefold()
     rest = parts[1] if len(parts) > 1 else ""
 
-    if sub == "export":
+        if sub == "export":
+        # Determine files
         if rest.strip().casefold() == "all":
             files = list_files(d)
         else:
             files = parse_csv_args(rest)
         ok, bad = validate_names(files)
-        text_lines = []
-        if ok:
-            text_lines.append("export: " + ", ".join(ok))
-        if bad:
-            text_lines.append("пропущено: " + ", ".join(bad))
-        return await msg.answer(mono("\n".join(text_lines) if text_lines else "export: (пусто)"))
+
+        # Send each existing file as document with short mono caption
+        sent, skipped = [], []
+        for name in ok:
+            path = d / name
+            try:
+                if path.is_file():
+                    doc = FSInputFile(path)
+                    await msg.answer_document(document=doc, caption=mono(name))
+                    sent.append(name)
+                else:
+                    skipped.append(name)
+            except Exception:
+                skipped.append(name)
+
+        # Only report problems; no extra confirmation if all sent
+        problems = bad + skipped
+        if problems:
+            return await msg.answer(mono("пропущено: " + ", ".join(problems)))
+        return
+
 
     if sub == "delete":
         if rest.strip().casefold() == "all":
