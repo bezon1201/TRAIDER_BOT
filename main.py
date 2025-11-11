@@ -1,9 +1,9 @@
 import os
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from flask import Flask, request
-import asyncio
 from threading import Thread
 from pathlib import Path
 from data import DataStorage
@@ -32,8 +32,9 @@ data_storage = DataStorage(DATA_STORAGE)
 # Flask app for webhook and health check
 app = Flask(__name__)
 
-# Global bot application
+# Global bot application - will be initialized before Flask starts
 bot_application = None
+bot_loop = None
 
 @app.route('/health', methods=['HEAD', 'GET'])
 def health_check():
@@ -45,12 +46,24 @@ def index():
     """Root endpoint"""
     return 'Traider Bot is running!', 200
 
-async def process_telegram_update(request_data):
-    """Process Telegram update"""
+def process_telegram_update_sync(request_data):
+    """Synchronously process Telegram update using bot_loop"""
+    if bot_application is None:
+        logger.error("Bot application not initialized")
+        return False
+
     try:
-        update = Update.de_json(request_data, bot_application.bot)
-        await bot_application.process_update(update)
-        return True
+        async def async_process():
+            update = Update.de_json(request_data, bot_application.bot)
+            await bot_application.process_update(update)
+
+        if bot_loop is not None and not bot_loop.is_closed():
+            future = asyncio.run_coroutine_threadsafe(async_process(), bot_loop)
+            future.result(timeout=5)
+            return True
+        else:
+            logger.error("Bot event loop is not available")
+            return False
     except Exception as e:
         logger.error(f"Error processing update: {e}")
         return False
@@ -59,7 +72,7 @@ async def process_telegram_update(request_data):
 def webhook():
     """Handle incoming webhook updates on /webhook"""
     try:
-        asyncio.run(process_telegram_update(request.get_json(force=True)))
+        process_telegram_update_sync(request.get_json(force=True))
         return 'ok', 200
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
@@ -67,9 +80,9 @@ def webhook():
 
 @app.route('/tg', methods=['POST'])
 def webhook_tg():
-    """Handle incoming webhook updates on /tg (alternative path)"""
+    """Handle incoming webhook updates on /tg (main path)"""
     try:
-        asyncio.run(process_telegram_update(request.get_json(force=True)))
+        process_telegram_update_sync(request.get_json(force=True))
         return 'ok', 200
     except Exception as e:
         logger.error(f"Error in webhook /tg: {e}")
@@ -95,7 +108,8 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files = data_storage.get_files_list()
             if files:
                 files_str = ', '.join(files)
-                message = 'Файлы в хранилище:' + '\n' + files_str
+                message = 'Файлы в хранилище:' + '
+' + files_str
                 await update.message.reply_text(message)
             else:
                 await update.message.reply_text('Хранилище пусто')
@@ -146,7 +160,11 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text('❌ Ошибка при удалении файлов')
 
         else:
-            help_text = 'Неизвестная команда.\nДоступные команды:\n/data - список файлов\n/data export all - отправить все файлы\n/data delete all - удалить все файлы'
+            help_text = 'Неизвестная команда.' + '
+' + 'Доступные команды:' + '
+' + '/data - список файлов' + '
+' + '/data export all - отправить все файлы' + '
+' + '/data delete all - удалить все файлы'
             await update.message.reply_text(help_text)
 
     except Exception as e:
@@ -168,13 +186,11 @@ async def post_init(application: Application):
     except Exception as e:
         logger.error(f"Failed to send startup message: {e}")
 
-def run_flask():
-    """Run Flask app in a separate thread"""
-    app.run(host='0.0.0.0', port=PORT)
+async def initialize_bot():
+    """Initialize bot and set webhook"""
+    global bot_application, bot_loop
 
-async def main():
-    """Main function to start the bot"""
-    global bot_application
+    bot_loop = asyncio.get_event_loop()
 
     # Setup proxy if configured
     proxy_url = HTTPS_PROXY or HTTP_PROXY
@@ -194,23 +210,42 @@ async def main():
     bot_application.add_handler(CommandHandler("start", start))
     bot_application.add_handler(CommandHandler("data", data_command, has_args=False))
 
-    # Set webhook - use /tg path by default
+    # Set webhook
     webhook_path = f"{WEBHOOK_URL}/tg"
     await bot_application.bot.set_webhook(url=webhook_path)
     logger.info(f"Webhook set to: {webhook_path}")
 
-    # Start Flask in separate thread
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"Flask server started on port {PORT}")
-
-    # Start the bot
+    # Initialize bot
     await bot_application.initialize()
-    await bot_application.start()
-    logger.info("Bot started successfully")
+    logger.info("Bot initialized successfully")
 
-    # Keep the application running
-    await asyncio.Event().wait()
+def run_flask():
+    """Run Flask app in a separate thread"""
+    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+
+def run_bot_async():
+    """Run bot initialization in async loop"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(initialize_bot())
+        logger.info("Bot setup complete, Flask server is handling updates")
+        # Keep loop alive
+        loop.run_forever()
+    except Exception as e:
+        logger.error(f"Error in bot async loop: {e}")
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    # Start bot initialization in separate thread
+    bot_thread = Thread(target=run_bot_async, daemon=False)
+    bot_thread.start()
+    logger.info("Bot thread started")
+
+    # Give bot time to initialize
+    import time
+    time.sleep(2)
+
+    # Start Flask in main thread
+    logger.info(f"Starting Flask server on port {PORT}")
+    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
