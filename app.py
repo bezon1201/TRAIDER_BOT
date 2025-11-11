@@ -67,9 +67,6 @@ async def telegram_webhook(request: Request):
 async def head_tg():
     return Response(status_code=200)
 
-@dp.message()
-async def echo_fallback(msg: types.Message):
-    await msg.answer(mono("Принято ✅"))
 
 async def on_startup():
     # ensure storage exists for /data module
