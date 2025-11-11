@@ -45,15 +45,34 @@ def index():
     """Root endpoint"""
     return 'Traider Bot is running!', 200
 
-@app.route('/webhook', methods=['POST'])
-async def webhook():
-    """Handle incoming webhook updates"""
+async def process_telegram_update(request_data):
+    """Process Telegram update"""
     try:
-        update = Update.de_json(request.get_json(force=True), bot_application.bot)
+        update = Update.de_json(request_data, bot_application.bot)
         await bot_application.process_update(update)
-        return 'ok', 200
+        return True
     except Exception as e:
         logger.error(f"Error processing update: {e}")
+        return False
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming webhook updates on /webhook"""
+    try:
+        asyncio.run(process_telegram_update(request.get_json(force=True)))
+        return 'ok', 200
+    except Exception as e:
+        logger.error(f"Error in webhook: {e}")
+        return 'error', 500
+
+@app.route('/tg', methods=['POST'])
+def webhook_tg():
+    """Handle incoming webhook updates on /tg (alternative path)"""
+    try:
+        asyncio.run(process_telegram_update(request.get_json(force=True)))
+        return 'ok', 200
+    except Exception as e:
+        logger.error(f"Error in webhook /tg: {e}")
         return 'error', 500
 
 # Bot command handlers
@@ -77,7 +96,8 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files = data_storage.get_files_list()
             if files:
                 files_str = ', '.join(files)
-                message = f"Файлы в хранилище:\n{files_str}"
+                message = f"Файлы в хранилище:
+{files_str}"
                 await update.message.reply_text(message)
             else:
                 await update.message.reply_text("Хранилище пусто")
@@ -181,8 +201,8 @@ async def main():
     bot_application.add_handler(CommandHandler("start", start))
     bot_application.add_handler(CommandHandler("data", data_command, has_args=False))
 
-    # Set webhook
-    webhook_path = f"{WEBHOOK_URL}/webhook"
+    # Set webhook - use /tg path by default
+    webhook_path = f"{WEBHOOK_URL}/tg"
     await bot_application.bot.set_webhook(url=webhook_path)
     logger.info(f"Webhook set to: {webhook_path}")
 
