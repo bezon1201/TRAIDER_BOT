@@ -48,6 +48,17 @@ proxy = HTTPS_PROXY or HTTP_PROXY
 session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
 
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML, session=session)
+
+# --- Utilities ---
+def html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;"))
+
+def mono(text: str) -> str:
+    """Wrap text in monospaced block for Telegram HTML."""
+    return f"<pre>{html_escape(text)}</pre>"
+
 dp = Dispatcher()
 
 # ---------- FastAPI app ----------
@@ -80,9 +91,8 @@ async def head_tg():
 
 @dp.message()
 async def echo_fallback(msg: types.Message):
-    # Minimal placeholder: just acknowledge any text message
-    # You will extend logic later.
-    await msg.answer("Принято ✅")
+    # Always reply in active chat, monospaced style
+    await msg.answer(mono("Принято ✅"))
 
 # ---------- Startup tasks ----------
 
@@ -98,7 +108,7 @@ async def on_startup():
     # Notify admin
     if ADMIN_CHAT_ID:
         try:
-            await bot.send_message(int(ADMIN_CHAT_ID), "Бот запущен")
+            await bot.send_message(int(ADMIN_CHAT_ID), mono("Бот запущен"))
             logging.info("Startup message sent to admin chat %s", ADMIN_CHAT_ID)
         except Exception as e:
             logging.exception("Failed to send admin startup message: %s", e)
