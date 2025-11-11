@@ -18,38 +18,24 @@ def ensure_storage_dir(base: str | None = None) -> Path:
     return d
 
 def fmt_dir_listing(d: Path) -> str:
-    try:
-        names = sorted(os.listdir(d))
-    except Exception:
-        names = []
-    rows = []
-    total = 0
-    for name in names:
-        p = d / name
-        if p.is_file():
-            try:
-                sz = p.stat().st_size
-                total += sz
-                size_s = f"{sz} B"
-            except Exception:
-                size_s = "?"
-        elif p.is_dir():
-            size_s = "<DIR>"
-        else:
-            size_s = "?"
-        rows.append((name, size_s))
-    if not rows:
-        body = "(пусто)"
-    else:
-        header = "Файл                      Размер"
-        sep = "-------------------------  --------"
-        lines = [header, sep]
-        for name, size_s in rows:
-            lines.append(f"{name:<25}  {size_s:>8}")
-        lines.append(sep)
-        lines.append(f"Всего: {total} B")
-        body = "\n".join(lines)
-    return body
+"
+    "    try:
+"
+    "        names = sorted([n for n in os.listdir(d) if (d/ n).is_file()])
+"
+    "    except Exception:
+"
+    "        names = []
+"
+    "    if not names:
+"
+    "        return "(пусто)"
+"
+    "    return ", ".join(names)
+
+def parse_csv_args(raw: str):
+    parts = [p.strip() for p in (raw.split(',') if raw else [])]
+    return [p for p in parts if p]
 
 def validate_names(names):
     ok, bad = [], []
@@ -64,7 +50,7 @@ def validate_names(names):
 async def cmd_data(msg: types.Message, command: CommandObject):
     # command.args is a raw string after /data
     raw = (command.args or "").strip()
-    args = [a for a in raw.split() if a]
+    args = parse_csv_args(raw)
     d = ensure_storage_dir()
 
     if not args:
@@ -74,19 +60,18 @@ async def cmd_data(msg: types.Message, command: CommandObject):
     sub = (args[0] or "").casefold()
 
     if sub == "export":
-        files = args[1:]
+        files = args
         ok, bad = validate_names(files)
-        resp = ["export: заявки приняты"]
+        lines = []
         if ok:
-            resp.append("файлы: " + ", ".join(ok))
+            lines.append("export: " + ", ".join(ok))
         if bad:
-            resp.append("пропущено (некорректные имена): " + ", ".join(bad))
-        resp.append("")
-        resp.append(fmt_dir_listing(d))
-        return await msg.answer(mono("\n".join(resp)))
+            lines.append("пропущено: " + ", ".join(bad))
+        return await msg.answer(mono("
+".join(lines) if lines else mono("export: (пусто)"))))
 
     if sub == "delete":
-        files = args[1:]
+        files = args
         ok, bad = validate_names(files)
         deleted, skipped = [], []
         for name in ok:
@@ -99,15 +84,13 @@ async def cmd_data(msg: types.Message, command: CommandObject):
                     skipped.append(name)
             except Exception:
                 skipped.append(name)
-        resp = [f"delete: удалено {len(deleted)}, пропущено {len(skipped)}"]
+        lines = []
         if deleted:
-            resp.append("удалено: " + ", ".join(deleted))
+            lines.append("удалено: " + ", ".join(deleted))
         if skipped or bad:
-            skipped_all = skipped + ([f"{b}*bad*" for b in bad] if bad else [])
-            resp.append("пропущено: " + ", ".join(skipped_all) if skipped_all else "пропущено: —")
-        resp.append("")
-        resp.append(fmt_dir_listing(d))
-        return await msg.answer(mono("\n".join(resp)))
+            lines.append("пропущено: " + ", ".join(skipped + bad))
+        return await msg.answer(mono("
+".join(lines) if lines else "удалено: —")))
 
     help_text = [
         "Использование:",
