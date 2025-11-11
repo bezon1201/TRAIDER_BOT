@@ -45,7 +45,12 @@ logging.basicConfig(
 # ---------- Bot session with optional proxy ----------
 
 proxy = HTTPS_PROXY or HTTP_PROXY
-session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
+# Safe proxy session init (falls back if aiohttp-socks not installed or proxy invalid)
+try:
+    session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
+except Exception as e:
+    logging.warning("Proxy session failed (%s). Falling back to direct session.", e)
+    session = AiohttpSession()
 
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML, session=session)
 
