@@ -60,7 +60,7 @@ async def _startup():
     os.makedirs(STORAGE_DIR, exist_ok=True)
     try:
         if ADMIN_CHAT_ID:
-            await bot.send_message(ADMIN_CHAT_ID, "```
+            await bot.send_message(ADMIN_CHAT_ID, "```\n
 Бот запущен
 ```", parse_mode=None)
     except Exception:
