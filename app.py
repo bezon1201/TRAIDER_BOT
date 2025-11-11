@@ -5,11 +5,13 @@ import httpx
 from fastapi import FastAPI, Request, Response, status
 
 from data import handle_cmd_data
+from metric_runner import run_now_for_all, run_now_for_symbol, normalize_symbol
 
 app = FastAPI()
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
+# -------- env helpers --------
 def get_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
     if value is not None:
@@ -17,13 +19,15 @@ def get_env(name: str, default: str | None = None) -> str | None:
     return value or default
 
 BOT_TOKEN = get_env("TRAIDER_BOT_TOKEN")
-ADMIN_CHAT_ID = get_env("TRAIDER_ADMIN_CAHT_ID")  # не используем для /coins
+ADMIN_CHAT_ID = get_env("TRAIDER_ADMIN_CAHT_ID")  # не используется для /coins и /data
 ADMIN_KEY = get_env("ADMIN_KEY")
 WEBHOOK_BASE = get_env("WEBHOOK_BASE")
 STORAGE_DIR = get_env("STORAGE_DIR", "/mnt/data")
 
 COINS_FILE = os.path.join(STORAGE_DIR, "coins.txt")
 
+
+# -------- telegram io --------
 async def tg_send_message(chat_id: str, text: str) -> None:
     if not BOT_TOKEN or not chat_id:
         return
@@ -35,6 +39,7 @@ async def tg_send_message(chat_id: str, text: str) -> None:
             await client.post(url, json=payload)
         except Exception:
             pass
+
 
 async def tg_set_webhook() -> None:
     if not BOT_TOKEN or not WEBHOOK_BASE:
@@ -49,11 +54,14 @@ async def tg_set_webhook() -> None:
         except Exception:
             pass
 
+
+# -------- storage utils --------
 def ensure_storage() -> None:
     try:
         os.makedirs(STORAGE_DIR, exist_ok=True)
     except Exception:
         pass
+
 
 def read_coins() -> List[str]:
     if not os.path.exists(COINS_FILE):
@@ -66,6 +74,7 @@ def read_coins() -> List[str]:
     except Exception:
         return []
 
+
 def write_coins(symbols: List[str]) -> None:
     ensure_storage()
     uniq = sorted(set([s.strip() for s in symbols if s.strip()]))
@@ -73,15 +82,18 @@ def write_coins(symbols: List[str]) -> None:
     with open(COINS_FILE, "w", encoding="utf-8") as f:
         f.write(text)
 
-def normalize_symbol(token: str) -> str:
-    t = "".join(ch for ch in token.lower() if ch.isalnum())
+
+# -------- normalization for /coins --------
+def normalize_symbol_local(token: str) -> str:
+    t = "".join(ch for ch in (token or "").lower() if ch.isalnum())
     return t
+
 
 def filter_symbols(raw: List[str]) -> Tuple[List[str], List[str]]:
     ok: List[str] = []
     bad: List[str] = []
     for tok in raw:
-        t = normalize_symbol(tok)
+        t = normalize_symbol_local(tok)
         if not t:
             continue
         if not (t.endswith("usdt") or t.endswith("usdc")):
@@ -96,6 +108,8 @@ def filter_symbols(raw: List[str]) -> Tuple[List[str], List[str]]:
             ordered_ok.append(s)
     return ordered_ok, bad
 
+
+# -------- /coins handlers --------
 def format_coins_list(coins: List[str], title: str) -> str:
     if not coins:
         return f"{title}\n(список пуст)"
@@ -103,10 +117,12 @@ def format_coins_list(coins: List[str], title: str) -> str:
     lines.extend(coins)
     return "\n".join(lines)
 
+
 async def handle_cmd_coins_show(chat_id: str) -> None:
     coins = read_coins()
     text = format_coins_list(coins, "/coins — текущий список")
     await tg_send_message(chat_id, text)
+
 
 async def handle_cmd_coins_add(chat_id: str, args: List[str]) -> None:
     if not args:
@@ -123,6 +139,7 @@ async def handle_cmd_coins_add(chat_id: str, args: List[str]) -> None:
     if bad:
         msg_lines.append(f"пропущено: {', '.join(bad)}")
     await tg_send_message(chat_id, "\n\n".join(msg_lines))
+
 
 async def handle_cmd_coins_rm(chat_id: str, args: List[str]) -> None:
     if not args:
@@ -142,7 +159,9 @@ async def handle_cmd_coins_rm(chat_id: str, args: List[str]) -> None:
         msg_lines.append(f"пропущено: {', '.join(bad)}")
     await tg_send_message(chat_id, "\n\n".join(msg_lines))
 
-def parse_command(text: str) -> Tuple[str, List[str]]:
+
+# -------- helpers --------
+def parse_command(text: str):
     if not text:
         return "", []
     t = text.strip()
@@ -153,6 +172,8 @@ def parse_command(text: str) -> Tuple[str, List[str]]:
     args = parts[1:]
     return cmd, args
 
+
+# -------- app lifecycle --------
 @app.on_event("startup")
 async def on_startup() -> None:
     ensure_storage()
@@ -163,11 +184,14 @@ async def on_startup() -> None:
             text += f" Admin key: {ADMIN_KEY}"
         await tg_send_message(ADMIN_CHAT_ID, text)
 
+
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
 async def healthcheck() -> Response:
     return Response(status_code=status.HTTP_200_OK, content="ok")
 
+
+# -------- webhook --------
 @app.post("/webhook", include_in_schema=False)
 async def telegram_webhook(request: Request) -> Response:
     try:
@@ -185,6 +209,7 @@ async def telegram_webhook(request: Request) -> Response:
 
     cmd, args = parse_command(text)
 
+    # /coins
     if cmd.startswith("/coins"):
         if len(args) == 0:
             await handle_cmd_coins_show(chat_id)
@@ -199,8 +224,19 @@ async def telegram_webhook(request: Request) -> Response:
                 await tg_send_message(chat_id, "Использование:\n/coins — показать\n/coins +add <symbols...>\n/coins +rm <symbols...>")
         return Response(status_code=status.HTTP_200_OK)
 
+    # /data
     if cmd.startswith("/data"):
         await handle_cmd_data(chat_id, args)
+        return Response(status_code=status.HTTP_200_OK)
+
+    # /now — тихо
+    if cmd.startswith("/now"):
+        if len(args) == 0:
+            symbols = read_coins()
+            await run_now_for_all(symbols, storage_dir=STORAGE_DIR)
+        else:
+            sym = normalize_symbol(args[0])
+            await run_now_for_symbol(sym, storage_dir=STORAGE_DIR)
         return Response(status_code=status.HTTP_200_OK)
 
     return Response(status_code=status.HTTP_200_OK)
