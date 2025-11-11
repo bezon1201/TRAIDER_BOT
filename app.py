@@ -1,9 +1,6 @@
 
-import os
-import asyncio
-import logging
+import os, asyncio, logging
 import logging_setup
-
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -19,7 +16,6 @@ PROXY = os.getenv("PROXY_URL", "")
 app = FastAPI()
 logger = logging_setup.setup_logging()
 
-# health/uptime
 @app.head("/webhook")
 async def head_webhook():
     logging.getLogger("app").info("component=http action=ping method=HEAD path=/webhook status=200")
@@ -29,22 +25,20 @@ async def head_webhook():
 async def root():
     return {"ok": True}
 
-# Telegram bot
 session = AiohttpSession(proxy=PROXY) if PROXY else AiohttpSession()
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), session=session)
 dp = Dispatcher()
 
-# routers
 import data_module
 import metrics_module
 import market_module
 import scheduler_module
+
 dp.include_router(data_module.router)
 dp.include_router(metrics_module.router)
 dp.include_router(market_module.router)
 dp.include_router(scheduler_module.router)
 
-# webhook handler
 @app.post("/webhook")
 async def webhook(request: Request):
     update = types.Update.model_validate(await request.json())
@@ -60,12 +54,10 @@ async def _startup():
     os.makedirs(STORAGE_DIR, exist_ok=True)
     try:
         if ADMIN_CHAT_ID:
-            await bot.send_message(ADMIN_CHAT_ID, "```
-Бот запущен
-```", parse_mode=None)
+            text = "```\nБот запущен\n```"
+            await bot.send_message(ADMIN_CHAT_ID, text, parse_mode=None)
     except Exception:
         logger.warning("component=bot action=notify_admin_fail", exc_info=True)
-    # start scheduler
     global _scheduler_task
     _scheduler_task = asyncio.create_task(scheduler_module.run_scheduler_loop(_scheduler_stop_event))
 

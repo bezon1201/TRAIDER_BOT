@@ -1,3 +1,4 @@
+
 import os, re, asyncio, json, random
 from pathlib import Path
 from typing import List
@@ -24,19 +25,13 @@ def read_coins() -> List[str]:
 def parse_csv(raw: str) -> List[str]:
     return [x.strip().lower() for x in (raw.split(",") if raw else []) if x.strip()]
 
-# === former metric_runner.run_now_for_symbol ===
 async def run_now_for_symbol(symbol: str, storage: str | None = None):
     d = Path(storage) if storage else storage_dir()
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{symbol}.json"
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
-    base = {
-        "symbol": symbol,
-        "tf": {},
-        "updated_utc": now.isoformat()
-    }
-    # toy metrics for 6h/12h
+    base = {"symbol": symbol, "tf": {}, "updated_utc": now.isoformat()}
     for tf in ("6h", "12h"):
         sma30 = 100 + random.uniform(-1, 1)
         sma90 = 100 + random.uniform(-1, 1)
@@ -59,10 +54,7 @@ async def cmd_coins(msg: types.Message, command: CommandObject):
     f = coins_file()
     if not args:
         return await msg.answer(mono(", ".join(read_coins()) or "(пусто)"))
-    syms = []
-    for s in parse_csv(args):
-        if SAFE.fullmatch(s):
-            syms.append(s)
+    syms = [s for s in parse_csv(args) if SAFE.fullmatch(s)]
     f.write_text("\n".join(syms) + "\n", encoding="utf-8")
     return await msg.answer(mono(", ".join(syms) or "(пусто)"))
 
@@ -71,13 +63,10 @@ async def cmd_now(msg: types.Message, command: CommandObject):
     args = (command.args or "").strip() if command else ""
     syms = read_coins() if not args else parse_csv(args)
     syms = [s for s in syms if SAFE.fullmatch(s)]
-    if not syms:
-        return  # тихо
+    if not syms: return
     d = storage_dir()
     async def run(s: str):
-        try:
-            await run_now_for_symbol(s, str(d))
-        except Exception:
-            pass
+        try: await run_now_for_symbol(s, str(d))
+        except Exception: pass
     await asyncio.gather(*(run(s) for s in syms))
-    return  # тихо
+    return

@@ -1,5 +1,2 @@
-
 def mono(t: str) -> str:
-    return f"```
-{t}
-```"
+    return f"```\n{t}\n```"

@@ -1,7 +1,4 @@
 
-# (full implementation moved to separate file earlier in the sequence)
-# For this fresh build we import exact functionality by redefining below.
-
 import os, asyncio, json, logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -121,13 +118,13 @@ async def tick_once() -> None:
             append_raw(str(storage_dir()), sym, overall, tf_signals)
             log.info(f"component=market_mode action=raw_append symbol={sym} overall={overall}")
             if publish_due(now, cfg):
-                await publish_symbol(sym, int(cfg.get("publish_hours") or 12))
+                await publish_symbol(sym, int(cfg.get('publish_hours') or 12))
         except Exception:
             log.warning(f"component=symbol action=fail symbol={sym}", exc_info=True)
     cfg["last_tick_utc"] = now.isoformat()
     if publish_due(now, cfg):
         cfg["last_publish_utc"] = now.isoformat()
-        cfg["next_publish_utc"] = (now + timedelta(hours=int(cfg.get("publish_hours") or 12))).isoformat()
+        cfg["next_publish_utc"] = (now + timedelta(hours=int(cfg.get('publish_hours') or 12))).isoformat()
     period = int(cfg.get("period_sec") or 300)
     jitter = int(cfg.get("jitter_sec") or 0)
     sleep_sec = jitter_sleep(period, jitter)
@@ -160,23 +157,24 @@ async def run_scheduler_loop(stop_event: asyncio.Event) -> None:
 
 def human_cfg() -> str:
     cfg = load_cfg()
-    parts = []
-    parts.append(f"enabled: {cfg.get('enabled')}")
-    parts.append(f"period_sec: {cfg.get('period_sec')}")
-    parts.append(f"jitter_sec: {cfg.get('jitter_sec')}")
-    parts.append(f"publish_hours: {cfg.get('publish_hours')}")
-    parts.append(f"last_tick_utc: {cfg.get('last_tick_utc')}")
-    parts.append(f"next_due_utc: {cfg.get('next_due_utc')}")
-    parts.append(f"last_publish_utc: {cfg.get('last_publish_utc')}")
-    parts.append(f"next_publish_utc: {cfg.get('next_publish_utc')}")
+    parts = [
+        f"enabled: {cfg.get('enabled')}",
+        f"period_sec: {cfg.get('period_sec')}",
+        f"jitter_sec: {cfg.get('jitter_sec')}",
+        f"publish_hours: {cfg.get('publish_hours')}",
+        f"last_tick_utc: {cfg.get('last_tick_utc')}",
+        f"next_due_utc: {cfg.get('next_due_utc')}",
+        f"last_publish_utc: {cfg.get('last_publish_utc')}",
+        f"next_publish_utc: {cfg.get('next_publish_utc')}",
+    ]
     return "\n".join(parts)
+
+from utils import mono
 
 @router.message(Command("scheduler"))
 async def cmd_scheduler(msg: types.Message, command: CommandObject):
-    from utils import mono
     args = ((command.args or "").strip() if command else "")
-    if not args:
-        return await msg.answer(mono(human_cfg()))
+    if not args: return await msg.answer(mono(human_cfg()))
     parts = args.split()
     cfg = load_cfg()
     try:
@@ -190,11 +188,12 @@ async def cmd_scheduler(msg: types.Message, command: CommandObject):
             cfg["publish_hours"] = max(1, int(parts[1]))
         else:
             return
-        sleep_sec = jitter_sleep(int(cfg.get("period_sec") or 300), int(cfg.get("jitter_sec") or 0))
-        cfg["next_due_utc"] = (utcnow() + timedelta(seconds=sleep_sec)).isoformat()
+        period = int(cfg.get("period_sec") or 300)
+        jitter = int(cfg.get("jitter_sec") or 0)
+        import random
+        sleep_sec = max(1.0, period + random.uniform(-jitter, jitter) if jitter>0 else period)
+        cfg["next_due_utc"] = (datetime.now(timezone.utc) + timedelta(seconds=sleep_sec)).isoformat()
         save_cfg(cfg)
-        log.info("component=cmd action=scheduler_set args=%s", " ".join(parts))
         return await msg.answer(mono(human_cfg()))
     except Exception:
-        log.warning("component=cmd action=scheduler_set_fail args=%s", " ".join(parts), exc_info=True)
         return

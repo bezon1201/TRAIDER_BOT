@@ -1,5 +1,5 @@
 
-import os, re, io, asyncio
+import os, re
 from pathlib import Path
 from typing import List
 from aiogram import Router, types
@@ -28,7 +28,6 @@ def parse_csv(raw: str) -> List[str]:
 async def cmd_data(msg: types.Message, command: CommandObject):
     args = (command.args or "").strip() if command else ""
     if not args:
-        # show list only filenames
         names = list_files(storage_dir())
         return await msg.answer(mono(", ".join(names) if names else "(пусто)"))
     parts = args.split(None, 1)
@@ -36,20 +35,11 @@ async def cmd_data(msg: types.Message, command: CommandObject):
     rest = parts[1] if len(parts) > 1 else ""
 
     if sub == "export":
-        items = []
-        if rest.lower() == "all":
-            items = list_files(storage_dir())
-        else:
-            items = parse_csv(rest)
-        # just echo filenames to copy
+        items = list_files(storage_dir()) if rest.lower() == "all" else parse_csv(rest)
         return await msg.answer(mono(", ".join(items) if items else "(пусто)"))
 
     if sub == "delete":
-        items = []
-        if rest.lower() == "all":
-            items = list_files(storage_dir())
-        else:
-            items = parse_csv(rest)
+        items = list_files(storage_dir()) if rest.lower() == "all" else parse_csv(rest)
         ok = []
         d = storage_dir()
         for name in items:
