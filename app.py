@@ -22,6 +22,7 @@ from market_mode import (
     publish_if_due,
     compute_mode_from_raw,
     force_publish_now,
+    trim_raw_for_symbol,
 )
 from scheduler import load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults, human_period, human_hours
 
@@ -388,6 +389,77 @@ async def on_shutdown() -> None:
         except asyncio.CancelledError:
             pass
 
+# ---------------- /market commands ----------------
+async def handle_cmd_market(chat_id: str, args: List[str]) -> None:
+    cfg = load_scheduler_cfg(SCHED_FILE)
+
+    # /market publish
+    if args and args[0].casefold() == "publish":
+        coins = read_coins()
+        updated = 0
+        for s in coins:
+            try:
+                force_publish_now(STORAGE_DIR, normalize_symbol(s), cfg)
+                updated += 1
+            except Exception:
+                pass
+        save_scheduler_cfg(SCHED_FILE, cfg)
+        await tg_send_message(chat_id, f"/market publish — обновлено: {updated}")
+        return
+
+    # /market raw trim <H>
+    if len(args) >= 3 and args[0].casefold() == "raw" and args[1].casefold() == "trim":
+        try:
+            hours = int(args[2])
+        except ValueError:
+            await tg_send_message(chat_id, "/market raw trim <H> — H должно быть целым числом часов")
+            return
+        if hours < 1:
+            await tg_send_message(chat_id, "/market raw trim <H> — минимум 1 час")
+            return
+        coins = read_coins()
+        total_trimmed = 0
+        total_after = 0
+        for s in coins:
+            try:
+                trimmed, after_bytes = trim_raw_for_symbol(STORAGE_DIR, normalize_symbol(s), hours, max_bytes=10*1024*1024)
+                total_trimmed += trimmed
+                total_after += after_bytes
+            except Exception:
+                pass
+        await tg_send_message(chat_id, f"/market raw trim {hours} — удалено строк: {total_trimmed}; итоговый размер: ~{total_after} байт суммарно")
+        return
+
+    # default: show modes
+    coins = read_coins()
+    if not coins:
+        await tg_send_message(chat_id, "/market — список монет пуст")
+        return
+
+    lines = ["/market — режимы:"]
+    for s in coins:
+        s_norm = normalize_symbol(s)
+        path = os.path.join(STORAGE_DIR, f"{s_norm}.json")
+        mode = None
+        updated = None
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                mode = data.get("market_mode")
+                updated = data.get("mode_updated_utc")
+        except Exception:
+            pass
+        if mode is None:
+            preview_mode, _ = compute_mode_from_raw(STORAGE_DIR, s_norm, int(cfg.get("publish_hours", 24)))
+            if preview_mode is None:
+                lines.append(f"{s_norm}: N/A")
+            else:
+                lines.append(f"{s_norm}: {preview_mode} (preview)")
+        else:
+            lines.append(f"{s_norm}: {mode}  [{updated}]")
+    await tg_send_message(chat_id, "\n".join(lines))
+
 # ---------------- HTTP routes ----------------
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
@@ -448,59 +520,7 @@ async def telegram_webhook(request: Request) -> Response:
 
     return Response(status_code=status.HTTP_200_OK)
 
-# ---------------- /market commands ----------------
-async def handle_cmd_market(chat_id: str, args: List[str]) -> None:
-    cfg = load_scheduler_cfg(SCHED_FILE)
-
-    if args and args[0].casefold() == "publish":
-        # force publish for all coins
-        coins = read_coins()
-        updated = 0
-        for s in coins:
-            try:
-                force_publish_now(STORAGE_DIR, normalize_symbol(s), cfg)
-                updated += 1
-            except Exception:
-                pass
-        save_scheduler_cfg(SCHED_FILE, cfg)
-        await tg_send_message(chat_id, f"/market publish — обновлено: {updated}")
-        return
-
-    # show modes
-    coins = read_coins()
-    if not coins:
-        await tg_send_message(chat_id, "/market — список монет пуст")
-        return
-
-    lines = ["/market — режимы:"]
-    for s in coins:
-        s_norm = normalize_symbol(s)
-        path = os.path.join(STORAGE_DIR, f"{s_norm}.json")
-        mode = None
-        updated = None
-        tf = None
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                mode = data.get("market_mode")
-                updated = data.get("mode_updated_utc")
-                tf = data.get("signals")
-        except Exception:
-            pass
-
-        if mode is None:
-            # compute preview from RAW without writing
-            preview_mode, last_tf = compute_mode_from_raw(STORAGE_DIR, s_norm, int(cfg.get("publish_hours", 24)))
-            if preview_mode is None:
-                lines.append(f"{s_norm}: N/A")
-            else:
-                lines.append(f"{s_norm}: {preview_mode} (preview)")
-        else:
-            lines.append(f"{s_norm}: {mode}  [{updated}]")
-    await tg_send_message(chat_id, "\n".join(lines))
-
-# Optional manual trigger retained for diagnostics (not required for normal work)
+# Optional manual trigger retained for diagnostics
 @app.post("/cron/run", include_in_schema=False)
 async def cron_run(request: Request) -> Response:
     key = request.query_params.get("key") or ""
@@ -508,7 +528,7 @@ async def cron_run(request: Request) -> Response:
         return Response(status_code=status.HTTP_403_FORBIDDEN)
 
     cfg = load_scheduler_cfg(SCHED_FILE) or scheduler_defaults()
-    now = _now_ts()
+    now = int(time.time())
 
     if not cfg.get("enabled", True):
         _log_scheduler("stop", "disabled (manual)")
@@ -518,7 +538,6 @@ async def cron_run(request: Request) -> Response:
     processed, errors = await _run_once_with_cfg(cfg)
     _log_scheduler("success", f"manual run ok; coins={processed}; errors={errors}")
 
-    # reschedule next_due_utc after manual run too
     period = int(cfg.get("period_sec", 900))
     jitter = int(cfg.get("jitter_sec", 2))
     cfg["last_run_utc"] = now

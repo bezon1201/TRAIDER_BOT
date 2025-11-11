@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 H_K = 0.6
 S_K = 0.1
+RAW_MAX_BYTES = 10 * 1024 * 1024  # 10 MB cap
 
 def _now_ts() -> int:
     return int(time.time())
@@ -47,11 +48,45 @@ def compute_overall_mode_from_metrics(metrics: Dict) -> Tuple[str, Dict[str,str]
 def _raw_log_path(storage_dir: str, symbol_lc: str) -> str:
     return os.path.join(storage_dir, f"mode_raw_{symbol_lc}.jsonl")
 
+def _enforce_size_limit(path: str, max_bytes: int = RAW_MAX_BYTES) -> int:
+    """If file exceeds max_bytes, trim oldest lines until under cap.
+       Returns resulting file size in bytes (or 0 if file missing)."""
+    if not os.path.exists(path):
+        return 0
+    try:
+        sz = os.path.getsize(path)
+        if sz <= max_bytes:
+            return sz
+        # Trim by reading and keeping the newest lines that fit into cap (with a buffer)
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        # Keep last N lines until size <= cap
+        kept = []
+        total = 0
+        for line in reversed(lines):
+            bl = len(line.encode("utf-8", "ignore"))
+            if total + bl > max_bytes:
+                break
+            kept.append(line)
+            total += bl
+        kept.reverse()
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+        return os.path.getsize(path)
+    except Exception:
+        return os.path.getsize(path) if os.path.exists(path) else 0
+
 def append_raw_snapshot(storage_dir: str, symbol_lc: str, overall_raw: str, tf_signals: Dict[str,str]) -> None:
     os.makedirs(storage_dir, exist_ok=True)
+    path = _raw_log_path(storage_dir, symbol_lc)
     rec = {"ts": _now_ts(), "overall_raw": overall_raw, "tf": tf_signals}
-    with open(_raw_log_path(storage_dir, symbol_lc), "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\\n")
+    except Exception:
+        return
+    # enforce cap after append
+    _enforce_size_limit(path, RAW_MAX_BYTES)
 
 def _read_recent_raw(storage_dir: str, symbol_lc: str, hours: int) -> List[Dict]:
     path = _raw_log_path(storage_dir, symbol_lc)
@@ -96,7 +131,7 @@ def publish_if_due(storage_dir: str, symbol_lc: str, cfg: Dict) -> None:
 def _publish(storage_dir: str, symbol_lc: str, publish_hours: int) -> None:
     recs = _read_recent_raw(storage_dir, symbol_lc, publish_hours)
     final_mode = _majority_mode(recs)
-    path = os.path.join(storage_dir, f"{symbol_lc}.json")
+    path = os.path.join(storage_dir, f"{s_symbol(symbol_lc)}.json")
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -112,7 +147,10 @@ def _publish(storage_dir: str, symbol_lc: str, publish_hours: int) -> None:
     except Exception:
         pass
 
-# --- new helpers for /market ---
+def s_symbol(s: str) -> str:
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+# --- helpers for /market ---
 def compute_mode_from_raw(storage_dir: str, symbol_lc: str, hours: int) -> Tuple[str | None, Dict | None]:
     recs = _read_recent_raw(storage_dir, symbol_lc, hours)
     if not recs:
@@ -125,3 +163,32 @@ def force_publish_now(storage_dir: str, symbol_lc: str, cfg: Dict) -> None:
     now_ts = int(time.time())
     cfg["last_publish_utc"] = now_ts
     cfg["next_publish_utc"] = now_ts + hours * 3600
+
+def trim_raw_for_symbol(storage_dir: str, symbol_lc: str, hours: int, max_bytes: int = RAW_MAX_BYTES) -> Tuple[int, int]:
+    """Trim raw file by time window and then enforce max size.
+       Returns (trimmed_lines, final_size_bytes)."""
+    path = _raw_log_path(storage_dir, symbol_lc)
+    if not os.path.exists(path):
+        return 0, 0
+    since = _now_ts() - hours * 3600
+    trimmed = 0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        kept = []
+        for line in lines:
+            try:
+                rec = json.loads(line)
+                if rec.get("ts", 0) >= since:
+                    kept.append(line)
+                else:
+                    trimmed += 1
+            except Exception:
+                # drop broken lines
+                trimmed += 1
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+    except Exception:
+        pass
+    final_size = _enforce_size_limit(path, max_bytes)
+    return trimmed, final_size
