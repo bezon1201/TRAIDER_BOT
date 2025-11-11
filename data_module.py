@@ -2,8 +2,8 @@ import os
 import re
 from pathlib import Path
 from aiogram import Router, types
-from aiogram.types import FSInputFile
 from aiogram.filters import Command, CommandObject
+from aiogram.types import FSInputFile
 from utils import mono
 
 router = Router()
@@ -33,7 +33,7 @@ def parse_csv_args(raw: str) -> list[str]:
     parts = [p.strip() for p in (raw.split(",") if raw else [])]
     return [p for p in parts if p]
 
-def validate_names(names):
+def validate_names(names: list[str]) -> tuple[list[str], list[str]]:
     ok, bad = [], []
     for n in names:
         if re.match(SAFE_NAME_RE, n or ""):
@@ -47,48 +47,42 @@ async def cmd_data(msg: types.Message, command: CommandObject):
     raw = (command.args or "").strip()
     d = ensure_storage_dir()
 
+    # /data -> just list
     if not raw:
         return await msg.answer(mono(fmt_dir_listing(d)))
 
+    # first token is subcommand, rest is file list
     parts = raw.split(maxsplit=1)
     sub = (parts[0] or "").casefold()
     rest = parts[1] if len(parts) > 1 else ""
 
-        if sub == "export":
-        # Determine files
-        if rest.strip().casefold() == "all":
-            files = list_files(d)
-        else:
-            files = parse_csv_args(rest)
+    if sub == "export":
+        # 'all' or explicit list
+        files = list_files(d) if rest.strip().casefold() == "all" else parse_csv_args(rest)
         ok, bad = validate_names(files)
 
-        # Send each existing file as document with short mono caption
         sent, skipped = [], []
         for name in ok:
             path = d / name
             try:
                 if path.is_file():
-                    doc = FSInputFile(path)
-                    await msg.answer_document(document=doc, caption=mono(name))
+                    await msg.answer_document(FSInputFile(path), caption=mono(name))
                     sent.append(name)
                 else:
                     skipped.append(name)
             except Exception:
                 skipped.append(name)
 
-        # Only report problems; no extra confirmation if all sent
+        # Only report problems (invalid or missing)
         problems = bad + skipped
         if problems:
-            return await msg.answer(mono("пропущено: " + ", ".join(problems)))
+            await msg.answer(mono("пропущено: " + ", ".join(problems)))
         return
 
-
     if sub == "delete":
-        if rest.strip().casefold() == "all":
-            files = list_files(d)
-        else:
-            files = parse_csv_args(rest)
+        files = list_files(d) if rest.strip().casefold() == "all" else parse_csv_args(rest)
         ok, bad = validate_names(files)
+
         deleted, skipped = [], []
         for name in ok:
             p = d / name
@@ -100,19 +94,22 @@ async def cmd_data(msg: types.Message, command: CommandObject):
                     skipped.append(name)
             except Exception:
                 skipped.append(name)
+
         lines = []
         if deleted:
             lines.append("удалено: " + ", ".join(deleted))
         if skipped or bad:
             lines.append("пропущено: " + ", ".join(skipped + bad))
-        return await msg.answer(mono("\n".join(lines) if lines else "удалено: —"))
+        text = "\n".join(lines) if lines else "удалено: —"
+        return await msg.answer(mono(text))
 
+    # help
     help_text = [
         "Использование:",
         "/data — показать список файлов (через запятую)",
-        "/data export all — заявка на экспорт всех файлов",
-        "/data export file1.ext, file2.ext — заявка на экспорт конкретных",
+        "/data export all — отправить все файлы",
+        "/data export file1.ext, file2.ext — отправить выбранные",
         "/data delete all — удалить все файлы",
-        "/data delete file1.ext, file2.ext — удалить конкретные файлы",
+        "/data delete file1.ext, file2.ext — удалить выбранные",
     ]
     return await msg.answer(mono("\n".join(help_text)))
