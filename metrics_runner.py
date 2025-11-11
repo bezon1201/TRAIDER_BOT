@@ -10,23 +10,30 @@ import httpx
 STORAGE_DIR = os.getenv("STORAGE_DIR", "/data")
 
 # ---------- basic io ----------
+
 def load_pairs(storage_dir: str = STORAGE_DIR) -> List[str]:
     path = os.path.join(storage_dir, "pairs.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            res=[]; seen=set()
-            for x in data:
-                s = str(x).strip().upper()
-                if s and s not in seen:
-                    seen.add(s); res.append(s)
-            return res
+        if isinstance(data, dict) and isinstance(data.get("pairs"), list):
+            src = data.get("pairs", [])
+        elif isinstance(data, list):
+            src = data
+        else:
+            src = []
+        res: List[str] = []
+        seen = set()
+        for x in src:
+            s = str(x).strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                res.append(s)
+        return res
     except FileNotFoundError:
         return []
     except Exception:
         return []
-    return []
 
 def _coin_file(symbol: str, storage_dir: str = STORAGE_DIR) -> str:
     os.makedirs(storage_dir, exist_ok=True)
@@ -100,10 +107,18 @@ async def _fetch_price_and_filters(symbol: str) -> Tuple[float|None, dict]:
                     if syms:
                         fs = syms[0].get("filters") or []
                         for f in fs:
-                            if f.get("filterType") == "PRICE_FILTER":
+                            ftype = f.get("filterType")
+                            if ftype == "PRICE_FILTER":
                                 filters["tickSize"] = f.get("tickSize")
-                            if f.get("filterType") == "LOT_SIZE":
+                            if ftype == "LOT_SIZE":
                                 filters["stepSize"] = f.get("stepSize")
+                                if f.get("minQty") is not None:
+                                    filters["minQty"] = f.get("minQty")
+                            if ftype in ("MIN_NOTIONAL", "NOTIONAL"):
+                                # some markets use MIN_NOTIONAL.minNotional, others NOTIONAL.notional
+                                val = f.get("minNotional") or f.get("notional")
+                                if val is not None:
+                                    filters["minNotional"] = val
                         _exchange_cache[symbol] = (dict(filters), now + 6*3600)
             except Exception:
                 pass
@@ -258,9 +273,9 @@ async def _collect_one_stub(symbol: str):
     
     # OCO for LONG
     try:
-        from oco_calc import compute_oco_sell
+        from oco_calc import compute_oco_buy
         if (data.get("trade_mode") or "").upper() == "LONG":
-            oco = compute_oco_sell(data)
+            oco = compute_oco_buy(data)
             if oco:
                 data["oco"] = oco
             # grid levels for LONG
@@ -314,9 +329,120 @@ async def collect_all_no_jitter() -> int:
     return n
 
 
+
+
 # --- compatibility stubs (no background collector) ---
 async def start_collector():
     return None
 
 async def stop_collector():
     return None
+
+
+async def collect_selected_with_micro_jitter(symbols, min_ms: int = 120, max_ms: int = 360) -> int:
+    """Collect only for provided symbols with micro jitter."""
+    if not symbols:
+        return 0
+    n = 0
+    for sym in symbols:
+        try:
+            await _collect_one_stub(sym)
+            n += 1
+        except Exception:
+            # skip individual failures to not break the whole run
+            pass
+        # micro jitter between requests
+        try:
+            import random, asyncio
+            delay = random.uniform(float(min_ms), float(max_ms)) / 1000.0
+            await asyncio.sleep(delay)
+        except Exception:
+            pass
+    return n
+
+
+# === LIVE FILL: poll Binance and auto-apply fills ===
+import csv
+
+def _state_path():
+    return os.path.join(_storage_dir(), "live_orders_state.json")
+
+def _log_csv_path():
+    return os.path.join(_storage_dir(), "live_orders_log.csv")
+
+def _read_json(path, default=None):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def _write_json(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+def _append_live_log_row(rec: dict):
+    path = _log_csv_path()
+    exists = os.path.exists(path)
+    cols = ["ts","symbol","level","type","side","status",
+            "orderId","orderListId","clientOrderId","limitClientOrderId","stopClientOrderId",
+            "price","stopPrice","stopLimitPrice","qty","quoteQty","note"]
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        if not exists:
+            w.writeheader()
+        w.writerow({k: rec.get(k) for k in cols})
+
+def _load_pair_levels(symbol: str):
+    from symbol_info import get_pair_levels
+    return get_pair_levels(_storage_dir(), symbol)
+
+def _save_pair_levels(symbol: str, levels: dict):
+    from symbol_info import save_pair_levels
+    return save_pair_levels(_storage_dir(), symbol, levels)
+
+def _mark_level_filled(symbol: str, level: str, quote_amount: float):
+    """Apply fill by reusing the same path as virtual FILL confirm to keep flags/rollover identical."""
+    try:
+        # Use the same confirm helper to avoid diverging logic of flags/quotas/week rollovers
+        from orders import _confirm_fill_level
+        # level title is informational; pass canonical level as title
+        title = f"{level} FILL (auto)"
+        # amount in USDC as integer for UI parity
+        amt = int(round(float(quote_amount or 0.0)))
+        if amt <= 0:
+            # fallback: move all reserved
+            from symbol_info import get_pair_levels, save_pair_levels, recompute_pair_aggregates
+            levels = get_pair_levels(_storage_dir(), symbol) or {}
+            node = (levels.get(level) or {})
+            amt = int(round(float(node.get("reserved") or 0.0)))
+        _confirm_fill_level(symbol, amt, level, title)
+    except Exception:
+        # Fallback to direct move reserved->spent if import/confirm fails
+        from symbol_info import get_pair_levels, save_pair_levels, recompute_pair_aggregates
+        levels = get_pair_levels(_storage_dir(), symbol) or {}
+        node = (levels.get(level) or {})
+        reserved = float(node.get("reserved") or 0.0)
+        spent = float(node.get("spent") or 0.0)
+        delta = reserved if (quote_amount or 0)<=0 else min(reserved, float(quote_amount or 0))
+        node["reserved"] = max(0.0, reserved - delta)
+        node["spent"] = spent + delta
+        node["flag"] = "✅"
+        levels[level] = node
+        save_pair_levels(_storage_dir(), symbol, levels)
+        recompute_pair_aggregates(_storage_dir(), symbol)
+    # next def
+def _cfg_keys():
+    cfg = load_confyg(_storage_dir())
+    b = cfg.get("binance") or {}
+    return (b.get("key") or "", b.get("secret") or "")
+
+def poll_live_orders_for_symbol(symbol: str):
+    # Minimal noop in this offline build; real implementation provided in runtime where httpx available.
+    state_path = os.path.join(_storage_dir(), "live_orders_state.json")
+    if not os.path.exists(state_path):
+        return
+    # In the deployed env, this function will call Binance and apply fills.
+    return

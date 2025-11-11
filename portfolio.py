@@ -39,6 +39,16 @@ def adjust_invested_total(storage_dir: str, delta: float) -> float:
     _atomic_write(_storage_path(storage_dir), state)
     return float(state["invested_total"])
 
+def get_usdc_spot_earn_total(storage_dir: str) -> float:
+    state = _load_state(storage_dir)
+    try:
+        if "usdc_trade_free" in state:
+            return float(state.get("usdc_trade_free", 0.0))
+        # fallback to legacy total key (spot+earn)
+        return float(state.get("usdc_total", 0.0))
+    except Exception:
+        return 0.0
+
 def _sign(query: str, secret: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
@@ -60,6 +70,71 @@ async def _public_get(client: httpx.AsyncClient, path: str, params: Dict = None)
     r = await client.get(url, params=params or {})
     r.raise_for_status()
     return r.json()
+
+
+def _signed_get_sync(path: str, key: str, secret: str, params: Dict = None):
+    if params is None:
+        params = {}
+    params["timestamp"] = int(time.time() * 1000)
+    params["recvWindow"] = 10_000
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign(q, secret)
+    url = f"{BINANCE_API}{path}?{q}&signature={sig}"
+    headers = {"X-MBX-APIKEY": key}
+    with httpx.Client(timeout=10.0) as client:
+        r = client.get(url, headers=headers, params=None)
+        r.raise_for_status()
+        return r.json()
+
+
+def refresh_usdc_trade_free(storage_dir: str) -> float:
+    """
+    Quietly refresh free USDC available for live trading (spot.free + Earn FLEX)
+    and persist it into portfolio.json. Returns the computed amount.
+    """
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not key or not secret:
+        # fallback to cached state
+        return get_usdc_spot_earn_total(storage_dir)
+
+    try:
+        # Spot free USDC
+        account = _signed_get_sync("/api/v3/account", key, secret, params={})
+        spot_free = 0.0
+        for b in account.get("balances", []):
+            if b.get("asset") == "USDC":
+                try:
+                    spot_free += float(b.get("free", "0") or 0.0)
+                except Exception:
+                    pass
+
+        # FLEX Earn USDC (withdrawable)
+        flex = _signed_get_sync("/sapi/v1/simple-earn/flexible/position", key, secret, params={"size": 100})
+        rows = flex.get("rows") if isinstance(flex, dict) else flex
+        if rows is None:
+            rows = []
+        earn_flex = 0.0
+        for p in rows:
+            asset = p.get("asset") or p.get("assetSymbol") or p.get("assetName")
+            if asset == "USDC":
+                try:
+                    total = float(p.get("totalAmount") or p.get("total") or p.get("amount", 0) or 0)
+                    earn_flex += total
+                except Exception:
+                    pass
+
+        trade_free = spot_free + earn_flex
+
+        state = _load_state(storage_dir)
+        state["usdc_spot_free"] = round(spot_free, 8)
+        state["usdc_earn_flex"] = round(earn_flex, 8)
+        state["usdc_trade_free"] = round(trade_free, 8)
+        _atomic_write(_storage_path(storage_dir), state)
+        return trade_free
+    except Exception:
+        # fallback to cached value if network or API fails
+        return get_usdc_spot_earn_total(storage_dir)
 
 async def _load_spot_balances(client: httpx.AsyncClient, key: str, secret: str) -> Dict[str, float]:
     data = await _signed_get(client, "/api/v3/account", key, secret, params={})
@@ -219,6 +294,11 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
 
     total = spot_total + earn_total
     state = _load_state(storage_dir)
+    usdc_spot = float(spot.get("USDC", 0.0))
+    usdc_earn = float(earn.get("USDC", 0.0))
+    state["usdc_spot"] = round(usdc_spot, 8)
+    state["usdc_earn"] = round(usdc_earn, 8)
+    state["usdc_total"] = round(usdc_spot + usdc_earn, 8)
     invested = float(state.get("invested_total", 0.0))
     profit = total - invested
     arrow = "⬆️" if profit > 0.01 else ("⬇️" if profit < -0.01 else "➖")
@@ -231,6 +311,7 @@ async def build_portfolio_message(client: httpx.AsyncClient, key: str, secret: s
         lines += _format_block("Earn", earn_rows)
 
     profit_pct = (profit / invested * 100.0) if invested > 0 else 0.0
-    pct_part = f" - {profit_pct:.1f}%" if invested > 0 else ""
+    pct_part = f" {profit_pct:.1f}%" if invested > 0 else ""
     summary = [f"Total: {total:.2f}$", f"Invested: {invested:.2f}$", f"Profit: {profit_text}{arrow}{pct_part}"]
+    _atomic_write(_storage_path(storage_dir), state)
     return "```\n" + "\n".join(lines + [""] + summary) + "\n```"
