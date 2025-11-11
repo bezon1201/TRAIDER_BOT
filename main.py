@@ -92,25 +92,23 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
 
         if not args:
-            # /data - show files list
             files = data_storage.get_files_list()
             if files:
                 files_str = ', '.join(files)
-                message = f"Файлы в хранилище:
-{files_str}"
+                message = 'Файлы в хранилище:' + '\n' + files_str
                 await update.message.reply_text(message)
             else:
-                await update.message.reply_text("Хранилище пусто")
+                await update.message.reply_text('Хранилище пусто')
 
         elif args[0].lower() == 'export' and len(args) > 1 and args[1].lower() == 'all':
-            # /data export all - export all files
             files = data_storage.get_files_list()
 
             if not files:
-                await update.message.reply_text("Нечего экспортировать - хранилище пусто")
+                await update.message.reply_text('Нечего экспортировать - хранилище пусто')
                 return
 
-            message = f"Отправляю {len(files)} файл(ов)..."
+            count_str = str(len(files))
+            message = 'Отправляю ' + count_str + ' файл(ов)...'
             await update.message.reply_text(message)
 
             for filename in files:
@@ -126,39 +124,34 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.info(f"Exported: {filename}")
                     except Exception as e:
                         logger.error(f"Error exporting {filename}: {e}")
-                        error_msg = f"Ошибка при отправке {filename}"
+                        error_msg = 'Ошибка при отправке ' + filename
                         await update.message.reply_text(error_msg)
 
-            success_msg = f"✅ Экспортировано {len(files)} файл(ов)"
+            count_str = str(len(files))
+            success_msg = '✅ Экспортировано ' + count_str + ' файл(ов)'
             await update.message.reply_text(success_msg)
 
         elif args[0].lower() == 'delete' and len(args) > 1 and args[1].lower() == 'all':
-            # /data delete all - delete all files
             files = data_storage.get_files_list()
 
             if not files:
-                await update.message.reply_text("Хранилище уже пусто")
+                await update.message.reply_text('Хранилище уже пусто')
                 return
 
             if data_storage.delete_all():
-                deleted_msg = f"✅ Удалено {len(files)} файл(ов)"
+                count_str = str(len(files))
+                deleted_msg = '✅ Удалено ' + count_str + ' файл(ов)'
                 await update.message.reply_text(deleted_msg)
             else:
-                await update.message.reply_text("❌ Ошибка при удалении файлов")
+                await update.message.reply_text('❌ Ошибка при удалении файлов')
 
         else:
-            help_msg = (
-                "Неизвестная команда.\n"
-                "Доступные команды:\n"
-                "/data - список файлов\n"
-                "/data export all - отправить все файлы\n"
-                "/data delete all - удалить все файлы"
-            )
-            await update.message.reply_text(help_msg)
+            help_text = 'Неизвестная команда.\nДоступные команды:\n/data - список файлов\n/data export all - отправить все файлы\n/data delete all - удалить все файлы'
+            await update.message.reply_text(help_text)
 
     except Exception as e:
         logger.error(f"Error in data_command: {e}")
-        await update.message.reply_text("❌ Ошибка при обработке команды")
+        await update.message.reply_text('❌ Ошибка при обработке команды')
 
 async def post_init(application: Application):
     """Send message to admin after bot starts"""
