@@ -10,6 +10,7 @@ import uvicorn
 
 # Aiogram 3.x
 from aiogram import Bot, Dispatcher, types
+from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
@@ -52,7 +53,7 @@ except Exception as e:
     logging.warning("Proxy session failed (%s). Falling back to direct session.", e)
     session = AiohttpSession()
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML, session=session)
+bot = Bot(token=BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 # --- Utilities ---
 def html_escape(s: str) -> str:
