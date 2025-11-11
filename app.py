@@ -54,8 +54,10 @@ async def tg_send_message(chat_id: str, text: str, reply_markup: dict | None = N
     url = f"{TELEGRAM_API_BASE}/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id}
     content = text or ""
+    def _esc(s: str) -> str:
+        return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     if as_pre:
-        payload["text"] = f"<pre>{content}</pre>"
+        payload["text"] = f"<pre>{_esc(content)}</pre>"
         payload["parse_mode"] = "HTML"
     else:
         payload["text"] = content
