@@ -9,6 +9,7 @@ from portfolio import build_portfolio_message, adjust_invested_total
 from metrics_runner import start_collector, stop_collector
 from now_command import run_now
 from range_mode import get_mode, set_mode, list_modes
+from symbol_info import build_symbol_message
 
 BOT_TOKEN = os.getenv("TRAIDER_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TRAIDER_ADMIN_CAHT_ID", "").strip()
@@ -97,11 +98,14 @@ async def telegram_webhook(update: Request):
         data = {}
     message = data.get("message") or data.get("edited_message") or {}
     text = (message.get("text") or "").strip()
+    text_norm = text
+    text_lower = text_norm.lower()
+    text_upper = text_norm.upper()
     chat_id = str((message.get("chat") or {}).get("id") or "")
     if not chat_id:
         return {"ok": True}
 
-    if text.startswith("/invested") or text.startswith("/invest "):
+    if text_lower.startswith("/invested") or text_lower.startswith("/invest "):
         parts = text.split(maxsplit=1)
         if len(parts) == 2:
             raw = parts[1].replace(",", ".")
@@ -118,7 +122,7 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
 
     
-    if text.startswith("/coins"):
+    if text_lower.startswith("/coins"):
         parts = text.split(maxsplit=1)
         if len(parts) == 1:
             pairs = load_pairs()
@@ -147,19 +151,33 @@ async def telegram_webhook(update: Request):
             await tg_send(chat_id, _code("Пары обновлены: " + (", ".join(filtered) if filtered else "—")))
             return {"ok": True}
 
-    if text.startswith("/now"):
-        _, msg = await run_now()
+    if text_lower.startswith("/now"):
+        count, msg = await run_now()
         await tg_send(chat_id, _code(msg))
+        # After update, send per-symbol messages (one message per ticker)
+        try:
+            pairs = load_pairs()
+        except Exception:
+            pairs = []
+        for sym in (pairs or []):
+            try:
+                smsg = build_symbol_message(sym)
+                await tg_send(chat_id, _code(smsg))
+            except Exception:
+                # Continue even if one symbol fails to render
+                pass
         return {"ok": True}
 
     
-    if text.startswith("/mode"):
+    if text_lower.startswith("/mode"):
         parts = text.split()
         # /mode
         if len(parts) == 1:
             summary = list_modes()
             await tg_send(chat_id, _code(f"Режимы: {summary}"))
             return {"ok": True}
+    
+
         # /mode <SYMBOL>
         if len(parts) == 2:
             sym, md = get_mode(parts[1])
@@ -180,7 +198,16 @@ async def telegram_webhook(update: Request):
             return {"ok": True}
 
     
-    if text.startswith("/market"):
+    # Symbol shortcut: /ETHUSDC, /BTCUSDC etc
+    if text_lower.startswith("/") and len(text_norm) > 2:
+        sym = text_upper[1:].split()[0].upper()
+        # ignore known command prefixes
+        if sym not in ("NOW","MODE","PORTFOLIO","COINS","JSON","INVESTED","INVEST","MARKET"):
+            msg = build_symbol_message(sym)
+            await tg_send(chat_id, _code(msg))
+            return {"ok": True}
+
+    if text_lower.startswith("/market"):
         parts = text.split()
         # list all
         if len(parts) == 1:
@@ -197,7 +224,7 @@ async def telegram_webhook(update: Request):
         return {"ok": True}
 
     
-    if text.startswith("/json"):
+    if text_lower.startswith("/json"):
         parts = text.split()
         # /json -> list all json files in STORAGE_DIR
         if len(parts) == 1:
@@ -215,7 +242,7 @@ async def telegram_webhook(update: Request):
         await tg_send_file(chat_id, path, filename=safe, caption=safe)
         return {"ok": True}
 
-    if text.startswith("/portfolio"):
+    if text_lower.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
         except Exception as e:

@@ -2,6 +2,8 @@
 import os, json, asyncio, random, time
 from datetime import datetime, timezone
 from typing import List, Tuple, Dict
+from grid_limits import compute_grid_levels
+from auto_flags import compute_all_flags
 
 import httpx
 
@@ -253,11 +255,54 @@ async def _collect_one_stub(symbol: str):
     except Exception as e:
         data["last_error"] = f"MM:{e.__class__.__name__}"
 
-    data["last_success_utc"] = now_iso
-    data.pop("last_error", None)
+    
+    # OCO for LONG
+    try:
+        from oco_calc import compute_oco_sell
+        if (data.get("trade_mode") or "").upper() == "LONG":
+            oco = compute_oco_sell(data)
+            if oco:
+                data["oco"] = oco
+            # grid levels for LONG
+            try:
+                grid = compute_grid_levels(data)
+                if grid:
+                    data["grid"] = grid
+            except Exception:
+                data.pop("grid", None)
+            # auto flags (OCO and L0-L3)
+            try:
+                data["flags"] = compute_all_flags(data)
+            except Exception:
+                data.pop("flags", None)
+        else:
+            data.pop("oco", None)
+    except Exception as e:
+        data["last_error"] = f"OCO:{e.__class__.__name__}"
+    else:
+        data["last_success_utc"] = now_iso
+        data.pop("last_error", None)
     _write_json_atomic(path, data)
 
 # public entry for /now (no jitter)
+
+# public entry for /now (micro jitter to avoid burst hitting Binance)
+async def collect_all_with_micro_jitter(min_ms: int = 120, max_ms: int = 360) -> int:
+    pairs = load_pairs()
+    if not pairs:
+        return 0
+    n = 0
+    for i, sym in enumerate(pairs):
+        await _collect_one_stub(sym)
+        n += 1
+        # micro sleep between symbols to avoid hammering remote APIs
+        try:
+            delay = random.uniform(float(min_ms), float(max_ms)) / 1000.0
+            await asyncio.sleep(delay)
+        except Exception:
+            # do not fail the whole /now if sleep fails
+            pass
+    return n
 async def collect_all_no_jitter() -> int:
     pairs = load_pairs()
     if not pairs:
