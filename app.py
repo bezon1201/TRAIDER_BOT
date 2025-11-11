@@ -45,6 +45,8 @@ except Exception as e:
 bot = Bot(token=BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 dp.include_router(data_module.router)
+import merics_module
+dp.include_router(merics_module.router)
 
 app = FastAPI()
 
