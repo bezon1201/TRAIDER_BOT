@@ -1,33 +1,28 @@
-
-import asyncio
 import logging
 import os
 from typing import Optional
 
 from fastapi import FastAPI, Request, Response
-from pydantic import BaseModel
 import uvicorn
 
-# Aiogram 3.x
 from aiogram import Bot, Dispatcher, types
-from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
-# ---------- Env & Config ----------
+from utils import mono, html_escape
+import data_module
 
 def env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name)
     return v if (v is not None and v != "") else default
 
-BOT_TOKEN = env("TRAIDER_BOT_TOKEN") or env("TRADER_BOT_TOKEN")  # fallback just in case
+BOT_TOKEN = env("TRAIDER_BOT_TOKEN") or env("TRADER_BOT_TOKEN")
 ADMIN_CHAT_ID = env("TRAIDER_ADMIN_CAHT_ID") or env("TRAIDER_ADMIN_CHAT_ID")
 WEBHOOK_BASE = env("WEBHOOK_BASE", "")
 HTTP_PROXY = env("HTTP_PROXY")
 HTTPS_PROXY = env("HTTPS_PROXY")
 
-# optional, here for parity with old bot's envs
 ADMIN_KEY = env("ADMIN_KEY")
 BINANCE_API_KEY = env("BINANCE_API_KEY")
 BINANCE_API_SECRET = env("BINANCE_API_SECRET")
@@ -38,15 +33,9 @@ STORAGE_DIR = env("STORAGE_DIR")
 if not BOT_TOKEN:
     raise RuntimeError("TRAIDER_BOT_TOKEN is required")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-
-# ---------- Bot session with optional proxy ----------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 proxy = HTTPS_PROXY or HTTP_PROXY
-# Safe proxy session init (falls back if aiohttp-socks not installed or proxy invalid)
 try:
     session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
 except Exception as e:
@@ -54,33 +43,19 @@ except Exception as e:
     session = AiohttpSession()
 
 bot = Bot(token=BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-
-# --- Utilities ---
-def html_escape(s: str) -> str:
-    return (s.replace("&", "&amp;")
-             .replace("<", "&lt;")
-             .replace(">", "&gt;"))
-
-def mono(text: str) -> str:
-    """Wrap text in monospaced block for Telegram HTML."""
-    return f"<pre>{html_escape(text)}</pre>"
-
 dp = Dispatcher()
-
-# ---------- FastAPI app ----------
+dp.include_router(data_module.router)
 
 app = FastAPI()
 
 @app.head("/")
 async def head_root():
-    # for uptime checkers (e.g., render/fly/healthchecks)
     return Response(status_code=200)
 
 @app.get("/")
 async def get_root():
     return {"ok": True, "service": "trader-bot", "webhook": True}
 
-# Telegram webhook endpoint
 @app.post("/tg")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -90,20 +65,19 @@ async def telegram_webhook(request: Request):
 
 @app.head("/tg")
 async def head_tg():
-    # allow HEAD on webhook for uptime probes as requested
     return Response(status_code=200)
-
-# ---------- Basic handlers ----------
 
 @dp.message()
 async def echo_fallback(msg: types.Message):
-    # Always reply in active chat, monospaced style
     await msg.answer(mono("Принято ✅"))
 
-# ---------- Startup tasks ----------
-
 async def on_startup():
-    # Set webhook if WEBHOOK_BASE provided
+    # ensure storage exists for /data module
+    try:
+        data_module.ensure_storage_dir(STORAGE_DIR)
+    except Exception:
+        pass
+
     if WEBHOOK_BASE:
         url = WEBHOOK_BASE.rstrip("/") + "/tg"
         await bot.set_webhook(url)
@@ -111,7 +85,6 @@ async def on_startup():
     else:
         logging.info("WEBHOOK_BASE is empty — webhook not set")
 
-    # Notify admin
     if ADMIN_CHAT_ID:
         try:
             await bot.send_message(int(ADMIN_CHAT_ID), mono("Бот запущен"))
@@ -121,14 +94,10 @@ async def on_startup():
     else:
         logging.warning("TRAIDER_ADMIN_CAHT_ID/TRAIDER_ADMIN_CHAT_ID not set — cannot notify admin")
 
-# Run startup after app starts (uvicorn)
 @app.on_event("startup")
 async def _app_startup():
     await on_startup()
 
-# ---------- Entrypoint ----------
-
 if __name__ == "__main__":
-    # Bind 0.0.0.0 for containers/PaaS; port from $PORT if present
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
