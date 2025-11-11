@@ -4,6 +4,8 @@ from typing import List, Tuple, Set
 import httpx
 from fastapi import FastAPI, Request, Response, status
 
+from data import handle_cmd_data
+
 app = FastAPI()
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
@@ -184,10 +186,6 @@ async def telegram_webhook(request: Request) -> Response:
     cmd, args = parse_command(text)
 
     if cmd.startswith("/coins"):
-        # Поддержка:
-        # /coins
-        # /coins +add <symbols...>
-        # /coins +rm <symbols...>
         if len(args) == 0:
             await handle_cmd_coins_show(chat_id)
         else:
@@ -199,6 +197,10 @@ async def telegram_webhook(request: Request) -> Response:
                 await handle_cmd_coins_rm(chat_id, rest)
             else:
                 await tg_send_message(chat_id, "Использование:\n/coins — показать\n/coins +add <symbols...>\n/coins +rm <symbols...>")
+        return Response(status_code=status.HTTP_200_OK)
+
+    if cmd.startswith("/data"):
+        await handle_cmd_data(chat_id, args)
         return Response(status_code=status.HTTP_200_OK)
 
     return Response(status_code=status.HTTP_200_OK)
