@@ -5,6 +5,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from flask import Flask, request
 import asyncio
 from threading import Thread
+from pathlib import Path
+from data import DataStorage
 
 # Configure logging
 logging.basicConfig(
@@ -18,10 +20,14 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 WEBHOOK_URL = os.getenv('WEBHOOK_BASE', '')
 PORT = int(os.getenv('PORT', 10000))
+DATA_STORAGE = os.getenv('DATA_STORAGE', '/tmp/storage')
 
 # Proxy settings
 HTTP_PROXY = os.getenv('HTTP_PROXY')
 HTTPS_PROXY = os.getenv('HTTPS_PROXY')
+
+# Initialize data storage
+data_storage = DataStorage(DATA_STORAGE)
 
 # Flask app for webhook and health check
 app = Flask(__name__)
@@ -33,6 +39,11 @@ bot_application = None
 def health_check():
     """Health check endpoint for UptimeRobot"""
     return '', 200
+
+@app.route('/', methods=['HEAD', 'GET'])
+def index():
+    """Root endpoint"""
+    return 'Traider Bot is running!', 200
 
 @app.route('/webhook', methods=['POST'])
 async def webhook():
@@ -49,6 +60,80 @@ async def webhook():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     await update.message.reply_text('Привет! Бот успешно запущен.')
+
+async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /data command
+    /data - показывает список файлов
+    /data export all - шлет все файлы
+    /data delete all - удалить все файлы
+    """
+    try:
+        args = context.args
+        chat_id = update.effective_chat.id
+
+        if not args:
+            # /data - show files list
+            files = data_storage.get_files_list()
+            if files:
+                files_str = ', '.join(files)
+                await update.message.reply_text(f"Файлы в хранилище:
+{files_str}")
+            else:
+                await update.message.reply_text("Хранилище пусто")
+
+        elif args[0].lower() == 'export' and len(args) > 1 and args[1].lower() == 'all':
+            # /data export all - export all files
+            files = data_storage.get_files_list()
+
+            if not files:
+                await update.message.reply_text("Нечего экспортировать - хранилище пусто")
+                return
+
+            await update.message.reply_text(f"Отправляю {len(files)} файл(ов)...")
+
+            for filename in files:
+                file_path = data_storage.get_file_path(filename)
+                if file_path:
+                    try:
+                        with open(file_path, 'rb') as f:
+                            await bot_application.bot.send_document(
+                                chat_id=chat_id,
+                                document=f,
+                                filename=filename
+                            )
+                        logger.info(f"Exported: {filename}")
+                    except Exception as e:
+                        logger.error(f"Error exporting {filename}: {e}")
+                        await update.message.reply_text(f"Ошибка при отправке {filename}")
+
+            await update.message.reply_text(f"✅ Экспортировано {len(files)} файл(ов)")
+
+        elif args[0].lower() == 'delete' and len(args) > 1 and args[1].lower() == 'all':
+            # /data delete all - delete all files
+            files = data_storage.get_files_list()
+
+            if not files:
+                await update.message.reply_text("Хранилище уже пусто")
+                return
+
+            if data_storage.delete_all():
+                await update.message.reply_text(f"✅ Удалено {len(files)} файл(ов)")
+            else:
+                await update.message.reply_text("❌ Ошибка при удалении файлов")
+
+        else:
+            await update.message.reply_text(
+                "Неизвестная команда.\n"
+                "Доступные команды:\n"
+                "/data - список файлов\n"
+                "/data export all - отправить все файлы\n"
+                "/data delete all - удалить все файлы"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in data_command: {e}")
+        await update.message.reply_text("❌ Ошибка при обработке команды")
 
 async def post_init(application: Application):
     """Send message to admin after bot starts"""
@@ -85,6 +170,7 @@ async def main():
 
     # Add handlers
     bot_application.add_handler(CommandHandler("start", start))
+    bot_application.add_handler(CommandHandler("data", data_command, has_args=False))
 
     # Set webhook
     webhook_path = f"{WEBHOOK_URL}/webhook"
