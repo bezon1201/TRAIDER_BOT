@@ -14,6 +14,10 @@ BINANCE_API = "https://api.binance.com/api/v3"
 # Таймфреймы как в старом боте: 12h, 6h, 4h, 2h
 TIMEFRAMES = ["12h", "6h", "4h", "2h"]
 
+# Кеш для фильтров (обновляется раз в 6 часов)
+_filters_cache = {}
+_filters_cache_time = {}
+
 async def fetch_ticker_price(client: httpx.AsyncClient, symbol: str) -> Optional[Dict[str, Any]]:
     """Получает текущую цену для пары с Binance"""
     try:
@@ -71,18 +75,95 @@ async def fetch_klines(
         logger.error(f"Error fetching klines for {symbol} ({interval}): {e}")
         return None
 
+async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optional[Dict[str, Any]]:
+    """Получает фильтры и ограничения пары с Binance (кешируется на 6 часов)"""
+    current_time = datetime.now(timezone.utc).timestamp()
+
+    # Проверяем кеш (6 часов = 21600 секунд)
+    if symbol in _filters_cache and symbol in _filters_cache_time:
+        cache_age = current_time - _filters_cache_time[symbol]
+        if cache_age < 21600:
+            logger.debug(f"Using cached filters for {symbol}")
+            return _filters_cache[symbol]
+
+    try:
+        response = await client.get(
+            f"{BINANCE_API}/exchangeInfo",
+            params={"symbol": symbol}
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Извлекаем фильтры
+            filters = {}
+            for f in data.get("symbols", [{}])[0].get("filters", []):
+                filter_type = f.get("filterType", "")
+
+                if filter_type == "PRICE_FILTER":
+                    filters["price_filter"] = {
+                        "min_price": float(f.get("minPrice", 0)),
+                        "max_price": float(f.get("maxPrice", 0)),
+                        "tick_size": float(f.get("tickSize", 0)),
+                    }
+
+                elif filter_type == "LOT_SIZE":
+                    filters["lot_size"] = {
+                        "min_qty": float(f.get("minQty", 0)),
+                        "max_qty": float(f.get("maxQty", 0)),
+                        "step_size": float(f.get("stepSize", 0)),
+                    }
+
+                elif filter_type == "MIN_NOTIONAL":
+                    filters["min_notional"] = {
+                        "min_notional": float(f.get("minNotional", 0)),
+                    }
+
+                elif filter_type == "ICEBERG_PARTS":
+                    filters["iceberg_parts"] = {
+                        "limit": int(f.get("limit", 0)),
+                    }
+
+                elif filter_type == "MAX_NUM_ORDERS":
+                    filters["max_num_orders"] = {
+                        "limit": int(f.get("maxNumOrders", 0)),
+                    }
+
+                elif filter_type == "MAX_NUM_ALGO_ORDERS":
+                    filters["max_num_algo_orders"] = {
+                        "limit": int(f.get("maxNumAlgoOrders", 0)),
+                    }
+
+            # Кешируем результат
+            _filters_cache[symbol] = filters
+            _filters_cache_time[symbol] = current_time
+
+            logger.info(f"Fetched and cached filters for {symbol}")
+            return filters
+
+        else:
+            logger.warning(f"Failed to fetch exchange info for {symbol}: {response.status_code}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error fetching exchange info for {symbol}: {e}")
+        return None
+
 async def collect_metrics_for_symbol(
     client: httpx.AsyncClient,
     symbol: str,
     storage_dir: str
 ) -> bool:
-    """Собирает все метрики для одной пары (12h, 6h, 4h, 2h с SMA14 и ATR14)"""
+    """Собирает все метрики для одной пары (12h, 6h, 4h, 2h с SMA14 и ATR14 + фильтры)"""
     try:
         # Получаем текущую цену
         ticker = await fetch_ticker_price(client, symbol)
         if not ticker:
             logger.warning(f"Could not fetch ticker for {symbol}")
             return False
+
+        # Получаем фильтры (с кешем на 6 часов)
+        filters = await fetch_exchange_info(client, symbol)
 
         # Собираем свечи для всех таймфреймов
         timeframes_data = {}
@@ -105,6 +186,7 @@ async def collect_metrics_for_symbol(
         metrics = {
             "symbol": symbol,
             "ticker": ticker,
+            "filters": filters,
             "timeframes": timeframes_data,
         }
 
