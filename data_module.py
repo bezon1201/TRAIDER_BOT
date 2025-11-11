@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 from aiogram import Router, types
+from aiogram.filters import Command, CommandObject
 from utils import mono
 
 router = Router()
@@ -59,11 +60,11 @@ def validate_names(names):
             bad.append(n)
     return ok, bad
 
-@router.message(lambda m: isinstance(m.text, str) and m.text.strip().startswith("/data"))
-async def cmd_data(msg: types.Message):
-    text = msg.text or ""
-    parts = text.strip().split()
-    args = [p for p in parts[1:] if p]
+@router.message(Command("data"))
+async def cmd_data(msg: types.Message, command: CommandObject):
+    # command.args is a raw string after /data
+    raw = (command.args or "").strip()
+    args = [a for a in raw.split() if a]
     d = ensure_storage_dir()
 
     if not args:
