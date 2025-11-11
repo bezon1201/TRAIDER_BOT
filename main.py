@@ -63,7 +63,7 @@ async def tg_send(chat_id: str, text: str) -> None:
 async def startup_event():
     """Send startup message and set webhook"""
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI)")
+        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v3.1)")
 
     # Set webhook
     if WEBHOOK_URL and BOT_TOKEN:
