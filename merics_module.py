@@ -4,7 +4,6 @@ from pathlib import Path
 from aiogram import Router, types
 from aiogram.filters import Command, CommandObject
 from utils import mono
-from market_mode import evaluate_for_symbol, append_to_log
 
 router = Router()
 
@@ -107,15 +106,9 @@ async def cmd_now(msg: types.Message, command: CommandObject):
     async def runner(s: str):
         try:
             await run_now_for_symbol(s, str(d))
-            try:
-                overall, tf_signals = evaluate_for_symbol(str(d), s)
-                append_to_log(str(d), s, overall, tf_signals)
-            except Exception:
-                pass
             ok.append(s)
         except Exception:
             bad.append(s)
     await asyncio.gather(*(runner(s) for s in uniq))
 
-    # тихий режим — никаких ответов
     return

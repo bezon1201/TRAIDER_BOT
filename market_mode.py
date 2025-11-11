@@ -20,12 +20,10 @@ def _signal_for_tf(tf_block: dict) -> str:
     atr = tf_block.get("ATR14", 0.0) or 0.0
     if (atr or 0.0) <= 0 or (close or 0.0) <= 0:
         return "RANGE"
-
     ma30 = tf_block.get("SMA30")
     ma90 = tf_block.get("SMA90")
     ma30_arr = tf_block.get("SMA30_arr") or []
     ma90_arr = tf_block.get("SMA90_arr") or []
-
     diff_now = None
     diff_prev = None
     if isinstance(ma30, (int, float)) and isinstance(ma90, (int, float)):
@@ -35,14 +33,11 @@ def _signal_for_tf(tf_block: dict) -> str:
             diff_prev = float(ma30_arr[-2]) - float(ma90_arr[-2])
         except Exception:
             diff_prev = diff_now
-
     H = 0.6 * float(atr)
-
     if diff_now is None:
         return "RANGE"
     if diff_prev is None:
         diff_prev = diff_now
-
     if diff_now > H and diff_now >= diff_prev:
         return "UP"
     if diff_now < -H and diff_now <= diff_prev:
@@ -65,7 +60,7 @@ def evaluate_for_symbol(storage_dir: str, symbol: str) -> Tuple[str, Dict[str, s
     overall = _overall_from_tf(tf_signals)
     return overall, tf_signals
 
-def append_to_log(storage_dir: str, symbol: str, overall: str, tf_signals: Dict[str, str]) -> None:
+def append_raw(storage_dir: str, symbol: str, overall: str, tf_signals: Dict[str, str]) -> None:
     d = Path(storage_dir)
     d.mkdir(parents=True, exist_ok=True)
     metrics = _load_metrics(storage_dir, symbol) or {}
@@ -76,5 +71,5 @@ def append_to_log(storage_dir: str, symbol: str, overall: str, tf_signals: Dict[
             ts = blk.get("bar_time_utc")
             break
     rec = {"symbol": symbol, "ts": ts, "overall": overall, "tf": tf_signals}
-    with (d / "market.jsonl").open("a", encoding="utf-8") as f:
+    with (d / f"mode_raw_{symbol}.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
