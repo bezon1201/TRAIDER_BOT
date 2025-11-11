@@ -77,8 +77,8 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files = data_storage.get_files_list()
             if files:
                 files_str = ', '.join(files)
-                await update.message.reply_text(f"Файлы в хранилище:
-{files_str}")
+                message = f"Файлы в хранилище:\n{files_str}"
+                await update.message.reply_text(message)
             else:
                 await update.message.reply_text("Хранилище пусто")
 
@@ -90,7 +90,8 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Нечего экспортировать - хранилище пусто")
                 return
 
-            await update.message.reply_text(f"Отправляю {len(files)} файл(ов)...")
+            message = f"Отправляю {len(files)} файл(ов)..."
+            await update.message.reply_text(message)
 
             for filename in files:
                 file_path = data_storage.get_file_path(filename)
@@ -105,9 +106,11 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.info(f"Exported: {filename}")
                     except Exception as e:
                         logger.error(f"Error exporting {filename}: {e}")
-                        await update.message.reply_text(f"Ошибка при отправке {filename}")
+                        error_msg = f"Ошибка при отправке {filename}"
+                        await update.message.reply_text(error_msg)
 
-            await update.message.reply_text(f"✅ Экспортировано {len(files)} файл(ов)")
+            success_msg = f"✅ Экспортировано {len(files)} файл(ов)"
+            await update.message.reply_text(success_msg)
 
         elif args[0].lower() == 'delete' and len(args) > 1 and args[1].lower() == 'all':
             # /data delete all - delete all files
@@ -118,18 +121,20 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             if data_storage.delete_all():
-                await update.message.reply_text(f"✅ Удалено {len(files)} файл(ов)")
+                deleted_msg = f"✅ Удалено {len(files)} файл(ов)"
+                await update.message.reply_text(deleted_msg)
             else:
                 await update.message.reply_text("❌ Ошибка при удалении файлов")
 
         else:
-            await update.message.reply_text(
+            help_msg = (
                 "Неизвестная команда.\n"
                 "Доступные команды:\n"
                 "/data - список файлов\n"
                 "/data export all - отправить все файлы\n"
                 "/data delete all - удалить все файлы"
             )
+            await update.message.reply_text(help_msg)
 
     except Exception as e:
         logger.error(f"Error in data_command: {e}")
@@ -137,6 +142,10 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     """Send message to admin after bot starts"""
+    if not ADMIN_CHAT_ID:
+        logger.warning("ADMIN_CHAT_ID not set; skip admin notify")
+        return
+
     try:
         await application.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
