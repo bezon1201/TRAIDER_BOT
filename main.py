@@ -108,8 +108,7 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files = data_storage.get_files_list()
             if files:
                 files_str = ', '.join(files)
-                message = 'Файлы в хранилище:' + '
-' + files_str
+                message = 'Файлы в хранилище:\n' + files_str
                 await update.message.reply_text(message)
             else:
                 await update.message.reply_text('Хранилище пусто')
@@ -160,11 +159,10 @@ async def data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text('❌ Ошибка при удалении файлов')
 
         else:
-            help_text = 'Неизвестная команда.' + '
-' + 'Доступные команды:' + '
-' + '/data - список файлов' + '
-' + '/data export all - отправить все файлы' + '
-' + '/data delete all - удалить все файлы'
+            help_text = ('Неизвестная команда.\nДоступные команды:\n' +
+                        '/data - список файлов\n' +
+                        '/data export all - отправить все файлы\n' +
+                        '/data delete all - удалить все файлы')
             await update.message.reply_text(help_text)
 
     except Exception as e:
@@ -218,10 +216,6 @@ async def initialize_bot():
     # Initialize bot
     await bot_application.initialize()
     logger.info("Bot initialized successfully")
-
-def run_flask():
-    """Run Flask app in a separate thread"""
-    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
 
 def run_bot_async():
     """Run bot initialization in async loop"""
