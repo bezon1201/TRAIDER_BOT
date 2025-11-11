@@ -95,6 +95,7 @@ async def tg_answer_callback(callback_query_id: str) -> None:
 
 pass
 
+
 # ---------------- Storage helpers ----------------
 def ensure_storage() -> None:
     try:
@@ -575,7 +576,8 @@ async def telegram_webhook(request: Request) -> Response:
         return Response(status_code=status.HTTP_200_OK)
 
     if cmd.startswith("/data"):
-        await handle_cmd_data(chat_id, args)
+        text = handle_cmd_data(STORAGE_DIR, args)
+        await tg_send_message(chat_id, text)
         return Response(status_code=status.HTTP_200_OK)
 
     if cmd.startswith("/scheduler"):
