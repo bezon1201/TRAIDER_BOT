@@ -1,7 +1,9 @@
 import os
+import json
 import logging
 from pathlib import Path
-from typing import List, Set
+from typing import List, Set, Dict, Any
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -106,3 +108,43 @@ def parse_coins_command(command_text: str) -> List[str]:
     pairs = [p.strip() for p in parts if p.strip()]
 
     return pairs
+
+def get_coin_file_path(storage_dir: str, symbol: str) -> str:
+    """Получает путь к файлу монеты (например BTCUSDT.json)"""
+    os.makedirs(storage_dir, exist_ok=True)
+    return os.path.join(storage_dir, f"{normalize_pair(symbol)}.json")
+
+def save_metrics(storage_dir: str, symbol: str, metrics_data: Dict[str, Any]) -> bool:
+    """Сохраняет метрики монеты в JSON файл"""
+    try:
+        file_path = get_coin_file_path(storage_dir, symbol)
+
+        # Добавляем временную метку
+        metrics_data["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics_data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Metrics saved for {symbol}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error saving metrics for {symbol}: {e}")
+        return False
+
+def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
+    """Читает метрики монеты из JSON файла"""
+    try:
+        file_path = get_coin_file_path(storage_dir, symbol)
+
+        if not os.path.exists(file_path):
+            return {}
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        return data
+
+    except Exception as e:
+        logger.error(f"Error reading metrics for {symbol}: {e}")
+        return {}

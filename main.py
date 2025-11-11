@@ -1,11 +1,13 @@
 import os
 import logging
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from pathlib import Path
 from data import DataStorage
 from metrics import parse_coins_command, add_pairs
+from collector import collect_all_metrics
 
 # Configure logging
 logging.basicConfig(
@@ -64,7 +66,7 @@ async def tg_send(chat_id: str, text: str) -> None:
 async def startup_event():
     """Send startup message and set webhook"""
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.1)")
+        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.2)")
 
     # Set webhook
     if WEBHOOK_URL and BOT_TOKEN:
@@ -98,7 +100,7 @@ async def health_head():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"ok": True, "service": "traider-bot", "version": "4.1"}
+    return {"ok": True, "service": "traider-bot", "version": "4.2"}
 
 @app.head("/")
 async def root_head():
@@ -124,7 +126,7 @@ async def telegram_webhook(request: Request):
 
     # Handle /start command
     if text.lower() == "/start":
-        await tg_send(chat_id, "Привет! Бот успешно запущен (FastAPI v4.1 с модулем метрик).")
+        await tg_send(chat_id, "Привет! Бот успешно запущен (FastAPI v4.2 с модулем метрик).")
         return JSONResponse({"ok": True})
 
     # Handle /coins command
@@ -147,6 +149,24 @@ async def telegram_webhook(request: Request):
         else:
             await tg_send(chat_id, "❌ Ошибка при обновлении пар")
 
+        return JSONResponse({"ok": True})
+
+    # Handle /now command - collect metrics silently
+    if text.lower() == "/now":
+        logger.info(f"Starting metrics collection from {chat_id}")
+
+        # Запускаем сбор метрик в фоне без блокировки ответа
+        try:
+            results = await collect_all_metrics(DATA_STORAGE, delay_ms=50)
+            success_count = sum(1 for v in results.values() if v)
+            total_count = len(results)
+
+            if total_count > 0:
+                logger.info(f"Metrics collected: {success_count}/{total_count}")
+        except Exception as e:
+            logger.error(f"Error during metrics collection: {e}")
+
+        # Не отправляем сообщение в Telegram (тихо)
         return JSONResponse({"ok": True})
 
     # Handle /data command
@@ -214,6 +234,7 @@ async def telegram_webhook(request: Request):
     help_text = ('Неизвестная команда.\nДоступные команды:\n' +
                 '/start - приветствие\n' +
                 '/coins - добавить пары для сбора метрик\n' +
+                '/now - собрать метрики (тихо, без сообщений)\n' +
                 '/data - список файлов\n' +
                 '/data export all - отправить все файлы\n' +
                 '/data delete all - удалить все файлы')
