@@ -59,16 +59,46 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 app = FastAPI()
 client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
 
+def _log(*args):
+    try:
+        print("[bot]", *args, flush=True)
+    except Exception:
+        pass
+
+
 async def tg_send(chat_id: str, text: str) -> None:
     if not TELEGRAM_API:
+        _log("tg_send SKIP: TELEGRAM_API missing")
         return
+    head = (text or "").splitlines()[0] if text else ""
+    _log("tg_send try: len=", len(text or ""), "parse=Markdown", "head=", head[:140])
     try:
-        await client.post(
+        r = await client.post(
             f"{TELEGRAM_API}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
         )
-    except Exception:
-        pass
+        try:
+            j = r.json()
+        except Exception:
+            j = None
+        if r.status_code != 200 or (j and not j.get("ok", True)):
+            _log("tg_send markdown resp:", r.status_code, j or r.text[:200])
+            # Fallback: send without Markdown
+            _log("tg_send fallback: plain text")
+            r2 = await client.post(
+                f"{TELEGRAM_API}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+            )
+            try:
+                j2 = r2.json()
+            except Exception:
+                j2 = None
+            _log("tg_send plain resp:", r2.status_code, j2 or r2.text[:200])
+        else:
+            _log("tg_send ok:", r.status_code)
+    except Exception as e:
+        _log("tg_send exception:", e.__class__.__name__, str(e)[:240])
+
 
 async def _binance_ping() -> str:
     url = "https://api.binance.com/api/v3/ping"
@@ -153,6 +183,7 @@ async def telegram_webhook(update: Request):
 
     if text_lower.startswith("/now"):
         count, msg = await run_now()
+        _log("/now result:", count)
         await tg_send(chat_id, _code(msg))
         # After update, send per-symbol messages (one message per ticker)
         try:
@@ -162,6 +193,7 @@ async def telegram_webhook(update: Request):
         for sym in (pairs or []):
             try:
                 smsg = build_symbol_message(sym)
+                _log("/now symbol", sym, "len=", len(smsg or ""))
                 await tg_send(chat_id, _code(smsg))
             except Exception:
                 # Continue even if one symbol fails to render
@@ -245,6 +277,7 @@ async def telegram_webhook(update: Request):
     if text_lower.startswith("/portfolio"):
         try:
             reply = await build_portfolio_message(client, BINANCE_API_KEY, BINANCE_API_SECRET, STORAGE_DIR)
+            _log("/portfolio built", "len=", len(reply or ""), "head=", (reply or "").splitlines()[0][:160])
         except Exception as e:
             reply = f"Ошибка портфеля: {e}"
         await tg_send(chat_id, reply or "Нет данных.")
@@ -309,6 +342,7 @@ import glob
 
 async def tg_send_file(chat_id: int, filepath: str, filename: str | None = None, caption: str | None = None):
     api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    _log("tg_send_file", filepath, "caption_len=", len(caption or ""))
     fn = filename or os.path.basename(filepath)
     try:
         import httpx
