@@ -593,7 +593,6 @@ async def telegram_webhook(request: Request) -> Response:
         text, kb = render_main_card(mode)
         await tg_send_message(chat_id, text, reply_markup=kb, as_pre=True)
         return Response(status_code=status.HTTP_200_OK)
- Response(status_code=status.HTTP_200_OK)
 
     return Response(status_code=status.HTTP_200_OK)
 
