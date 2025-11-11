@@ -7,6 +7,11 @@ from utils import mono
 
 router = Router()
 
+def normalize_symbol(s: str) -> str | None:
+    s = (s or "").strip().lower()
+    return s if s and re.fullmatch(r"[a-z0-9]+", s) else None
+
+
 SAFE_SYMBOL_RE = re.compile(r"^[a-z0-9]+$")
 
 def ensure_storage_dir(base: str | None = None) -> Path:
@@ -68,7 +73,7 @@ async def cmd_coins(msg: types.Message, command: CommandObject):
     return await msg.answer(mono(f"ok: {text}"))
 
 import asyncio
-from metric_runner import run_now_for_symbol, normalize_symbol
+from metric_runner import run_now_for_symbol
 
 @router.message(Command("now"))
 async def cmd_now(msg: types.Message, command: CommandObject):
