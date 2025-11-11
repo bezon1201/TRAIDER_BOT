@@ -1,70 +1,80 @@
-\
+
 import os
+import asyncio
 import logging
-from fastapi import FastAPI, Request, Response
-from aiogram import Dispatcher, F
+import logging_setup
+
+from fastapi import FastAPI, Request
+from aiogram import Bot, Dispatcher, types
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.bot import Bot, DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import Update
-from logging_setup import setup_logging
-from utils import getenv_str, getenv_int
+from aiogram.client.default import DefaultBotProperties
 
-# external routers (kept stubs here)
-import data_module
-import metrics_module
-import market_module
-import scheduler_module
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or "0")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret")
+STORAGE_DIR = os.getenv("STORAGE_DIR", "./storage")
+PROXY = os.getenv("PROXY_URL", "")
 
-setup_logging()
-logger = logging.getLogger("app")
-
-# --- Env
-TRAIDER_BOT_TOKEN = getenv_str("TRAIDER_BOT_TOKEN")
-ADMIN_CHAT_ID = getenv_int("ADMIN_CHAT_ID", 0)
-STORAGE_DIR = getenv_str("STORAGE_DIR", "./storage")
-PROXY_URL = getenv_str("PROXY_URL")
-
-os.makedirs(STORAGE_DIR, exist_ok=True)
-
-# --- Aiogram bot & dispatcher
-session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else AiohttpSession()
-bot = Bot(token=TRAIDER_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), session=session)
-dp = Dispatcher()
-
-# Routers connect (placeholders)
-dp.include_router(data_module.router)
-dp.include_router(metrics_module.router)
-dp.include_router(market_module.router)
-dp.include_router(scheduler_module.router)
-
-# --- FastAPI app
 app = FastAPI()
+logger = logging_setup.setup_logging()
+
+# health/uptime
+@app.head("/webhook")
+async def head_webhook():
+    logging.getLogger("app").info("component=http action=ping method=HEAD path=/webhook status=200")
+    return {}
 
 @app.get("/")
 async def root():
     return {"ok": True}
 
-@app.head("/")
-async def head_root():
-    # for uptime checks
-    return Response(status_code=200)
+# Telegram bot
+session = AiohttpSession(proxy=PROXY) if PROXY else AiohttpSession()
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), session=session)
+dp = Dispatcher()
 
+# routers
+import data_module
+import merics_module
+import market_module
+import scheduler_module
+dp.include_router(data_module.router)
+dp.include_router(merics_module.router)
+dp.include_router(market_module.router)
+dp.include_router(scheduler_module.router)
+
+# webhook handler
 @app.post("/webhook")
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.model_validate(data)
+async def webhook(request: Request):
+    update = types.Update.model_validate(await request.json())
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+_scheduler_stop_event = asyncio.Event()
+_scheduler_task = None
+
 @app.on_event("startup")
-async def on_startup():
-    # Send admin a monospaced "Bot started"
-    if ADMIN_CHAT_ID:
-        text = "```\nБот запущен\n```"
-        try:
-            await bot.send_message(ADMIN_CHAT_ID, text)
-        except Exception as e:
-            logger.error("failed to notify admin: %s", e)
-    else:
-        logger.warning("ADMIN_CHAT_ID not set; skip admin notify")
+async def _startup():
+    logger.info("component=http action=app_start")
+    os.makedirs(STORAGE_DIR, exist_ok=True)
+    try:
+        if ADMIN_CHAT_ID:
+            await bot.send_message(ADMIN_CHAT_ID, "```
+Бот запущен
+```", parse_mode=None)
+    except Exception:
+        logger.warning("component=bot action=notify_admin_fail", exc_info=True)
+    # start scheduler
+    global _scheduler_task
+    _scheduler_task = asyncio.create_task(scheduler_module.run_scheduler_loop(_scheduler_stop_event))
+
+@app.on_event("shutdown")
+async def _shutdown():
+    logger.info("component=http action=app_shutdown")
+    _scheduler_stop_event.set()
+    try:
+        await _scheduler_task
+    except Exception:
+        pass
+    await bot.session.close()
