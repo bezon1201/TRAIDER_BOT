@@ -7,7 +7,7 @@ from utils import mono
 
 router = Router()
 
-SAFE_NAME_RE = r"^[^/\\\0]+$"  # simple guard: no slashes or nulls
+SAFE_NAME_RE = r"^[^/\\\0]+$"  # no slashes or nulls
 
 def ensure_storage_dir(base: str | None = None) -> Path:
     d = Path(base or os.getenv("STORAGE_DIR") or "./storage")
@@ -18,23 +18,16 @@ def ensure_storage_dir(base: str | None = None) -> Path:
     return d
 
 def fmt_dir_listing(d: Path) -> str:
-"
-    "    try:
-"
-    "        names = sorted([n for n in os.listdir(d) if (d/ n).is_file()])
-"
-    "    except Exception:
-"
-    "        names = []
-"
-    "    if not names:
-"
-    "        return "(пусто)"
-"
-    "    return ", ".join(names)
+    try:
+        names = sorted([n for n in os.listdir(d) if (d / n).is_file()])
+    except Exception:
+        names = []
+    if not names:
+        return "(пусто)"
+    return ", ".join(names)
 
 def parse_csv_args(raw: str):
-    parts = [p.strip() for p in (raw.split(',') if raw else [])]
+    parts = [p.strip() for p in (raw.split(",") if raw else [])]
     return [p for p in parts if p]
 
 def validate_names(names):
@@ -48,7 +41,6 @@ def validate_names(names):
 
 @router.message(Command("data"))
 async def cmd_data(msg: types.Message, command: CommandObject):
-    # command.args is a raw string after /data
     raw = (command.args or "").strip()
     args = parse_csv_args(raw)
     d = ensure_storage_dir()
@@ -60,18 +52,18 @@ async def cmd_data(msg: types.Message, command: CommandObject):
     sub = (args[0] or "").casefold()
 
     if sub == "export":
-        files = args
+        files = parse_csv_args(",".join(args[1:]))
         ok, bad = validate_names(files)
         lines = []
         if ok:
             lines.append("export: " + ", ".join(ok))
         if bad:
             lines.append("пропущено: " + ", ".join(bad))
-        return await msg.answer(mono("
-".join(lines) if lines else mono("export: (пусто)"))))
+        text = "\n".join(lines) if lines else "export: (пусто)"
+        return await msg.answer(mono(text))
 
     if sub == "delete":
-        files = args
+        files = parse_csv_args(",".join(args[1:]))
         ok, bad = validate_names(files)
         deleted, skipped = [], []
         for name in ok:
@@ -89,13 +81,13 @@ async def cmd_data(msg: types.Message, command: CommandObject):
             lines.append("удалено: " + ", ".join(deleted))
         if skipped or bad:
             lines.append("пропущено: " + ", ".join(skipped + bad))
-        return await msg.answer(mono("
-".join(lines) if lines else "удалено: —")))
+        text = "\n".join(lines) if lines else "удалено: —"
+        return await msg.answer(mono(text))
 
     help_text = [
         "Использование:",
-        "/data — показать список в STORAGE_DIR",
-        "/data export <file1> <file2> ... — заявка на экспорт",
-        "/data delete <file1> <file2> ... — удалить файлы",
+        "/data — показать список файлов (через запятую)",
+        "/data export file1.ext, file2.ext — заявка на экспорт",
+        "/data delete file1.ext, file2.ext — удалить файлы",
     ]
     return await msg.answer(mono("\n".join(help_text)))
