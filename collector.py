@@ -5,10 +5,14 @@ from typing import Dict, Any, List, Optional
 import httpx
 from datetime import datetime, timezone
 from metrics import save_metrics, read_pairs, normalize_pair
+from indicators import calculate_indicators
 
 logger = logging.getLogger(__name__)
 
 BINANCE_API = "https://api.binance.com/api/v3"
+
+# Таймфреймы как в старом боте: 12h, 6h, 4h, 2h
+TIMEFRAMES = ["12h", "6h", "4h", "2h"]
 
 async def fetch_ticker_price(client: httpx.AsyncClient, symbol: str) -> Optional[Dict[str, Any]]:
     """Получает текущую цену для пары с Binance"""
@@ -60,11 +64,11 @@ async def fetch_klines(
             data = response.json()
             return data
         else:
-            logger.warning(f"Failed to fetch klines for {symbol}: {response.status_code}")
+            logger.warning(f"Failed to fetch klines for {symbol} ({interval}): {response.status_code}")
             return None
 
     except Exception as e:
-        logger.error(f"Error fetching klines for {symbol}: {e}")
+        logger.error(f"Error fetching klines for {symbol} ({interval}): {e}")
         return None
 
 async def collect_metrics_for_symbol(
@@ -72,7 +76,7 @@ async def collect_metrics_for_symbol(
     symbol: str,
     storage_dir: str
 ) -> bool:
-    """Собирает все метрики для одной пары"""
+    """Собирает все метрики для одной пары (12h, 6h, 4h, 2h с SMA14 и ATR14)"""
     try:
         # Получаем текущую цену
         ticker = await fetch_ticker_price(client, symbol)
@@ -80,27 +84,35 @@ async def collect_metrics_for_symbol(
             logger.warning(f"Could not fetch ticker for {symbol}")
             return False
 
-        # Получаем свечные данные для разных интервалов
-        klines_4h = await fetch_klines(client, symbol, "4h", 100)
-        klines_1h = await fetch_klines(client, symbol, "1h", 100)
-        klines_15m = await fetch_klines(client, symbol, "15m", 100)
+        # Собираем свечи для всех таймфреймов
+        timeframes_data = {}
+        for tf in TIMEFRAMES:
+            klines = await fetch_klines(client, symbol, tf, 100)
+
+            if klines:
+                # Рассчитываем индикаторы
+                indicators = calculate_indicators(klines)
+
+                timeframes_data[tf] = {
+                    "klines": klines,
+                    "indicators": indicators,
+                }
+
+            # Задержка между запросами
+            await asyncio.sleep(0.05)
 
         # Формируем полные метрики
         metrics = {
             "symbol": symbol,
             "ticker": ticker,
-            "klines": {
-                "4h": klines_4h,
-                "1h": klines_1h,
-                "15m": klines_15m,
-            }
+            "timeframes": timeframes_data,
         }
 
         # Сохраняем в файл
         success = save_metrics(storage_dir, symbol, metrics)
 
         if success:
-            logger.info(f"Collected metrics for {symbol}")
+            logger.info(f"Collected metrics for {symbol} with timeframes: {', '.join(TIMEFRAMES)}")
 
         return success
 
@@ -118,7 +130,7 @@ async def collect_all_metrics(storage_dir: str, delay_ms: int = 100) -> Dict[str
         logger.warning("No pairs found in pairs.txt")
         return {}
 
-    logger.info(f"Starting metrics collection for {len(pairs)} pairs")
+    logger.info(f"Starting metrics collection for {len(pairs)} pairs with timeframes: {', '.join(TIMEFRAMES)}")
 
     results = {}
 
@@ -129,7 +141,7 @@ async def collect_all_metrics(storage_dir: str, delay_ms: int = 100) -> Dict[str
                 success = await collect_metrics_for_symbol(client, symbol, storage_dir)
                 results[symbol] = success
 
-                # Небольшая задержка между запросами
+                # Задержка между запросами
                 if delay_ms > 0:
                     await asyncio.sleep(delay_ms / 1000.0)
 

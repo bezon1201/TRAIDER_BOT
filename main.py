@@ -66,7 +66,7 @@ async def tg_send(chat_id: str, text: str) -> None:
 async def startup_event():
     """Send startup message and set webhook"""
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.2)")
+        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.3 с расчетом SMA14/ATR14)")
 
     # Set webhook
     if WEBHOOK_URL and BOT_TOKEN:
@@ -100,7 +100,7 @@ async def health_head():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"ok": True, "service": "traider-bot", "version": "4.2"}
+    return {"ok": True, "service": "traider-bot", "version": "4.3"}
 
 @app.head("/")
 async def root_head():
@@ -126,7 +126,7 @@ async def telegram_webhook(request: Request):
 
     # Handle /start command
     if text.lower() == "/start":
-        await tg_send(chat_id, "Привет! Бот успешно запущен (FastAPI v4.2 с модулем метрик).")
+        await tg_send(chat_id, "Привет! Бот запущен (FastAPI v4.3 с расчетом индикаторов).")
         return JSONResponse({"ok": True})
 
     # Handle /coins command
@@ -153,9 +153,8 @@ async def telegram_webhook(request: Request):
 
     # Handle /now command - collect metrics silently
     if text.lower() == "/now":
-        logger.info(f"Starting metrics collection from {chat_id}")
+        logger.info(f"Starting metrics collection (12h, 6h, 4h, 2h with SMA14/ATR14) from {chat_id}")
 
-        # Запускаем сбор метрик в фоне без блокировки ответа
         try:
             results = await collect_all_metrics(DATA_STORAGE, delay_ms=50)
             success_count = sum(1 for v in results.values() if v)
@@ -234,7 +233,7 @@ async def telegram_webhook(request: Request):
     help_text = ('Неизвестная команда.\nДоступные команды:\n' +
                 '/start - приветствие\n' +
                 '/coins - добавить пары для сбора метрик\n' +
-                '/now - собрать метрики (тихо, без сообщений)\n' +
+                '/now - собрать метрики (12h, 6h, 4h, 2h с SMA14/ATR14)\n' +
                 '/data - список файлов\n' +
                 '/data export all - отправить все файлы\n' +
                 '/data delete all - удалить все файлы')

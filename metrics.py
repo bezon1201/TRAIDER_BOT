@@ -97,14 +97,11 @@ def add_pairs(storage_dir: str, new_pairs: List[str]) -> tuple[bool, List[str]]:
 
 def parse_coins_command(command_text: str) -> List[str]:
     """Парсит команду /coins и извлекает пары"""
-    # Команда: /coins BTCUSDT ETHUSDT BNB...
     parts = command_text.strip().split()
 
-    # Пропускаем саму команду (/coins)
     if parts and parts[0].lower() == '/coins':
         parts = parts[1:]
 
-    # Фильтруем пустые строки
     pairs = [p.strip() for p in parts if p.strip()]
 
     return pairs
