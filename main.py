@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import httpx
 from pathlib import Path
 from data import DataStorage
+from metrics import parse_coins_command, add_pairs
 
 # Configure logging
 logging.basicConfig(
@@ -63,7 +64,7 @@ async def tg_send(chat_id: str, text: str) -> None:
 async def startup_event():
     """Send startup message and set webhook"""
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v3.1)")
+        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.1)")
 
     # Set webhook
     if WEBHOOK_URL and BOT_TOKEN:
@@ -97,7 +98,7 @@ async def health_head():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"ok": True, "service": "traider-bot"}
+    return {"ok": True, "service": "traider-bot", "version": "4.1"}
 
 @app.head("/")
 async def root_head():
@@ -123,7 +124,29 @@ async def telegram_webhook(request: Request):
 
     # Handle /start command
     if text.lower() == "/start":
-        await tg_send(chat_id, "Привет! Бот успешно запущен (FastAPI версия).")
+        await tg_send(chat_id, "Привет! Бот успешно запущен (FastAPI v4.1 с модулем метрик).")
+        return JSONResponse({"ok": True})
+
+    # Handle /coins command
+    if text.lower().startswith('/coins'):
+        pairs_list = parse_coins_command(text)
+
+        if not pairs_list:
+            await tg_send(chat_id, "Ошибка: укажите пары.\nПример: /coins BTCUSDT ETHUSDT")
+            return JSONResponse({"ok": True})
+
+        # Добавляем пары в файл
+        success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
+
+        if success:
+            pairs_str = ', '.join(all_pairs)
+            response_msg = ('✅ Пары обновлены.\n\n' +
+                          'Всего пар: ' + str(len(all_pairs)) + '\n' +
+                          'Список:\n' + pairs_str)
+            await tg_send(chat_id, response_msg)
+        else:
+            await tg_send(chat_id, "❌ Ошибка при обновлении пар")
+
         return JSONResponse({"ok": True})
 
     # Handle /data command
@@ -190,6 +213,7 @@ async def telegram_webhook(request: Request):
     # Default response
     help_text = ('Неизвестная команда.\nДоступные команды:\n' +
                 '/start - приветствие\n' +
+                '/coins - добавить пары для сбора метрик\n' +
                 '/data - список файлов\n' +
                 '/data export all - отправить все файлы\n' +
                 '/data delete all - удалить все файлы')
