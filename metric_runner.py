@@ -1,3 +1,4 @@
+
 import os
 from typing import Dict, List
 from datetime import datetime, timezone
@@ -6,14 +7,12 @@ import httpx
 
 BINANCE_BASE = "https://api.binance.com"
 
-# Normalization
 def normalize_symbol(token: str) -> str:
     return "".join(ch for ch in (token or "").lower() if ch.isalnum())
 
 def to_binance_symbol(symbol_lc: str) -> str:
     return (symbol_lc or "").upper()
 
-# Helpers
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
 
@@ -136,18 +135,3 @@ def write_json(storage_dir: str, symbol_lc: str, payload: Dict) -> None:
     import json
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
-
-async def run_now_for_all(symbols_lc: List[str], storage_dir: str) -> None:
-    for s in symbols_lc:
-        s_norm = normalize_symbol(s)
-        if not s_norm:
-            continue
-        data = await collect_symbol_metrics(s_norm)
-        write_json(storage_dir, s_norm, data)
-
-async def run_now_for_symbol(symbol_lc: str, storage_dir: str) -> None:
-    s_norm = normalize_symbol(symbol_lc)
-    if not s_norm:
-        return
-    data = await collect_symbol_metrics(s_norm)
-    write_json(storage_dir, s_norm, data)

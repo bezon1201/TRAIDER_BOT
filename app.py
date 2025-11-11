@@ -1,17 +1,21 @@
+
 import os
-from typing import List, Tuple, Set
+import json
+import time
+from typing import List, Tuple
 
 import httpx
 from fastapi import FastAPI, Request, Response, status
 
 from data import handle_cmd_data
-from metric_runner import run_now_for_all, run_now_for_symbol, normalize_symbol
+from metric_runner import run_now_for_all, run_now_for_symbol, normalize_symbol, collect_symbol_metrics, write_json
+from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
+from scheduler import load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults, human_period, human_hours
 
 app = FastAPI()
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
-# -------- env helpers --------
 def get_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
     if value is not None:
@@ -19,15 +23,15 @@ def get_env(name: str, default: str | None = None) -> str | None:
     return value or default
 
 BOT_TOKEN = get_env("TRAIDER_BOT_TOKEN")
-ADMIN_CHAT_ID = get_env("TRAIDER_ADMIN_CAHT_ID")  # не используется для /coins и /data
+ADMIN_CHAT_ID = get_env("TRAIDER_ADMIN_CAHT_ID")
 ADMIN_KEY = get_env("ADMIN_KEY")
 WEBHOOK_BASE = get_env("WEBHOOK_BASE")
 STORAGE_DIR = get_env("STORAGE_DIR", "/mnt/data")
 
 COINS_FILE = os.path.join(STORAGE_DIR, "coins.txt")
+SCHED_FILE = os.path.join(STORAGE_DIR, "scheduler.json")
+SCHED_LOG = os.path.join(STORAGE_DIR, "scheduler_log.jsonl")
 
-
-# -------- telegram io --------
 async def tg_send_message(chat_id: str, text: str) -> None:
     if not BOT_TOKEN or not chat_id:
         return
@@ -39,7 +43,6 @@ async def tg_send_message(chat_id: str, text: str) -> None:
             await client.post(url, json=payload)
         except Exception:
             pass
-
 
 async def tg_set_webhook() -> None:
     if not BOT_TOKEN or not WEBHOOK_BASE:
@@ -54,14 +57,11 @@ async def tg_set_webhook() -> None:
         except Exception:
             pass
 
-
-# -------- storage utils --------
 def ensure_storage() -> None:
     try:
         os.makedirs(STORAGE_DIR, exist_ok=True)
     except Exception:
         pass
-
 
 def read_coins() -> List[str]:
     if not os.path.exists(COINS_FILE):
@@ -74,20 +74,9 @@ def read_coins() -> List[str]:
     except Exception:
         return []
 
-
-def write_coins(symbols: List[str]) -> None:
-    ensure_storage()
-    uniq = sorted(set([s.strip() for s in symbols if s.strip()]))
-    text = "\n".join(uniq) + ("\n" if uniq else "")
-    with open(COINS_FILE, "w", encoding="utf-8") as f:
-        f.write(text)
-
-
-# -------- normalization for /coins --------
 def normalize_symbol_local(token: str) -> str:
     t = "".join(ch for ch in (token or "").lower() if ch.isalnum())
     return t
-
 
 def filter_symbols(raw: List[str]) -> Tuple[List[str], List[str]]:
     ok: List[str] = []
@@ -100,16 +89,14 @@ def filter_symbols(raw: List[str]) -> Tuple[List[str], List[str]]:
             bad.append(tok)
             continue
         ok.append(t)
-    seen: Set[str] = set()
-    ordered_ok: List[str] = []
+    seen = set()
+    ordered_ok = []
     for s in ok:
         if s not in seen:
             seen.add(s)
             ordered_ok.append(s)
     return ordered_ok, bad
 
-
-# -------- /coins handlers --------
 def format_coins_list(coins: List[str], title: str) -> str:
     if not coins:
         return f"{title}\n(список пуст)"
@@ -117,12 +104,17 @@ def format_coins_list(coins: List[str], title: str) -> str:
     lines.extend(coins)
     return "\n".join(lines)
 
-
 async def handle_cmd_coins_show(chat_id: str) -> None:
     coins = read_coins()
     text = format_coins_list(coins, "/coins — текущий список")
     await tg_send_message(chat_id, text)
 
+def write_coins(symbols: List[str]) -> None:
+    ensure_storage()
+    uniq = sorted(set([s.strip() for s in symbols if s.strip()]))
+    text = "\n".join(uniq) + ("\n" if uniq else "")
+    with open(COINS_FILE, "w", encoding="utf-8") as f:
+        f.write(text)
 
 async def handle_cmd_coins_add(chat_id: str, args: List[str]) -> None:
     if not args:
@@ -139,7 +131,6 @@ async def handle_cmd_coins_add(chat_id: str, args: List[str]) -> None:
     if bad:
         msg_lines.append(f"пропущено: {', '.join(bad)}")
     await tg_send_message(chat_id, "\n\n".join(msg_lines))
-
 
 async def handle_cmd_coins_rm(chat_id: str, args: List[str]) -> None:
     if not args:
@@ -159,8 +150,6 @@ async def handle_cmd_coins_rm(chat_id: str, args: List[str]) -> None:
         msg_lines.append(f"пропущено: {', '.join(bad)}")
     await tg_send_message(chat_id, "\n\n".join(msg_lines))
 
-
-# -------- helpers --------
 def parse_command(text: str):
     if not text:
         return "", []
@@ -172,26 +161,117 @@ def parse_command(text: str):
     args = parts[1:]
     return cmd, args
 
+from scheduler import human_period, human_hours, load_scheduler_cfg, save_scheduler_cfg, scheduler_defaults
 
-# -------- app lifecycle --------
+SCHED_FILE = None
+SCHED_LOG = None
+
+def sched_print(cfg: dict) -> str:
+    return (
+        "/scheduler\n"
+        f"enabled: {cfg.get('enabled', True)}\n"
+        f"period_sec: {cfg.get('period_sec')}   ({human_period(cfg.get('period_sec'))})\n"
+        f"publish_hours: {cfg.get('publish_hours')}   ({human_hours(cfg.get('publish_hours'))})\n"
+        f"delay_ms: {cfg.get('delay_ms')}\n"
+        f"jitter_sec: {cfg.get('jitter_sec')}\n"
+        f"last_run_utc: {cfg.get('last_run_utc')}\n"
+        f"next_due_utc: {cfg.get('next_due_utc')}\n"
+        f"last_publish_utc: {cfg.get('last_publish_utc')}\n"
+        f"next_publish_utc: {cfg.get('next_publish_utc')}"
+    )
+
+async def handle_cmd_scheduler(chat_id: str, args: List[str]) -> None:
+    cfg = load_scheduler_cfg(SCHED_FILE)
+    if not args:
+        await tg_send_message(chat_id, sched_print(cfg))
+        return
+
+    sub = (args[0] or "").casefold()
+    def save_and_show():
+        save_scheduler_cfg(SCHED_FILE, cfg)
+        return sched_print(cfg)
+
+    if sub == "period" and len(args) >= 2:
+        try:
+            sec = int(args[1])
+        except ValueError:
+            await tg_send_message(chat_id, "period must be integer seconds (60..86400)")
+            return
+        if not (60 <= sec <= 86400):
+            await tg_send_message(chat_id, "period out of range (60..86400)")
+            return
+        cfg["period_sec"] = sec
+        cfg["next_due_utc"] = None
+        await tg_send_message(chat_id, save_and_show()); return
+
+    if sub == "publish" and len(args) >= 2:
+        try:
+            hours = int(args[1])
+        except ValueError:
+            await tg_send_message(chat_id, "publish must be integer hours (12..72)")
+            return
+        if not (12 <= hours <= 72):
+            await tg_send_message(chat_id, "publish out of range (12..72)")
+            return
+        cfg["publish_hours"] = hours
+        cfg["next_publish_utc"] = None
+        await tg_send_message(chat_id, save_and_show()); return
+
+    if sub == "delay" and len(args) >= 2:
+        try:
+            ms = int(args[1])
+        except ValueError:
+            await tg_send_message(chat_id, "delay must be integer ms (1..3)")
+            return
+        if not (1 <= ms <= 3):
+            await tg_send_message(chat_id, "delay out of range (1..3)")
+            return
+        cfg["delay_ms"] = ms
+        await tg_send_message(chat_id, save_and_show()); return
+
+    if sub == "jitter" and len(args) >= 2:
+        try:
+            js = int(args[1])
+        except ValueError:
+            await tg_send_message(chat_id, "jitter must be integer seconds (1..3)")
+            return
+        if not (1 <= js <= 3):
+            await tg_send_message(chat_id, "jitter out of range (1..3)")
+            return
+        cfg["jitter_sec"] = js
+        await tg_send_message(chat_id, save_and_show()); return
+
+    if sub in ("on", "off"):
+        cfg["enabled"] = (sub == "on")
+        await tg_send_message(chat_id, save_and_show()); return
+
+    await tg_send_message(chat_id, "Использование:\n"
+                         "/scheduler\n"
+                         "/scheduler period <sec> 60-86400\n"
+                         "/scheduler publish <H> 12-72\n"
+                         "/scheduler delay <ms>1-3\n"
+                         "/scheduler jitter <sec>1-3\n"
+                         "/scheduler on|off")
+
+from market_mode import compute_overall_mode_from_metrics, append_raw_snapshot, publish_if_due
+from metric_runner import collect_symbol_metrics, write_json, normalize_symbol
+
 @app.on_event("startup")
 async def on_startup() -> None:
+    global SCHED_FILE, SCHED_LOG, STORAGE_DIR
+    STORAGE_DIR = get_env("STORAGE_DIR", "/mnt/data")
+    SCHED_FILE = os.path.join(STORAGE_DIR, "scheduler.json")
+    SCHED_LOG = os.path.join(STORAGE_DIR, "scheduler_log.jsonl")
     ensure_storage()
+    if not os.path.exists(SCHED_FILE):
+        save_scheduler_cfg(SCHED_FILE, scheduler_defaults())
     await tg_set_webhook()
-    if ADMIN_CHAT_ID:
-        text = "🤖 Trader bot skeleton started."
-        if ADMIN_KEY:
-            text += f" Admin key: {ADMIN_KEY}"
-        await tg_send_message(ADMIN_CHAT_ID, text)
-
 
 @app.get("/", include_in_schema=False)
 @app.head("/", include_in_schema=False)
 async def healthcheck() -> Response:
     return Response(status_code=status.HTTP_200_OK, content="ok")
 
-
-# -------- webhook --------
 @app.post("/webhook", include_in_schema=False)
 async def telegram_webhook(request: Request) -> Response:
     try:
@@ -209,7 +289,6 @@ async def telegram_webhook(request: Request) -> Response:
 
     cmd, args = parse_command(text)
 
-    # /coins
     if cmd.startswith("/coins"):
         if len(args) == 0:
             await handle_cmd_coins_show(chat_id)
@@ -224,12 +303,14 @@ async def telegram_webhook(request: Request) -> Response:
                 await tg_send_message(chat_id, "Использование:\n/coins — показать\n/coins +add <symbols...>\n/coins +rm <symbols...>")
         return Response(status_code=status.HTTP_200_OK)
 
-    # /data
     if cmd.startswith("/data"):
         await handle_cmd_data(chat_id, args)
         return Response(status_code=status.HTTP_200_OK)
 
-    # /now — тихо
+    if cmd.startswith("/scheduler"):
+        await handle_cmd_scheduler(chat_id, args)
+        return Response(status_code=status.HTTP_200_OK)
+
     if cmd.startswith("/now"):
         if len(args) == 0:
             symbols = read_coins()
@@ -239,4 +320,72 @@ async def telegram_webhook(request: Request) -> Response:
             await run_now_for_symbol(sym, storage_dir=STORAGE_DIR)
         return Response(status_code=status.HTTP_200_OK)
 
+    return Response(status_code=status.HTTP_200_OK)
+
+async def _sleep_ms(ms: int):
+    await httpx.AsyncClient().aclose()
+    time.sleep(ms / 1000.0)
+
+def _log_scheduler(status: str, msg: str):
+    rec = {"ts": int(time.time()), "status": status, "msg": msg}
+    # render (stdout) log
+    try:
+        print(json.dumps(rec, ensure_ascii=False), flush=True)
+    except Exception:
+        pass
+    # file log (kept)
+    try:
+        with open(SCHED_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+@app.post("/cron/run", include_in_schema=False)
+async def cron_run(request: Request) -> Response:
+    key = request.query_params.get("key") or ""
+    if ADMIN_KEY and key != ADMIN_KEY:
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
+
+    cfg = load_scheduler_cfg(SCHED_FILE) or scheduler_defaults()
+    now = int(time.time())
+
+    if not cfg.get("enabled", True):
+        _log_scheduler("stop", "disabled")
+        return Response(status_code=status.HTTP_200_OK)
+
+    next_due = cfg.get("next_due_utc")
+    if next_due and now < next_due:
+        return Response(status_code=status.HTTP_200_OK)
+
+    _log_scheduler("start", "run begin")
+    coins = read_coins()
+    delay_ms = int(cfg.get("delay_ms", 2))
+
+    errors = []
+    try:
+        for s in coins:
+            s_norm = normalize_symbol(s)
+            try:
+                metrics = await collect_symbol_metrics(s_norm)
+                write_json(STORAGE_DIR, s_norm, metrics)
+                raw_mode, tf_signals = compute_overall_mode_from_metrics(metrics)
+                append_raw_snapshot(STORAGE_DIR, s_norm, raw_mode, tf_signals)
+                publish_if_due(STORAGE_DIR, s_norm, cfg)
+            except Exception as e:
+                errors.append(f"{s_norm}:{e}")
+            if delay_ms > 0:
+                await _sleep_ms(delay_ms)
+        _log_scheduler("success", f"run ok; coins={len(coins)}; errors={len(errors)}")
+    except Exception as e:
+        errors.append(str(e))
+        _log_scheduler("error", "; ".join(errors))
+
+    period = int(cfg.get("period_sec", 900))
+    jitter = int(cfg.get("jitter_sec", 2))
+    cfg["last_run_utc"] = now
+    cfg["next_due_utc"] = now + period + (0 if jitter <= 0 else (int(time.time()) % (jitter+1)))
+    if cfg.get("next_publish_utc") is None:
+        cfg["next_publish_utc"] = now + int(cfg.get("publish_hours", 24)) * 3600
+
+    save_scheduler_cfg(SCHED_FILE, cfg)
     return Response(status_code=status.HTTP_200_OK)
