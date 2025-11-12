@@ -10,7 +10,7 @@ from typing import Optional
 
 from data import load_symbol_json, save_symbol_json, get_storage_dir, list_symbols, get_symbol_bias
 from market_calculation import force_market_mode, calculate_and_save_raw_markets, run_market_pipeline_by_bias
-from collector import collect_metrics
+from collector import collect_all_metrics
 
 def resolve_symbol_from_ctx(ctx) -> Optional[str]:
     # Placeholder; adjust to your context extraction logic

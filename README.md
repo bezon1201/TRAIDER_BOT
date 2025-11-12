@@ -18,3 +18,6 @@ Updated: 2025-11-12T15:46:13.774058
 - `metric_scheduler_config.json` — updated example (no 4h/2h hard-coding).
 - `migrations/add_bias_default_long.py` — new one-off migration.
 
+
+
+**Compat note (v1.2):** switched to `collector.collect_all_metrics(symbol)` to match existing API. The scheduler and commands now trigger a full metrics collection; market calculation still uses the bias to pick 12+6 or 6+4.
