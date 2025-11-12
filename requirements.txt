@@ -1,6 +1,3 @@
 fastapi
-uvicorn
+uvicorn[standard]
 httpx
-python-dotenv
-uvloop
-python-binance

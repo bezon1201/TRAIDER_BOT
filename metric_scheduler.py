@@ -1,160 +1,304 @@
-import os
+import asyncio
 import json
 import logging
-import asyncio
 import random
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
+from typing import Any, Dict, Optional
+
+from collector import collect_all_metrics
+from metrics import read_pairs
+from market_calculation import force_market_mode
 
 logger = logging.getLogger(__name__)
 
-SCHEDULER_TASK = None
-ENABLED = True
+CONFIG_FILENAME = "metric_scheduler_confyg.json"
+LOG_FILENAME = "metric_scheduler.jsonl"
 
-def get_config_path(storage_path: str):
-    return Path(storage_path) / "metric_scheduler_confyg.json"
+DEFAULT_PERIOD = 3600          # сек
+MIN_PERIOD = 900
+MAX_PERIOD = 86400
 
-def get_log_path(storage_path: str):
-    return Path(storage_path) / "metric_scheduler.jsonl"
+DEFAULT_PUBLISH_HOURS = 24     # часы
+MIN_PUBLISH_HOURS = 1
+MAX_PUBLISH_HOURS = 96
 
-def get_config(storage_path: str):
-    config_path = get_config_path(storage_path)
-    if config_path.exists():
+_state: Dict[str, Any] = {
+    "storage_dir": None,
+    "period": DEFAULT_PERIOD,
+    "publish_hours": DEFAULT_PUBLISH_HOURS,
+    "enabled": True,
+    "last_publish": None,
+    "task": None,
+}
+
+
+def _clamp_period(value: int) -> int:
+    try:
+        v = int(value)
+    except Exception:
+        return DEFAULT_PERIOD
+    if v < MIN_PERIOD:
+        return MIN_PERIOD
+    if v > MAX_PERIOD:
+        return MAX_PERIOD
+    return v
+
+
+def _clamp_publish_hours(value: int) -> int:
+    try:
+        v = int(value)
+    except Exception:
+        return DEFAULT_PUBLISH_HOURS
+    if v < MIN_PUBLISH_HOURS:
+        return MIN_PUBLISH_HOURS
+    if v > MAX_PUBLISH_HOURS:
+        return MAX_PUBLISH_HOURS
+    return v
+
+
+def _get_storage_path() -> Optional[Path]:
+    storage_dir = _state.get("storage_dir")
+    if not storage_dir:
+        return None
+    return Path(storage_dir)
+
+
+def _log_event(event_type: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Лог в metric_scheduler.jsonl + обычный логгер.
+    """
+    storage_path = _get_storage_path()
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event_type,
+        "message": message,
+    }
+    if extra:
+        record["extra"] = extra
+    logger.info(f"[metric_scheduler] {event_type}: {message} | {extra or {}}")
+    if not storage_path:
+        return
+    try:
+        log_file = storage_path / LOG_FILENAME
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"Error writing metric_scheduler log: {e}")
+
+
+def _save_config() -> None:
+    storage_path = _get_storage_path()
+    if not storage_path:
+        return
+    cfg_path = storage_path / CONFIG_FILENAME
+    data = {
+        "P": int(_state.get("period", DEFAULT_PERIOD)),
+        "N": int(_state.get("publish_hours", DEFAULT_PUBLISH_HOURS)),
+    }
+    try:
+        tmp_path = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        tmp_path.replace(cfg_path)
+        _log_event("config_saved", "Config saved", data)
+    except Exception as e:
+        logger.error(f"Error saving metric_scheduler config: {e}")
+
+
+def _load_or_init_config() -> None:
+    storage_path = _get_storage_path()
+    if not storage_path:
+        logger.error("No storage_dir for metric_scheduler")
+        return
+    cfg_path = storage_path / CONFIG_FILENAME
+    data: Dict[str, Any] = {}
+    if cfg_path.exists():
         try:
-            with open(config_path, 'r') as f:
-                return json.load(f)
-        except:
-            pass
-    return {"enabled": True, "period_seconds": 3600, "publish_hours": 24, "last_publish": None}
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Error reading metric_scheduler config, using defaults: {e}")
+            data = {}
 
-def save_config(storage_path: str, config: dict):
-    config_path = get_config_path(storage_path)
-    try:
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        logger.info("✓ Config saved")
-    except Exception as e:
-        logger.error(f"Error saving config: {e}")
+    period = _clamp_period(data.get("P", DEFAULT_PERIOD))
+    publish_hours = _clamp_publish_hours(data.get("N", DEFAULT_PUBLISH_HOURS))
 
-def log_action(storage_path: str, action: str, status: str, details: str = ""):
-    log_path = get_log_path(storage_path)
-    try:
-        log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "action": action,
-            "status": status,
-            "details": details
-        }
-        with open(log_path, 'a') as f:
-            f.write(json.dumps(log_entry) + '\n')
-    except Exception as e:
-        logger.error(f"Error logging action: {e}")
+    _state["period"] = period
+    _state["publish_hours"] = publish_hours
+    # enabled при старте всегда ON
+    _state["enabled"] = True
 
-def set_scheduler_enabled(storage_path: str, enabled: bool):
-    global ENABLED
-    cfg = get_config(storage_path)
-    cfg["enabled"] = enabled
-    ENABLED = enabled
-    save_config(storage_path, cfg)
-    log_action(storage_path, "scheduler_control", "success", f"enabled={enabled}")
-    return True
+    _save_config()
+    _log_event("config_loaded", "Config loaded", {"P": period, "N": publish_hours})
 
-def set_scheduler_period(storage_path: str, period: int):
-    if period < 900 or period > 86400:
-        return False
-    cfg = get_config(storage_path)
-    cfg["period_seconds"] = period
-    save_config(storage_path, cfg)
-    log_action(storage_path, "set_period", "success", f"period={period}s")
-    return True
 
-def set_scheduler_publish(storage_path: str, hours: int):
-    if hours < 1 or hours > 96:
-        return False
-    cfg = get_config(storage_path)
-    cfg["publish_hours"] = hours
-    save_config(storage_path, cfg)
-    log_action(storage_path, "set_publish", "success", f"publish={hours}h")
-    return True
+async def _maybe_publish_market_modes() -> None:
+    """
+    Периодическая публикация market_mode:
+    если прошло >= N часов + J (1–3 сек) с последней публикации.
+    Используем фрейм 12+6 для записи в <symbol>.json.
+    """
+    storage_path = _get_storage_path()
+    if not storage_path:
+        _log_event("error", "No storage_dir in _maybe_publish_market_modes")
+        return
 
-async def start_scheduler(storage_path: str):
-    global SCHEDULER_TASK, ENABLED
+    now = datetime.now(timezone.utc)
+    last_publish: Optional[datetime] = _state.get("last_publish")
+    jitter_sec = random.randint(1, 3)
+    interval_sec = int(_state.get("publish_hours", DEFAULT_PUBLISH_HOURS)) * 3600 + jitter_sec
 
-    cfg = get_config(storage_path)
-    ENABLED = cfg.get("enabled", True)
-    save_config(storage_path, cfg)
+    if last_publish is not None:
+        delta = (now - last_publish).total_seconds()
+        if delta < interval_sec:
+            return
 
-    logger.info("📡 Scheduler task created")
-    SCHEDULER_TASK = asyncio.create_task(_scheduler_loop(storage_path))
-    logger.info("🚀 Scheduler started (no lock)")
+    pairs = read_pairs(str(storage_path))
+    if not pairs:
+        _log_event("publish_skip", "No pairs to publish market_mode")
+        _state["last_publish"] = now
+        return
 
-async def _scheduler_loop(storage_path: str):
-    global ENABLED
+    for symbol in pairs:
+        try:
+            result = force_market_mode(str(storage_path), symbol, "12+6")
+            _log_event(
+                "publish",
+                f"market_mode published for {symbol}",
+                {"symbol": symbol, "frame": "12+6", "result": result},
+            )
+        except Exception as e:
+            logger.error(f"Error publishing market_mode for {symbol}: {e}")
+            _log_event("error", f"Error publishing market_mode for {symbol}: {e}")
 
-    from collector import collect_all_metrics
-    from market_calculation import force_market_mode
-    from metrics import read_pairs
+    _state["last_publish"] = now
+    _log_event("publish_done", "market_mode published for all pairs", {"pairs": len(pairs)})
+
+
+async def _run_loop() -> None:
+    """
+    Основной цикл планировщика:
+    каждые P + J сек собирает метрики и рассчитывает raw состояния.
+    """
+    storage_path = _get_storage_path()
+    if not storage_path:
+        logger.error("metric_scheduler: storage_dir is not set, stopping loop")
+        _log_event("error", "storage_dir is not set, scheduler stopped")
+        return
+
+    _log_event(
+        "scheduler_start",
+        "Metric scheduler started",
+        {"P": _state.get("period"), "N": _state.get("publish_hours")},
+    )
 
     while True:
         try:
-            cfg = get_config(storage_path)
-            ENABLED = cfg.get("enabled", True)
-
-            if not ENABLED:
-                await asyncio.sleep(60)
+            if not _state.get("enabled", True):
+                # Планировщик выключен, но цикл живой
+                await asyncio.sleep(5)
                 continue
 
-            logger.info("🔄 Collecting metrics...")
-            log_action(storage_path, "collect_start", "info", "")
+            period = int(_state.get("period", DEFAULT_PERIOD))
+            jitter_cycle = random.randint(1, 3)
 
-            try:
-                results = await collect_all_metrics(storage_path, delay_ms=50)
-                success = sum(1 for v in results.values() if v)
-                total = len(results)
-                log_action(storage_path, "collect_end", "success", f"{success}/{total}")
-                logger.info(f"✓ Metrics: {success}/{total}")
-            except Exception as e:
-                logger.error(f"Collect error: {e}")
-                log_action(storage_path, "collect_end", "error", str(e))
+            _log_event(
+                "cycle_start",
+                "Collecting metrics",
+                {"period": period, "jitter": jitter_cycle},
+            )
 
-            logger.info("📊 Publishing market_mode...")
-            log_action(storage_path, "publish_start", "info", "")
+            results = await collect_all_metrics(str(storage_path), delay_ms=50)
+            success = sum(1 for v in results.values() if v)
+            total = len(results)
+            _log_event(
+                "cycle_done",
+                "Metrics collected",
+                {"success": success, "total": total},
+            )
 
-            try:
-                pairs = read_pairs(storage_path)
-                for pair in pairs:
-                    pair = pair.strip().upper()
-                    force_market_mode(storage_path, pair, "12+6")
-                    force_market_mode(storage_path, pair, "4+2")
+            # Рутинная публикация market_mode
+            await _maybe_publish_market_modes()
 
-                cfg["last_publish"] = datetime.utcnow().isoformat() + "Z"
-                save_config(storage_path, cfg)
-                log_action(storage_path, "publish_end", "success", f"pairs={len(pairs)}")
-                logger.info("✓ Market mode published")
-            except Exception as e:
-                logger.error(f"Publish error: {e}")
-                log_action(storage_path, "publish_end", "error", str(e))
-
-            period = cfg.get("period_seconds", 3600)
-            jitter = random.randint(1, 3)
-            wait_time = period + jitter
-            logger.info(f"⏱ Waiting {wait_time}s until next cycle...")
-
-            await asyncio.sleep(wait_time)
-
-        except asyncio.CancelledError:
-            logger.info("⛔ Scheduler cancelled")
-            log_action(storage_path, "scheduler_stop", "info", "cancelled")
-            break
+            await asyncio.sleep(max(1, period + jitter_cycle))
         except Exception as e:
-            logger.error(f"Scheduler error: {e}")
-            log_action(storage_path, "scheduler_error", "error", str(e))
-            await asyncio.sleep(60)
+            logger.exception("Metric scheduler loop error")
+            _log_event("error", f"Scheduler loop error: {e}")
+            # Если что-то пошло совсем не так, не падаем, а даём паузу
+            await asyncio.sleep(10)
 
-def stop_scheduler():
-    global SCHEDULER_TASK
 
-    if SCHEDULER_TASK:
-        SCHEDULER_TASK.cancel()
-        SCHEDULER_TASK = None
-        logger.info("✓ Scheduler stopped")
+def start_scheduler(storage_dir: str) -> None:
+    """
+    Инициализация и запуск планировщика.
+    Вызывается один раз при старте бота.
+    """
+    if not storage_dir:
+        logger.error("metric_scheduler: empty storage_dir")
+        return
+
+    _state["storage_dir"] = storage_dir
+    _load_or_init_config()
+
+    existing_task: Optional[asyncio.Task] = _state.get("task")
+    if existing_task and not existing_task.done():
+        return
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    task = loop.create_task(_run_loop(), name="metric_scheduler_loop")
+    _state["task"] = task
+    _log_event("scheduler_created", "Scheduler task created", {})
+
+
+def get_status() -> Dict[str, Any]:
+    """
+    Статус для команды /scheduler confyg.
+    """
+    task: Optional[asyncio.Task] = _state.get("task")
+    running = bool(task and not task.done())
+    if not running:
+        logger.error("metric_scheduler task is not running")
+        _log_event("error", "metric_scheduler task is not running")
+
+    last_publish: Optional[datetime] = _state.get("last_publish")
+    return {
+        "period": int(_state.get("period", DEFAULT_PERIOD)),
+        "publish_hours": int(_state.get("publish_hours", DEFAULT_PUBLISH_HOURS)),
+        "enabled": bool(_state.get("enabled", True)),
+        "running": running,
+        "last_publish": last_publish.isoformat() if last_publish else None,
+    }
+
+
+def set_period(period: int) -> None:
+    """
+    /scheduler period <P>
+    """
+    new_period = _clamp_period(period)
+    _state["period"] = new_period
+    _save_config()
+    _log_event("config_update", "Period updated", {"P": new_period})
+
+
+def set_publish_hours(hours: int) -> None:
+    """
+    /scheduler publish <N>
+    """
+    new_hours = _clamp_publish_hours(hours)
+    _state["publish_hours"] = new_hours
+    _save_config()
+    _log_event("config_update", "Publish hours updated", {"N": new_hours})
+
+
+def set_enabled(enabled: bool) -> None:
+    """
+    /scheduler on | off
+    """
+    _state["enabled"] = bool(enabled)
+    _log_event("config_update", "Scheduler enabled changed", {"enabled": bool(enabled)})
