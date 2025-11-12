@@ -304,7 +304,7 @@ async def telegram_webhook(request: Request):
             set_market_mode(DATA_STORAGE, symbol, result)
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
+        msg = f"market_mode для режима {mode}\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 
