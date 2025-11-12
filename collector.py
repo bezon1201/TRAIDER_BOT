@@ -47,34 +47,6 @@ async def fetch_ticker_price(client: httpx.AsyncClient, symbol: str) -> Optional
         logger.error(f"Error fetching ticker for {symbol}: {e}")
         return None
 
-async def fetch_klines(
-    client: httpx.AsyncClient,
-    symbol: str,
-    interval: str = "4h",
-    limit: int = 100
-) -> Optional[List[List[Any]]]:
-    """Получает свечные данные (klines) с Binance"""
-    try:
-        response = await client.get(
-            f"{BINANCE_API}/klines",
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "limit": limit
-            }
-        )
-
-        if response.status_code == 200:
-            data = response.json()
-            return data
-        else:
-            logger.warning(f"Failed to fetch klines for {symbol} ({interval}): {response.status_code}")
-            return None
-
-    except Exception as e:
-        logger.error(f"Error fetching klines for {symbol} ({interval}): {e}")
-        return None
-
 async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optional[Dict[str, Any]]:
     """Получает фильтры и ограничения пары с Binance (кешируется на 6 часов)"""
     current_time = datetime.now(timezone.utc).timestamp()
@@ -149,23 +121,58 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
         logger.error(f"Error fetching exchange info for {symbol}: {e}")
         return None
 
+async def fetch_klines(
+    client: httpx.AsyncClient,
+    symbol: str,
+    interval: str = "4h",
+    limit: int = 100
+) -> Optional[List[List[Any]]]:
+    """Получает свечные данные (klines) с Binance"""
+    try:
+        response = await client.get(
+            f"{BINANCE_API}/klines",
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit
+            }
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            logger.warning(f"Failed to fetch klines for {symbol} ({interval}): {response.status_code}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error fetching klines for {symbol} ({interval}): {e}")
+        return None
+
 async def collect_metrics_for_symbol(
     client: httpx.AsyncClient,
     symbol: str,
     storage_dir: str
 ) -> bool:
-    """Собирает все метрики для одной пары (12h, 6h, 4h, 2h с SMA14 и ATR14 + фильтры)"""
+    """Собирает ВСЕ метрики для одной пары в один вызов:
+    - Ticker (текущая цена)
+    - Filters (торговые ограничения)
+    - Klines (свечи для 12h, 6h, 4h, 2h)
+    - Indicators (SMA14, ATR14 для каждого таймфрейма)
+
+    ВСЕ ДАННЫЕ сохраняются в один JSON файл!
+    """
     try:
-        # Получаем текущую цену
+        # 1. Получаем текущую цену
         ticker = await fetch_ticker_price(client, symbol)
         if not ticker:
             logger.warning(f"Could not fetch ticker for {symbol}")
             return False
 
-        # Получаем фильтры (с кешем на 6 часов)
+        # 2. Получаем фильтры (с кешем на 6 часов)
         filters = await fetch_exchange_info(client, symbol)
 
-        # Собираем свечи для всех таймфреймов
+        # 3. Собираем свечи для всех таймфреймов
         timeframes_data = {}
         for tf in TIMEFRAMES:
             klines = await fetch_klines(client, symbol, tf, 100)
@@ -182,19 +189,19 @@ async def collect_metrics_for_symbol(
             # Задержка между запросами
             await asyncio.sleep(0.05)
 
-        # Формируем полные метрики
+        # 4. Формируем ПОЛНЫЕ метрики в одной структуре
         metrics = {
             "symbol": symbol,
             "ticker": ticker,
-            "filters": filters,
+            "filters": filters,  # ← Фильтры здесь!
             "timeframes": timeframes_data,
         }
 
-        # Сохраняем в файл
+        # 5. Сохраняем ВСЁ в один JSON файл
         success = save_metrics(storage_dir, symbol, metrics)
 
         if success:
-            logger.info(f"Collected metrics for {symbol} with timeframes: {', '.join(TIMEFRAMES)}")
+            logger.info(f"Collected complete metrics for {symbol} with all data unified")
 
         return success
 
@@ -212,7 +219,7 @@ async def collect_all_metrics(storage_dir: str, delay_ms: int = 100) -> Dict[str
         logger.warning("No pairs found in pairs.txt")
         return {}
 
-    logger.info(f"Starting metrics collection for {len(pairs)} pairs with timeframes: {', '.join(TIMEFRAMES)}")
+    logger.info(f"Starting unified metrics collection for {len(pairs)} pairs (ticker + filters + klines + indicators)")
 
     results = {}
 

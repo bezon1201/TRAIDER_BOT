@@ -18,7 +18,6 @@ def calculate_atr(highs: List[float], lows: List[float], closes: List[float], pe
     if len(highs) < period or len(lows) < period or len(closes) < period:
         return None
 
-    # Вычисляем True Range для каждого периода
     tr_values = []
 
     for i in range(len(closes)):
@@ -32,9 +31,7 @@ def calculate_atr(highs: List[float], lows: List[float], closes: List[float], pe
             )
         tr_values.append(tr)
 
-    # ATR = SMA от True Range за последние 14 периодов
     atr = sum(tr_values[-period:]) / period
-
     return atr
 
 def extract_ohlcv_from_klines(klines: List[List[Any]]) -> Dict[str, List[float]]:
@@ -49,14 +46,12 @@ def extract_ohlcv_from_klines(klines: List[List[Any]]) -> Dict[str, List[float]]
     volumes = []
 
     for kline in klines:
-        # Формат Binance kline:
-        # [time, open, high, low, close, volume, ...]
         try:
             opens.append(float(kline[1]))
             highs.append(float(kline[2]))
             lows.append(float(kline[3]))
             closes.append(float(kline[4]))
-            volumes.append(float(kline[7]))  # Quote asset volume
+            volumes.append(float(kline[7]))
         except (IndexError, ValueError) as e:
             logger.warning(f"Error parsing kline: {e}")
             continue

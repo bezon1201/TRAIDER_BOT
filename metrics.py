@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import List, Set, Dict, Any
+from typing import List, Dict, Any
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,6 @@ def write_pairs(storage_dir: str, pairs: List[str]) -> bool:
         os.makedirs(storage_dir, exist_ok=True)
         pairs_path = get_pairs_file_path(storage_dir)
 
-        # Нормализация и удаление дубликатов
         normalized = []
         seen = set()
         for pair in pairs:
@@ -56,7 +55,6 @@ def write_pairs(storage_dir: str, pairs: List[str]) -> bool:
                 normalized.append(normalized_pair)
                 seen.add(normalized_pair)
 
-        # Сортировка для консистентности
         normalized.sort()
 
         with open(pairs_path, 'w', encoding='utf-8') as f:
@@ -73,22 +71,15 @@ def write_pairs(storage_dir: str, pairs: List[str]) -> bool:
 def add_pairs(storage_dir: str, new_pairs: List[str]) -> tuple[bool, List[str]]:
     """Добавляет новые пары к существующему списку"""
     try:
-        # Читаем существующие пары
         existing_pairs = read_pairs(storage_dir)
-
-        # Объединяем и удаляем дубликаты
         all_pairs = existing_pairs.copy()
-        added_count = 0
 
         for new_pair in new_pairs:
             normalized = normalize_pair(new_pair)
             if normalized and normalized not in all_pairs:
                 all_pairs.append(normalized)
-                added_count += 1
 
-        # Записываем обратно
         write_pairs(storage_dir, all_pairs)
-
         return True, all_pairs
 
     except Exception as e:
@@ -103,7 +94,6 @@ def parse_coins_command(command_text: str) -> List[str]:
         parts = parts[1:]
 
     pairs = [p.strip() for p in parts if p.strip()]
-
     return pairs
 
 def get_coin_file_path(storage_dir: str, symbol: str) -> str:
