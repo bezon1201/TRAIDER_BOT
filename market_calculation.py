@@ -28,14 +28,12 @@ def calculate_raw_markets(storage_path: str, symbol: str):
 
     file_path = Path(storage_path) / f"{symbol}_raw_market_12+6.jsonl"
     with open(file_path, 'w') as f:
-        f.write(json.dumps(raw_12_6) + "
-")
+        f.write(json.dumps(raw_12_6) + "\n")
     logger.info(f"✓ Raw market saved: {symbol}_raw_market_12+6.jsonl")
 
     file_path = Path(storage_path) / f"{symbol}_raw_market_4+2.jsonl"
     with open(file_path, 'w') as f:
-        f.write(json.dumps(raw_4_2) + "
-")
+        f.write(json.dumps(raw_4_2) + "\n")
     logger.info(f"✓ Raw market saved: {symbol}_raw_market_4+2.jsonl")
 
 def force_market_mode(storage_path: str, symbol: str, frame: str):

@@ -67,7 +67,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 async def startup():
     await start_scheduler(DATA_STORAGE)
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.0)\nПланировщик активирован")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.1)\nПланировщик активирован")
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -81,7 +81,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "6.0"}
+    return {"ok": True, "service": "traider-bot", "version": "6.1"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -100,7 +100,7 @@ async def telegram_webhook(request: Request):
     logger.info(f"Message from {chat_id}: {text[:50]}")
 
     if text.lower() == "/start":
-        help_text = "✅ Бот готов (v6.0)!\n\n📝 Команды:\n/coins - показать пары\n/coins PAIR1 PAIR2 - добавить пары\n/coins delete PAIR1 PAIR2 - удалить пары\n/now - собрать метрики\n/market force 12+6 - market_mode для 12+6\n/market force 4+2 - market_mode для 4+2\n/scheduler confyg - показать конфиг\n/scheduler on|off - вкл/выкл планировщик\n/scheduler period <P> - период сбора (900-86400)\n/scheduler publish <N> - период публик (1-96ч)\n/data - список файлов\n/data export all - отправить все\n/data delete all - удалить все\n/data delete file1.xxx, file2.xxx - удалить конкретные"
+        help_text = "✅ Бот готов (v6.1)!\n\n📝 Команды:\n/coins - показать пары\n/coins PAIR1 PAIR2 - добавить пары\n/coins delete PAIR1 PAIR2 - удалить пары\n/now - собрать метрики\n/market force 12+6 - market_mode для 12+6\n/market force 4+2 - market_mode для 4+2\n/scheduler confyg - показать конфиг\n/scheduler on|off - вкл/выкл планировщик\n/scheduler period <P> - период сбора (900-86400)\n/scheduler publish <N> - период публик (1-96ч)\n/data - список файлов\n/data export all - отправить все\n/data delete all - удалить все\n/data delete file1.xxx, file2.xxx - удалить конкретные"
         await tg_send(chat_id, help_text)
         return JSONResponse({"ok": True})
 
