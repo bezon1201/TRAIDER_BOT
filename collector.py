@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from binance.client import Client
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -23,18 +22,16 @@ async def collect_all_metrics(storage_path: str, delay_ms: int = 50):
     try:
         for symbol in pairs:
             try:
-                ticker = httpx.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}").json()
-                exchange_info = httpx.get(f"https://api.binance.com/api/v3/exchangeInfo?symbol={symbol}").json()
+                ticker = httpx.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}", timeout=10).json()
 
-                klines_12h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=12h&limit=30").json()
-                klines_6h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=6h&limit=30").json()
-                klines_4h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=4h&limit=30").json()
-                klines_2h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=2h&limit=30").json()
+                klines_12h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=12h&limit=30", timeout=10).json()
+                klines_6h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=6h&limit=30", timeout=10).json()
+                klines_4h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=4h&limit=30", timeout=10).json()
+                klines_2h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=2h&limit=30", timeout=10).json()
 
                 metrics_data = {
                     "symbol": symbol,
                     "ticker": ticker,
-                    "exchange_info": exchange_info,
                     "klines": {
                         "12h": klines_12h,
                         "6h": klines_6h,

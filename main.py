@@ -37,6 +37,8 @@ async def tg_send(chat_id: str, text: str) -> None:
         )
         if response.status_code == 200:
             logger.info(f"✓ Message sent to {chat_id}")
+        else:
+            logger.error(f"Telegram API error: {response.status_code}")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
 
@@ -65,7 +67,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 async def startup():
     await start_scheduler(DATA_STORAGE)
     if ADMIN_CHAT_ID:
-        msg = "✅ Бот запущен (v6.0)" + chr(10) + "Планировщик активирован"
+        msg = "✅ Бот запущен (v6.0-STABLE)\nПланировщик активирован"
         await tg_send(ADMIN_CHAT_ID, msg)
 
 @app.on_event("shutdown")
@@ -80,7 +82,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "6.0"}
+    return {"ok": True, "service": "traider-bot", "version": "6.0-STABLE"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -99,22 +101,23 @@ async def telegram_webhook(request: Request):
     logger.info(f"Message from {chat_id}: {text[:50]}")
 
     if text.lower() == "/start":
-        help_text = ("✅ Бот готов (v6.0)!" + chr(10) + chr(10) +
-                    "📝 Команды:" + chr(10) +
-                    "/coins - показать пары" + chr(10) +
-                    "/coins PAIR1 PAIR2 - добавить пары" + chr(10) +
-                    "/coins delete PAIR1 PAIR2 - удалить пары" + chr(10) +
-                    "/now - собрать метрики" + chr(10) +
-                    "/market force 12+6 - market_mode для 12+6" + chr(10) +
-                    "/market force 4+2 - market_mode для 4+2" + chr(10) +
-                    "/scheduler confyg - показать конфиг" + chr(10) +
-                    "/scheduler on|off - вкл/выкл планировщик" + chr(10) +
-                    "/scheduler period <P> - период сбора (900-86400)" + chr(10) +
-                    "/scheduler publish <N> - период публик (1-96ч)" + chr(10) +
-                    "/data - список файлов" + chr(10) +
-                    "/data export all - отправить все" + chr(10) +
-                    "/data delete all - удалить все" + chr(10) +
-                    "/data delete file1.xxx, file2.xxx - удалить конкретные")
+        help_text = """✅ Бот готов (v6.0-STABLE)!
+
+📝 Команды:
+/coins - показать пары
+/coins PAIR1 PAIR2 - добавить пары
+/coins delete PAIR1 PAIR2 - удалить пары
+/now - собрать метрики
+/market force 12+6 - market_mode для 12+6
+/market force 4+2 - market_mode для 4+2
+/scheduler confyg - показать конфиг
+/scheduler on|off - вкл/выкл планировщик
+/scheduler period <P> - период сбора (900-86400)
+/scheduler publish <N> - период публик (1-96ч)
+/data - список файлов
+/data export all - отправить все
+/data delete all - удалить все
+/data delete file1.xxx, file2.xxx - удалить конкретные"""
         await tg_send(chat_id, help_text)
         return JSONResponse({"ok": True})
 
@@ -124,7 +127,7 @@ async def telegram_webhook(request: Request):
         if action == 'list':
             all_pairs = read_pairs(DATA_STORAGE)
             if all_pairs:
-                msg = f"📊 Активные пары ({len(all_pairs)}):" + chr(10) + ", ".join(all_pairs)
+                msg = f"📊 Активные пары ({len(all_pairs)}): {', '.join(all_pairs)}"
             else:
                 msg = "📊 Список пар пуст"
             await tg_send(chat_id, msg)
@@ -145,7 +148,7 @@ async def telegram_webhook(request: Request):
                 return JSONResponse({"ok": True})
             success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
             if success:
-                msg = f"✓ Пары обновлены ({len(all_pairs)})" + chr(10) + ", ".join(all_pairs)
+                msg = f"✓ Пары обновлены ({len(all_pairs)}): {', '.join(all_pairs)}"
                 await tg_send(chat_id, msg)
             else:
                 await tg_send(chat_id, "❌ Ошибка")
@@ -184,7 +187,7 @@ async def telegram_webhook(request: Request):
             result = force_market_mode(DATA_STORAGE, symbol, frame)
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для фрейма {frame}:" + chr(10) + chr(10).join(results)
+        msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 
@@ -198,11 +201,11 @@ async def telegram_webhook(request: Request):
 
         if cmd == "confyg":
             cfg = get_config(DATA_STORAGE)
-            msg = ("⚙️ Конфиг планировщика:" + chr(10) +
-                  f"enabled: {cfg.get('enabled')}" + chr(10) +
-                  f"period: {cfg.get('period_seconds')}s" + chr(10) +
-                  f"publish: {cfg.get('publish_hours')}h" + chr(10) +
-                  f"last_publish: {cfg.get('last_publish', 'never')}")
+            msg = f"""⚙️ Конфиг планировщика:
+enabled: {cfg.get('enabled')}
+period: {cfg.get('period_seconds')}s
+publish: {cfg.get('publish_hours')}h
+last_publish: {cfg.get('last_publish', 'never')}"""
             await tg_send(chat_id, msg)
 
         elif cmd == "on":
@@ -248,7 +251,7 @@ async def telegram_webhook(request: Request):
     if text.lower() == "/data":
         files = data_storage.get_files_list()
         if files:
-            msg = f"📁 Файлов: {len(files)}" + chr(10) + ", ".join(files)
+            msg = f"📁 Файлов: {len(files)}: {', '.join(files)}"
         else:
             msg = "📁 Хранилище пусто"
         await tg_send(chat_id, msg)
@@ -283,9 +286,9 @@ async def telegram_webhook(request: Request):
 
         msg = f"✓ Удалено: {len(deleted)}"
         if deleted:
-            msg += chr(10) + "  " + ", ".join(deleted)
+            msg += f" - {', '.join(deleted)}"
         if failed:
-            msg += chr(10) + f"❌ Не найдены: {len(failed)}"
+            msg += f" | ❌ Не найдены: {', '.join(failed)}"
 
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})

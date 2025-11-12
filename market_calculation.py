@@ -36,8 +36,6 @@ def calculate_raw_markets(storage_path: str, symbol: str):
         f.write(json.dumps(raw_4_2) + "\n")
     logger.info(f"✓ Raw market saved: {symbol}_raw_market_4+2.jsonl")
 
-    logger.info(f"✓ Raw markets calculated for {symbol}")
-
 def force_market_mode(storage_path: str, symbol: str, frame: str):
     calculate_raw_markets(storage_path, symbol)
-    return f"✓ Market mode {frame} updated"
+    return f"✓ {frame}"

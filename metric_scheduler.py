@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 import random
+import atexit
 from pathlib import Path
 from datetime import datetime
 
@@ -52,18 +53,29 @@ def set_scheduler_publish(storage_path: str, hours: int):
     save_config(storage_path, cfg)
     return True
 
+def _cleanup_lock():
+    global SCHEDULER_LOCK
+    if SCHEDULER_LOCK and SCHEDULER_LOCK.exists():
+        try:
+            SCHEDULER_LOCK.unlink()
+            logger.info("✓ Lock cleaned up on exit")
+        except:
+            pass
+
 async def start_scheduler(storage_path: str):
     global SCHEDULER_TASK, SCHEDULER_LOCK
 
     lock_path = get_lock_path(storage_path)
-    cfg = get_config(storage_path)
-    save_config(storage_path, cfg)
 
     if lock_path.exists():
-        logger.error("⚠ Scheduler already running (lock exists)")
-        return
+        try:
+            lock_path.unlink()
+            logger.info("✓ Old lock removed")
+        except:
+            logger.warning("Could not remove old lock")
 
-    logger.info("📡 Scheduler task created")
+    cfg = get_config(storage_path)
+    save_config(storage_path, cfg)
 
     try:
         with open(lock_path, 'w') as f:
@@ -74,6 +86,8 @@ async def start_scheduler(storage_path: str):
         return
 
     SCHEDULER_LOCK = lock_path
+    atexit.register(_cleanup_lock)
+
     SCHEDULER_TASK = asyncio.create_task(_scheduler_loop(storage_path))
     logger.info("🚀 Scheduler started")
 
@@ -108,6 +122,9 @@ async def _scheduler_loop(storage_path: str):
             logger.info(f"⏱ Waiting {wait_time}s until next cycle...")
 
             await asyncio.sleep(wait_time)
+        except asyncio.CancelledError:
+            logger.info("⛔ Scheduler cancelled")
+            break
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
             await asyncio.sleep(60)
