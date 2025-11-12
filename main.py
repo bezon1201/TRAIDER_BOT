@@ -101,7 +101,8 @@ async def telegram_webhook(request: Request):
                    "/now - собрать метрики\n"
                    "/market force 12+6 - market_mode для 12+6\n"
                    "/market force 4+2 - market_mode для 4+2\n"
-                   "/data show all - список файлов\n"\n                   "/data export all - отправить все\n"
+                   "/data show all - список файлов\n"
+                   "/data export all - отправить все\n"
                    "/data delete all - удалить все\n"
                    "/data delete file1.xxx, file2.xxx - удалить конкретные")
         await tg_send(chat_id, help_msg)
