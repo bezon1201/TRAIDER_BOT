@@ -94,11 +94,11 @@ def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[
         logger.error(f"Error calculating raw markets for {symbol}: {e}")
         return False
 
-def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
-    if frame not in ["12+6", "4+2"]:
-        return "Неподдерживаемый фрейм"
-
-    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{frame}.jsonl"
+def force_market_mode(storage_dir: str, symbol: str, mode: str) -> str:
+    mode = (mode or "").upper()
+    if mode not in ("LONG", "SHORT"):
+        return "Неподдерживаемый режим"
+    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{mode}.jsonl"
     if not raw_file.exists():
         return f"Файл не найден"
 

@@ -81,16 +81,21 @@ def remove_pairs(storage_dir: str, pairs_to_remove: List[str]) -> tuple[bool, Li
         logger.error(f"Error removing pairs: {e}")
         return False, []
 
-def parse_coins_command(text: str) -> tuple[str, List[str]]:
+def parse_coins_command(text: str) -> tuple[str, list[str]]:
     parts = text.strip().split()
     if parts and parts[0].lower() == '/coins':
         parts = parts[1:]
     if not parts:
         return 'list', []
-    if parts[0].lower() == 'delete':
-        return 'delete', [p.strip() for p in parts[1:] if p.strip()]
-    else:
-        return 'add', [p.strip() for p in parts if p.strip()]
+    head = parts[0].lower()
+    rest = [p.strip() for p in parts[1:] if p.strip()]
+    if head == 'delete':
+        return 'delete', rest
+    if head == 'long':
+        return 'mode_long', rest
+    if head == 'short':
+        return 'mode_short', rest
+    return 'add', [p.strip() for p in parts if p.strip()]
 
 def get_coin_file_path(storage_dir: str, symbol: str) -> str:
     os.makedirs(storage_dir, exist_ok=True)
@@ -120,3 +125,45 @@ def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error reading metrics {symbol}: {e}")
         return {}
+
+
+def set_mode(storage_dir: str, symbol: str, mode: str) -> str:
+    try:
+        mode_up = str(mode).upper()
+        if mode_up not in ("LONG", "SHORT"):
+            return "invalid mode"
+        file_path = get_coin_file_path(storage_dir, symbol)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        data = {}
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+            except Exception:
+                data = {}
+        data["Mode"] = mode_up
+        tmp_path = file_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, file_path)
+        logger.info(f"✓ Mode set {symbol}: {mode_up}")
+        return "OK"
+    except Exception as e:
+        logger.error(f"Error set_mode {symbol}: {e}")
+        return f"error: {e}"
+
+
+def get_symbol_mode(storage_dir: str, symbol: str) -> str | None:
+    try:
+        path = get_coin_file_path(storage_dir, symbol)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mode = data.get("Mode")
+        if isinstance(mode, str):
+            up = mode.upper()
+            return up if up in ("LONG", "SHORT") else None
+        return None
+    except Exception:
+        return None
