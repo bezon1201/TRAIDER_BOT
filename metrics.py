@@ -174,3 +174,34 @@ def add_pairs(storage_dir: str, pairs: List[str]) -> bool:
     except Exception as e:
         logger.error(f"Error adding pairs: {e}")
         return False
+
+
+
+def add_pairs(storage_dir: str, pairs: List[str]):
+    """Add pairs to pairs.txt and ensure coin JSON exists with default MODE=LONG.
+    Returns (success: bool, all_pairs: List[str]).
+    """
+    try:
+        existing = set(read_pairs(storage_dir))
+        to_add = [normalize_pair(p) for p in pairs if p]
+        if not to_add:
+            all_pairs = sorted(existing)
+            return True, all_pairs
+        new = []
+        for p in to_add:
+            if p not in existing:
+                new.append(p)
+        all_pairs = sorted(existing | set(new))
+        path = os.path.join(storage_dir, PAIRS_FILE)
+        os.makedirs(storage_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(all_pairs))
+        # ensure json defaults + MODE
+        for p in new:
+            ensure_coin_file_with_default(storage_dir, p)
+        logger.info(f"Added pairs: {new}")
+        return True, all_pairs
+    except Exception as e:
+        logger.error(f"Error adding pairs: {e}")
+        return False, sorted(list(existing)) if 'existing' in locals() else []
+
