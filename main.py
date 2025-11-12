@@ -8,7 +8,7 @@ from data import DataStorage
 from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs
 from collector import collect_all_metrics
 from market_calculation import force_market_mode
-import metric_scheduler
+from metric_scheduler import MetricScheduler
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,10 +22,14 @@ DATA_STORAGE = os.getenv('DATA_STORAGE', '/data')
 logger.info(f"Using DATA_STORAGE: {DATA_STORAGE}")
 
 data_storage = DataStorage(DATA_STORAGE)
+scheduler: MetricScheduler = None
+scheduler_task: asyncio.Task = None
+
 app = FastAPI()
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+
 
 async def tg_send(chat_id: str, text: str) -> None:
     if not TELEGRAM_API:
@@ -41,6 +45,7 @@ async def tg_send(chat_id: str, text: str) -> None:
     except Exception as e:
         logger.error(f"Error sending message: {e}")
 
+
 async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
     if not TELEGRAM_API:
         return False
@@ -52,31 +57,51 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
                 data={"chat_id": chat_id},
                 files=files_data
             )
-            if response.status_code == 200:
-                logger.info(f"✓ File sent: {filename}")
-                return True
-            else:
-                logger.error(f"File send error: {response.status_code}")
-                return False
+        if response.status_code == 200:
+            logger.info(f"✓ File sent: {filename}")
+            return True
+        else:
+            logger.error(f"File send error: {response.status_code}")
+            return False
     except Exception as e:
         logger.error(f"Error sending file: {e}")
         return False
 
+
 @app.on_event("startup")
 async def startup():
-    metric_scheduler.start_scheduler(DATA_STORAGE)
+    global scheduler, scheduler_task
+    
+    scheduler = MetricScheduler(DATA_STORAGE)
+    scheduler_task = asyncio.create_task(scheduler.start_loop())
+    
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.0)")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.0)\n⏲️ Планировщик активен")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global scheduler, scheduler_task
+    if scheduler:
+        scheduler.stop_loop()
+    if scheduler_task:
+        try:
+            await asyncio.wait_for(scheduler_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Scheduler task did not stop in time")
+
 
 @app.get("/health")
 @app.head("/health")
 async def health():
     return {"ok": True}
 
+
 @app.get("/")
 @app.head("/")
 async def root():
     return {"ok": True, "service": "traider-bot", "version": "6.0"}
+
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -84,39 +109,89 @@ async def telegram_webhook(request: Request):
         data = await request.json()
     except:
         data = {}
-
+    
     message = data.get("message", {})
     text = (message.get("text") or "").strip()
     chat_id = str((message.get("chat") or {}).get("id") or "")
-
+    
     if not chat_id or not text:
         return JSONResponse({"ok": True})
-
+    
     logger.info(f"Message from {chat_id}: {text[:50]}")
-
+    
     if text.lower() == "/start":
-        help_msg = ("✅ Бот готов (v6.0)!\n\n"
-                   "📝 Команды:\n"
-                   "/coins - показать список пар\n"
-                   "/coins PAIR1 PAIR2 - добавить пары\n"
-                   "/coins delete PAIR1 PAIR2 - удалить пары\n"
-                   "/now - собрать метрики\n"
-                   "/market force 12+6 - market_mode для 12+6\n"
-                   "/market force 4+2 - market_mode для 4+2\n"
-                   "/scheduler confyg - показать конфиг планировщика\n"
-                   "/scheduler period <P> - период сбора, сек\n"
-                   "/scheduler publish <N> - период публикации, ч\n"
-                   "/scheduler on | off - вкл/выкл планировщика\n"
-                   "/data - список файлов\n"
-                   "/data export all - отправить все\n"
-                   "/data delete all - удалить все\n"
-                   "/data delete file1.xxx, file2.xxx - удалить конкретные")
+        help_msg = (
+            "✅ Бот готов (v6.0)!\n\n"
+            "📝 Команды:\n"
+            "/coins - показать список пар\n"
+            "/coins PAIR1 PAIR2 - добавить пары\n"
+            "/coins delete PAIR1 PAIR2 - удалить пары\n"
+            "/now - собрать метрики\n"
+            "/market force 12+6 - market_mode для 12+6\n"
+            "/market force 4+2 - market_mode для 4+2\n"
+            "/data - список файлов\n"
+            "/data export all - отправить все\n"
+            "/data delete all - удалить все\n"
+            "/data delete file1.xxx, file2.xxx - удалить конкретные\n"
+            "/scheduler config - показать конфиг\n"
+            "/scheduler period <P> - период [900…86400] сек\n"
+            "/scheduler publish <N> - публикация [1…96] часов\n"
+            "/scheduler on | off - включить/отключить"
+        )
         await tg_send(chat_id, help_msg)
         return JSONResponse({"ok": True})
-
+    
+    # === КОМАНДЫ ПЛАНИРОВЩИКА ===
+    
+    if text.lower() == "/scheduler config":
+        config = scheduler.get_config()
+        msg = (
+            f"⚙️ Конфиг планировщика:\n"
+            f"period: {config['period']}s\n"
+            f"publish: {config['publish_interval_hours']}h\n"
+            f"enabled: {'✅' if config['enabled'] else '❌'}\n"
+            f"last_published: {config['last_published'][:10]}"
+        )
+        await tg_send(chat_id, msg)
+        return JSONResponse({"ok": True})
+    
+    if text.lower().startswith("/scheduler period "):
+        try:
+            new_period = int(text.split()[-1])
+            if scheduler.update_period(new_period):
+                await tg_send(chat_id, f"✅ Период: {new_period} сек")
+            else:
+                await tg_send(chat_id, f"❌ Диапазон: 900…86400 сек")
+        except:
+            await tg_send(chat_id, "❌ Некорректное значение")
+        return JSONResponse({"ok": True})
+    
+    if text.lower().startswith("/scheduler publish "):
+        try:
+            new_interval = int(text.split()[-1])
+            if scheduler.update_publish_interval(new_interval):
+                await tg_send(chat_id, f"✅ Публикация: {new_interval} часов")
+            else:
+                await tg_send(chat_id, f"❌ Диапазон: 1…96 часов")
+        except:
+            await tg_send(chat_id, "❌ Некорректное значение")
+        return JSONResponse({"ok": True})
+    
+    if text.lower() == "/scheduler on":
+        scheduler.toggle_scheduler(True)
+        await tg_send(chat_id, "✅ Планировщик включен")
+        return JSONResponse({"ok": True})
+    
+    if text.lower() == "/scheduler off":
+        scheduler.toggle_scheduler(False)
+        await tg_send(chat_id, "✅ Планировщик отключен")
+        return JSONResponse({"ok": True})
+    
+    # === КОМАНДЫ МОНЕТ ===
+    
     if text.lower().startswith('/coins'):
         action, pairs_list = parse_coins_command(text)
-
+        
         if action == 'list':
             all_pairs = read_pairs(DATA_STORAGE)
             if all_pairs:
@@ -124,7 +199,7 @@ async def telegram_webhook(request: Request):
             else:
                 msg = "📊 Список пар пуст"
             await tg_send(chat_id, msg)
-
+        
         elif action == 'delete':
             if not pairs_list:
                 await tg_send(chat_id, "❌ Укажите пары для удаления")
@@ -134,19 +209,21 @@ async def telegram_webhook(request: Request):
                 await tg_send(chat_id, f"✓ Пары удалены ({len(remaining)} осталось)")
             else:
                 await tg_send(chat_id, "❌ Ошибка")
-
-        else:
+        
+        else:  # add
             if not pairs_list:
                 await tg_send(chat_id, "❌ Укажите пары")
                 return JSONResponse({"ok": True})
             success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
             if success:
-                await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)})\n" + ", ".join(all_pairs))
+                await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)}):\n" + ", ".join(all_pairs))
             else:
                 await tg_send(chat_id, "❌ Ошибка")
-
+        
         return JSONResponse({"ok": True})
-
+    
+    # === СБОР МЕТРИК ===
+    
     if text.lower() == "/now":
         logger.info(f"Collecting metrics...")
         try:
@@ -158,91 +235,36 @@ async def telegram_webhook(request: Request):
             logger.error(f"Collection error: {e}")
             await tg_send(chat_id, "❌ Ошибка")
         return JSONResponse({"ok": True})
-
+    
+    # === MARKET_MODE ===
+    
     if text.lower().startswith('/market force'):
         parts = text.split()
         if len(parts) < 3:
             await tg_send(chat_id, "❌ Используйте: /market force 12+6 или /market force 4+2")
             return JSONResponse({"ok": True})
-
+        
         frame = parts[2]
         if frame not in ["12+6", "4+2"]:
             await tg_send(chat_id, "❌ Фрейм должен быть 12+6 или 4+2")
             return JSONResponse({"ok": True})
-
+        
         all_pairs = read_pairs(DATA_STORAGE)
         if not all_pairs:
             await tg_send(chat_id, "❌ Нет пар в списке")
             return JSONResponse({"ok": True})
-
+        
         results = []
         for symbol in all_pairs:
             result = force_market_mode(DATA_STORAGE, symbol, frame)
             results.append(f"{symbol}: {result}")
-
+        
         msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
-
-if text.lower().startswith("/scheduler"):
-    parts = text.split()
-    sub = parts[1].lower() if len(parts) > 1 else "confyg"
-
-    if sub == "confyg":
-        status = metric_scheduler.get_status()
-        last_publish = status.get("last_publish") or "—"
-        msg = (
-            "⚙️ metric_scheduler\n"
-            f"period: {status.get('period')} сек\n"
-            f"publish: {status.get('publish_hours')} ч\n"
-            f"enabled: {'ON' if status.get('enabled') else 'OFF'}\n"
-            f"running: {'OK' if status.get('running') else 'STOPPED'}\n"
-            f"last_publish: {last_publish}"
-        )
-        await tg_send(chat_id, msg)
-        return JSONResponse({"ok": True})
-
-    if sub == "period" and len(parts) >= 3:
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await tg_send(chat_id, "❌ Период должен быть числом 900…86400")
-            return JSONResponse({"ok": True})
-        if value < 900 or value > 86400:
-            await tg_send(chat_id, "❌ Период должен быть в диапазоне 900–86400 сек")
-            return JSONResponse({"ok": True})
-        metric_scheduler.set_period(value)
-        await tg_send(chat_id, f"✓ Период цикла обновлён: {value} сек")
-        return JSONResponse({"ok": True})
-
-    if sub == "publish" and len(parts) >= 3:
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await tg_send(chat_id, "❌ Публикация должна быть числом 1…96 (часы)")
-            return JSONResponse({"ok": True})
-        if value < 1 or value > 96:
-            await tg_send(chat_id, "❌ Публикация должна быть в диапазоне 1–96 часов")
-            return JSONResponse({"ok": True})
-        metric_scheduler.set_publish_hours(value)
-        await tg_send(chat_id, f"✓ Период публикации обновлён: {value} ч")
-        return JSONResponse({"ok": True})
-
-    if sub == "on":
-        metric_scheduler.set_enabled(True)
-        await tg_send(chat_id, "✓ Планировщик включен")
-        return JSONResponse({"ok": True})
-
-    if sub == "off":
-        metric_scheduler.set_enabled(False)
-        await tg_send(chat_id, "✓ Планировщик выключен")
-        return JSONResponse({"ok": True})
-
-    await tg_send(chat_id, "❌ Использование: /scheduler confyg | period <P> | publish <N> | on | off")
-    return JSONResponse({"ok": True})
-
-    # v5.5 ИСПРАВЛЕНИЕ: добавить список файлов через запятую
+    
+    # === РАБОТА С ФАЙЛАМИ ===
+    
     if text.lower() == "/data":
         files = data_storage.get_files_list()
         if files:
@@ -251,7 +273,7 @@ if text.lower().startswith("/scheduler"):
             msg = "📁 Хранилище пусто"
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
+    
     if text.lower() == "/data delete all":
         files = data_storage.get_files_list()
         if not files:
@@ -262,32 +284,32 @@ if text.lower().startswith("/scheduler"):
             else:
                 await tg_send(chat_id, "❌ Ошибка")
         return JSONResponse({"ok": True})
-
+    
     if text.lower().startswith("/data delete ") and text.lower() != "/data delete all":
         args = text[13:].strip()
         if not args:
             await tg_send(chat_id, "❌ Укажите файлы: /data delete file1.xxx, file2.xxx")
             return JSONResponse({"ok": True})
-
+        
         filenames = [f.strip() for f in args.split(",") if f.strip()]
         deleted = []
         failed = []
-
+        
         for filename in filenames:
             if data_storage.delete_file(filename):
                 deleted.append(filename)
             else:
                 failed.append(filename)
-
+        
         msg = f"✓ Удалено: {len(deleted)}"
         if deleted:
-            msg += f"\n  {', '.join(deleted)}"
+            msg += f"\n{', '.join(deleted)}"
         if failed:
             msg += f"\n❌ Не найдены: {len(failed)}"
-
+        
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
+    
     if text.lower() == "/data export all":
         files = data_storage.get_files_list()
         if not files:
@@ -307,9 +329,10 @@ if text.lower().startswith("/scheduler"):
                         logger.error(f"Error: {e}")
             await tg_send(chat_id, f"✓ Отправлено: {success_count}")
         return JSONResponse({"ok": True})
-
+    
     await tg_send(chat_id, "❓ Неизвестная команда")
     return JSONResponse({"ok": True})
+
 
 if __name__ == "__main__":
     import uvicorn
