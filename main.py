@@ -37,8 +37,7 @@ async def tg_send(chat_id: str, text: str, markdown: bool = True) -> None:
         return
     try:
         payload = {"chat_id": chat_id, "text": text}
-        if markdown:
-            payload["parse_mode"] = "Markdown"
+        # Markdown отключен глобально, чтобы не ловить 400 от Telegram
         response = await client.post(
             f"{TELEGRAM_API}/sendMessage",
             json=payload
