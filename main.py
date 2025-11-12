@@ -31,17 +31,22 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
 
 
-async def tg_send(chat_id: str, text: str) -> None:
+async def tg_send(chat_id: str, text: str, markdown: bool = True) -> None:
     if not TELEGRAM_API:
         logger.warning("No TELEGRAM_API")
         return
     try:
+        payload = {"chat_id": chat_id, "text": text}
+        if markdown:
+            payload["parse_mode"] = "Markdown"
         response = await client.post(
             f"{TELEGRAM_API}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+            json=payload
         )
         if response.status_code == 200:
             logger.info(f"✓ Message sent to {chat_id}")
+        else:
+            logger.error(f"Telegram sendMessage error {response.status_code}: {response.text}")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
 
@@ -341,7 +346,7 @@ async def telegram_webhook(request: Request):
             msg = f"📁 Файлов: {len(files)}\n" + ", ".join(files)
         else:
             msg = "📁 Хранилище пусто"
-        await tg_send(chat_id, msg)
+        await tg_send(chat_id, msg, markdown=False)
         return JSONResponse({"ok": True})
 
     if cmd_root == "/data" and tail_lower == "delete all":
