@@ -57,11 +57,9 @@ def calculate_indicators(klines: List[List[Any]]) -> Dict[str, Any]:
     highs = ohlcv["highs"]
     lows = ohlcv["lows"]
 
-    # Текущие значения
     sma14_now = calculate_sma(closes, 14)
     atr14_now = calculate_atr(highs, lows, closes, 14)
 
-    # Предыдущие значения (если есть минимум 28 свечей)
     sma14_prev = None
     atr14_prev = None
 

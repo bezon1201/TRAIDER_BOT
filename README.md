@@ -1,83 +1,52 @@
-# TRAIDER_BOT v4.7 - CLEAN BUILD
+# TRAIDER_BOT v5.1
 
-## Что это
+## Что нового
 
-**ЧИСТАЯ сборка нового бота без зависимостей от старого кода**
+### ✅ Новый модуль: market_calculation.py
+- Расчет raw сигналов для пар фреймов (12h+6h и 4h+2h)
+- Автоматическое сохранение в `.jsonl` файлы
+- История сигналов для последующей агрегации
 
-✅ Только наши модули: data.py, metrics.py, indicators.py, collector.py, main.py
-✅ НОЛЬ импортов из старого бота (now_command, portfolio, orders и т.д.)
-✅ Все данные сохраняются в /data (Render Disk)
-✅ Атомарные операции (защита от коррупции)
-✅ Таймфреймы: 12h, 6h, 4h, 2h
-✅ Метрики: ticker + filters + klines + SMA14 + ATR14
+### ✅ Структура данных v5.0
+- 30 свечей вместо 100 (70% экономия)
+- История SMA14/ATR14 для расчетов
+- Все фильтры сохраняются
 
-## Переменные окружения
+## Файлы (по паре)
 
-- `BOT_TOKEN` — токен Telegram бота
-- `ADMIN_CHAT_ID` — чат админа
-- `WEBHOOK_BASE` — базовый URL для webhook
-- `PORT` — порт (по умолчанию 10000)
-- `DATA_STORAGE` — путь хранилища (по умолчанию /data на Render Disk)
+```
+<SYMBOL>.json               — основные метрики
+<SYMBOL>_raw_market_12+6.jsonl  — raw сигналы (12h+6h)
+<SYMBOL>_raw_market_4+2.jsonl   — raw сигналы (4h+2h)
+```
 
 ## Команды
 
-- `/start` — запуск
+- `/start` — справка
 - `/coins PAIR1 PAIR2` — добавить пары
-- `/now` — **СОБРАТЬ ВСЕ МЕТРИКИ И СОХРАНИТЬ В /data**
-- `/data` — список файлов в хранилище
+- `/now` — собрать метрики + рассчитать raw режимы
+- `/data` — список файлов
+- `/data export all` — отправить все
+- `/data delete all` — удалить все
 
-## Структура хранилища (/data)
+## Процесс /now
 
-```
-/data/
-├── pairs.txt          # список пар
-├── BTCUSDT.json       # полные метрики
-├── ETHUSDT.json
-└── BNBUSDT.json
-```
+1. Собирает свежие метрики (ticker, filters, klines, indicators)
+2. Рассчитывает raw сигналы для обеих пар фреймов
+3. Сохраняет в `.jsonl` файлы (append mode)
+4. Готово для последующей агрегации (v5.2+)
 
-## JSON структура (ETHUSDT.json)
+## Raw Файлы
 
+Каждая строка — JSON запись:
 ```json
 {
-  "symbol": "ETHUSDT",
-  "timestamp": "2025-11-12T13:00:00+00:00",
-  "ticker": {
-    "price": 3450.36,
-    "bid_price": 3450.24,
-    ...
-  },
-  "filters": {
-    "price_filter": {"tick_size": "0.01", ...},
-    "lot_size": {"min_qty": "0.001", ...},
-    ...
-  },
-  "timeframes": {
-    "12h": {
-      "klines": [...100 свечей...],
-      "indicators": {"sma14": 3441.12, "atr14": 140.20}
-    },
-    ...
-  }
+  "timestamp": "2025-11-12T05:20:00Z",
+  "signal": "RANGE",
+  "signals": {"12h": "RANGE", "6h": "RANGE"},
+  "frame": "12+6"
 }
 ```
 
-## Развертывание на Render
-
-1. Загрузить v4.7
-2. Выбрать Python 3
-3. Build: `pip install -r requirements.txt`
-4. Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Убедиться, что Render Disk смонтирован на /data
-6. Задать env переменные
-7. Запустить
-
-## Гарантии
-
-✓ Данные переживают рестарт (сохраняются в Render Disk /data)
-✓ Защита от коррупции (атомарные операции)
-✓ Полная совместимость с концепцией бота
-✓ Готово к расширению (DCA-сетка, флаги, ордера)
-
 ---
-Version 4.7 - 12.11.2025
+Version 5.1 - 12.11.2025

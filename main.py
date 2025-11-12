@@ -67,7 +67,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 @app.on_event("startup")
 async def startup():
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.0)")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.1)")
 
 @app.get("/health")
 @app.head("/health")
@@ -77,7 +77,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "5.0"}
+    return {"ok": True, "service": "traider-bot", "version": "5.1"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -100,7 +100,7 @@ async def telegram_webhook(request: Request):
         help_msg = ("✅ Бот готов!\n\n"
                    "📝 Команды:\n"
                    "/coins PAIR1 PAIR2 - добавить пары\n"
-                   "/now - собрать метрики\n"
+                   "/now - собрать метрики + raw режимы\n"
                    "/data - список файлов\n"
                    "/data export all - отправить все файлы\n"
                    "/data delete all - удалить все файлы")
@@ -128,9 +128,11 @@ async def telegram_webhook(request: Request):
             results = await collect_all_metrics(DATA_STORAGE, delay_ms=50)
             success = sum(1 for v in results.values() if v)
             total = len(results)
+            await tg_send(chat_id, f"✓ Метрики: {success}/{total}\n✓ Raw режимы рассчитаны")
             logger.info(f"✓ Collection: {success}/{total}")
         except Exception as e:
             logger.error(f"Collection error: {e}")
+            await tg_send(chat_id, "❌ Ошибка при сборе метрик")
 
         return JSONResponse({"ok": True})
 

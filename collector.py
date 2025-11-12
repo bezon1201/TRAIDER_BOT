@@ -3,8 +3,9 @@ import asyncio
 from typing import Dict, Any, List, Optional
 import httpx
 from datetime import datetime, timezone
-from metrics import save_metrics, read_pairs, normalize_pair
+from metrics import save_metrics, read_pairs
 from indicators import calculate_indicators
+from market_calculation import calculate_and_save_raw_markets
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def fetch_klines(client: httpx.AsyncClient, symbol: str, interval: str, li
     return None
 
 async def collect_metrics_for_symbol(client: httpx.AsyncClient, symbol: str, storage_dir: str) -> bool:
-    """Собирает все данные: ticker + filters + klines(30) + indicators с историей"""
+    """Собирает метрики и сразу рассчитывает raw режимы"""
     try:
         ticker = await fetch_ticker_price(client, symbol)
         if not ticker:
@@ -114,7 +115,13 @@ async def collect_metrics_for_symbol(client: httpx.AsyncClient, symbol: str, sto
             "timeframes": timeframes_data,
         }
 
-        return save_metrics(storage_dir, symbol, metrics)
+        # Сохраняем метрики
+        success = save_metrics(storage_dir, symbol, metrics)
+        if success:
+            # Сразу рассчитываем и сохраняем raw режимы
+            calculate_and_save_raw_markets(storage_dir, symbol, metrics)
+
+        return success
 
     except Exception as e:
         logger.error(f"Error collecting {symbol}: {e}")
