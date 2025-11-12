@@ -166,7 +166,7 @@ async def telegram_webhook(request: Request):
             f"enabled: {'✅' if config['enabled'] else '❌'}\n"
             f"last_published: {config['last_published'][:10]}"
         )
-        await tg_send(chat_id, msg)
+        await tg_send(chat_id, msg, markdown=False)
         return JSONResponse({"ok": True})
 
     if cmd_root == "/scheduler" and tail_lower.startswith("period "):
