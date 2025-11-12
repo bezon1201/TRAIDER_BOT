@@ -99,6 +99,9 @@ def get_coin_file_path(storage_dir: str, symbol: str) -> str:
 def save_metrics(storage_dir: str, symbol: str, metrics_data: Dict[str, Any]) -> bool:
     try:
         file_path = get_coin_file_path(storage_dir, symbol)
+        is_new = not os.path.exists(file_path)
+        if is_new and "Mode" not in metrics_data:
+            metrics_data["Mode"] = "LONG"
         metrics_data["timestamp"] = datetime.now(timezone.utc).isoformat()
         tmp_path = file_path + ".tmp"
         with open(tmp_path, 'w', encoding='utf-8') as f:
