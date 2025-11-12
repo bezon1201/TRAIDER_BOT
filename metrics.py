@@ -152,3 +152,33 @@ def get_symbol_mode(storage_dir: str, symbol: str) -> str | None:
         return None
     except Exception:
         return None
+
+
+def set_mode(storage_dir: str, symbol: str, mode: str) -> str:
+    """
+    Set Mode (LONG|SHORT) in <symbol>.json. Creates the file if missing.
+    Returns 'OK' or error text.
+    """
+    try:
+        mode_up = str(mode).upper()
+        if mode_up not in ("LONG", "SHORT"):
+            return "invalid mode"
+        file_path = get_coin_file_path(storage_dir, symbol)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        data = {}
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+            except Exception:
+                data = {}
+        data["Mode"] = mode_up
+        tmp_path = file_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, file_path)
+        logger.info(f"✓ Mode set {symbol}: {mode_up}")
+        return "OK"
+    except Exception as e:
+        logger.error(f"Error set_mode {symbol}: {e}")
+        return f"error: {e}"
