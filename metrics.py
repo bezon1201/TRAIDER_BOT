@@ -120,3 +120,75 @@ def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error reading metrics {symbol}: {e}")
         return {}
+
+
+# === STATE FILES (v1.6) ===
+def get_state_file_path(storage_dir: str, symbol: str) -> str:
+    return os.path.join(storage_dir, f"{normalize_pair(symbol)}.state.json")
+
+def read_state(storage_dir: str, symbol: str) -> Dict[str, Any]:
+    try:
+        p = get_state_file_path(storage_dir, symbol)
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+def write_state(storage_dir: str, symbol: str, updates: Dict[str, Any]) -> bool:
+    try:
+        p = get_state_file_path(storage_dir, symbol)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        data = {}
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+            except Exception:
+                data = {}
+        data.update(updates or {})
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, p)
+        return True
+    except Exception as e:
+        logger.error(f"write_state error {symbol}: {e}")
+        return False
+
+def set_market_mode(storage_dir: str, symbol: str, market_mode: str) -> bool:
+    return write_state(storage_dir, symbol, {"market_mode": market_mode})
+
+def set_mode(storage_dir: str, symbol: str, mode: str) -> str:
+    try:
+        mode_up = str(mode).upper()
+        if mode_up not in ("LONG","SHORT"):
+            return "invalid mode"
+        ok = write_state(storage_dir, symbol, {"Mode": mode_up})
+        return "OK" if ok else "error"
+    except Exception as e:
+        logger.error(f"set_mode error {symbol}: {e}")
+        return f"error: {e}"
+
+def get_symbol_mode(storage_dir: str, symbol: str) -> str | None:
+    # 1) read from state
+    st = read_state(storage_dir, symbol)
+    if isinstance(st.get("Mode"), str) and st.get("Mode").upper() in ("LONG","SHORT"):
+        return st["Mode"].upper()
+    # 2) migrate from old <symbol>.json if present
+    try:
+        oldp = get_coin_file_path(storage_dir, symbol)
+        if os.path.exists(oldp):
+            with open(oldp,"r",encoding="utf-8") as f:
+                old = json.load(f) or {}
+            m = old.get("Mode")
+            if isinstance(m, str) and m.upper() in ("LONG","SHORT"):
+                write_state(storage_dir, symbol, {"Mode": m.upper()})
+                return m.upper()
+    except Exception:
+        pass
+    # 3) default LONG and create state
+    write_state(storage_dir, symbol, {"Mode":"LONG"})
+    return "LONG"

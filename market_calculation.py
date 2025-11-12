@@ -82,21 +82,28 @@ def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[
     try:
         raw_12_6 = calculate_raw_signal(metrics, "12+6")
         if raw_12_6:
-            append_raw_market(storage_dir, symbol, "12+6", raw_12_6)
+            raw_12_6["frame"] = "LONG"
+            append_raw_market(storage_dir, symbol, "LONG", raw_12_6)
         raw_4_2 = calculate_raw_signal(metrics, "4+2")
         if raw_4_2:
-            append_raw_market(storage_dir, symbol, "4+2", raw_4_2)
+            raw_4_2["frame"] = "SHORT"
+            append_raw_market(storage_dir, symbol, "SHORT", raw_4_2)
         logger.info(f"✓ Raw markets calculated for {symbol}")
         return True
     except Exception as e:
         logger.error(f"Error calculating raw markets for {symbol}: {e}")
         return False
 
-def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
-    if frame not in ["12+6", "4+2"]:
-        return "Неподдерживаемый фрейм"
+def force_market_mode(storage_dir: str, symbol: str, mode: str) -> str:
+    mode = (mode or "").upper()
+    if mode not in ["LONG", "SHORT"]:
+        return "Неподдерживаемый режим"
 
-    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{frame}.jsonl"
+    # prefer new LONG/SHORT files; fallback to legacy names
+    new_path = Path(storage_dir) / f"{symbol}_raw_market_{mode}.jsonl"
+    legacy_frame = "12+6" if mode == "LONG" else "4+2"
+    old_path = Path(storage_dir) / f"{symbol}_raw_market_{legacy_frame}.jsonl"
+    raw_file = new_path if new_path.exists() else old_path
     if not raw_file.exists():
         return f"Файл не найден"
 
