@@ -16,12 +16,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
+# Environment variables - используем ./storage по умолчанию!
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 WEBHOOK_URL = os.getenv('WEBHOOK_BASE', '')
 PORT = int(os.getenv('PORT', 10000))
-DATA_STORAGE = os.getenv('DATA_STORAGE', '/tmp/storage')
+DATA_STORAGE = os.getenv('DATA_STORAGE', './storage')  # ← Изменено с /data на ./storage
 
 # Initialize data storage
 data_storage = DataStorage(DATA_STORAGE)
@@ -66,7 +66,7 @@ async def tg_send(chat_id: str, text: str) -> None:
 async def startup_event():
     """Send startup message and set webhook"""
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.5 с единым сбором метрик)")
+        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.6 с персистентным хранилищем)")
 
     # Set webhook
     if WEBHOOK_URL and BOT_TOKEN:
@@ -100,7 +100,7 @@ async def health_head():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"ok": True, "service": "traider-bot", "version": "4.5"}
+    return {"ok": True, "service": "traider-bot", "version": "4.6"}
 
 @app.head("/")
 async def root_head():
@@ -126,7 +126,7 @@ async def telegram_webhook(request: Request):
 
     # Handle /start command
     if text.lower() == "/start":
-        await tg_send(chat_id, "Привет! Бот запущен (FastAPI v4.5 с единым сбором всех метрик).")
+        await tg_send(chat_id, "Привет! Бот запущен (FastAPI v4.6 с персистентным хранилищем).")
         return JSONResponse({"ok": True})
 
     # Handle /coins command
@@ -137,7 +137,6 @@ async def telegram_webhook(request: Request):
             await tg_send(chat_id, "Ошибка: укажите пары.\nПример: /coins BTCUSDT ETHUSDT")
             return JSONResponse({"ok": True})
 
-        # Добавляем пары в файл
         success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
 
         if success:
@@ -151,9 +150,9 @@ async def telegram_webhook(request: Request):
 
         return JSONResponse({"ok": True})
 
-    # Handle /now command - collect metrics silently
+    # Handle /now command
     if text.lower() == "/now":
-        logger.info(f"Starting unified metrics collection from {chat_id}")
+        logger.info(f"Starting metrics collection from {chat_id}")
 
         try:
             results = await collect_all_metrics(DATA_STORAGE, delay_ms=50)
@@ -165,7 +164,6 @@ async def telegram_webhook(request: Request):
         except Exception as e:
             logger.error(f"Error during metrics collection: {e}")
 
-        # Не отправляем сообщение в Telegram (тихо)
         return JSONResponse({"ok": True})
 
     # Handle /data command

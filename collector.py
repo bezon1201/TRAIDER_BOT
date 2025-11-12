@@ -11,10 +11,8 @@ logger = logging.getLogger(__name__)
 
 BINANCE_API = "https://api.binance.com/api/v3"
 
-# Таймфреймы как в старом боте: 12h, 6h, 4h, 2h
 TIMEFRAMES = ["12h", "6h", "4h", "2h"]
 
-# Кеш для фильтров (обновляется раз в 6 часов)
 _filters_cache = {}
 _filters_cache_time = {}
 
@@ -51,7 +49,6 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
     """Получает фильтры и ограничения пары с Binance (кешируется на 6 часов)"""
     current_time = datetime.now(timezone.utc).timestamp()
 
-    # Проверяем кеш (6 часов = 21600 секунд)
     if symbol in _filters_cache and symbol in _filters_cache_time:
         cache_age = current_time - _filters_cache_time[symbol]
         if cache_age < 21600:
@@ -67,7 +64,6 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
         if response.status_code == 200:
             data = response.json()
 
-            # Извлекаем фильтры
             filters = {}
             for f in data.get("symbols", [{}])[0].get("filters", []):
                 filter_type = f.get("filterType", "")
@@ -106,7 +102,6 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
                         "limit": int(f.get("maxNumAlgoOrders", 0)),
                     }
 
-            # Кешируем результат
             _filters_cache[symbol] = filters
             _filters_cache_time[symbol] = current_time
 
@@ -154,31 +149,20 @@ async def collect_metrics_for_symbol(
     symbol: str,
     storage_dir: str
 ) -> bool:
-    """Собирает ВСЕ метрики для одной пары в один вызов:
-    - Ticker (текущая цена)
-    - Filters (торговые ограничения)
-    - Klines (свечи для 12h, 6h, 4h, 2h)
-    - Indicators (SMA14, ATR14 для каждого таймфрейма)
-
-    ВСЕ ДАННЫЕ сохраняются в один JSON файл!
-    """
+    """Собирает все метрики для одной пары"""
     try:
-        # 1. Получаем текущую цену
         ticker = await fetch_ticker_price(client, symbol)
         if not ticker:
             logger.warning(f"Could not fetch ticker for {symbol}")
             return False
 
-        # 2. Получаем фильтры (с кешем на 6 часов)
         filters = await fetch_exchange_info(client, symbol)
 
-        # 3. Собираем свечи для всех таймфреймов
         timeframes_data = {}
         for tf in TIMEFRAMES:
             klines = await fetch_klines(client, symbol, tf, 100)
 
             if klines:
-                # Рассчитываем индикаторы
                 indicators = calculate_indicators(klines)
 
                 timeframes_data[tf] = {
@@ -186,22 +170,19 @@ async def collect_metrics_for_symbol(
                     "indicators": indicators,
                 }
 
-            # Задержка между запросами
             await asyncio.sleep(0.05)
 
-        # 4. Формируем ПОЛНЫЕ метрики в одной структуре
         metrics = {
             "symbol": symbol,
             "ticker": ticker,
-            "filters": filters,  # ← Фильтры здесь!
+            "filters": filters,
             "timeframes": timeframes_data,
         }
 
-        # 5. Сохраняем ВСЁ в один JSON файл
         success = save_metrics(storage_dir, symbol, metrics)
 
         if success:
-            logger.info(f"Collected complete metrics for {symbol} with all data unified")
+            logger.info(f"Collected complete metrics for {symbol}")
 
         return success
 
@@ -212,25 +193,22 @@ async def collect_metrics_for_symbol(
 async def collect_all_metrics(storage_dir: str, delay_ms: int = 100) -> Dict[str, bool]:
     """Собирает метрики для всех пар из pairs.txt"""
 
-    # Читаем список пар
     pairs = read_pairs(storage_dir)
 
     if not pairs:
         logger.warning("No pairs found in pairs.txt")
         return {}
 
-    logger.info(f"Starting unified metrics collection for {len(pairs)} pairs (ticker + filters + klines + indicators)")
+    logger.info(f"Starting metrics collection for {len(pairs)} pairs")
 
     results = {}
 
-    # Используем AsyncClient для всех запросов
     async with httpx.AsyncClient(timeout=15.0) as client:
         for symbol in pairs:
             try:
                 success = await collect_metrics_for_symbol(client, symbol, storage_dir)
                 results[symbol] = success
 
-                # Задержка между запросами
                 if delay_ms > 0:
                     await asyncio.sleep(delay_ms / 1000.0)
 
@@ -238,7 +216,6 @@ async def collect_all_metrics(storage_dir: str, delay_ms: int = 100) -> Dict[str
                 logger.error(f"Error processing {symbol}: {e}")
                 results[symbol] = False
 
-    # Логируем итоги
     success_count = sum(1 for v in results.values() if v)
     logger.info(f"Metrics collection completed: {success_count}/{len(pairs)} successful")
 

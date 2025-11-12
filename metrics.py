@@ -42,7 +42,7 @@ def read_pairs(storage_dir: str) -> List[str]:
         return []
 
 def write_pairs(storage_dir: str, pairs: List[str]) -> bool:
-    """Записывает список пар в файл pairs.txt"""
+    """Записывает список пар в файл pairs.txt с атомарной записью"""
     try:
         os.makedirs(storage_dir, exist_ok=True)
         pairs_path = get_pairs_file_path(storage_dir)
@@ -57,11 +57,16 @@ def write_pairs(storage_dir: str, pairs: List[str]) -> bool:
 
         normalized.sort()
 
-        with open(pairs_path, 'w', encoding='utf-8') as f:
+        # Атомарная запись
+        tmp_path = pairs_path + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             for pair in normalized:
                 f.write(pair + '\n')
 
-        logger.info(f"Written {len(normalized)} pairs to {pairs_path}")
+        # Атомарная замена
+        os.replace(tmp_path, pairs_path)
+
+        logger.info(f"Written {len(normalized)} pairs to {pairs_path} (atomic)")
         return True
 
     except Exception as e:
@@ -102,17 +107,22 @@ def get_coin_file_path(storage_dir: str, symbol: str) -> str:
     return os.path.join(storage_dir, f"{normalize_pair(symbol)}.json")
 
 def save_metrics(storage_dir: str, symbol: str, metrics_data: Dict[str, Any]) -> bool:
-    """Сохраняет метрики монеты в JSON файл"""
+    """Сохраняет метрики монеты в JSON файл с атомарной записью"""
     try:
         file_path = get_coin_file_path(storage_dir, symbol)
 
         # Добавляем временную метку
         metrics_data["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-        with open(file_path, 'w', encoding='utf-8') as f:
+        # Атомарная запись
+        tmp_path = file_path + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(metrics_data, f, indent=2, ensure_ascii=False)
 
-        logger.info(f"Metrics saved for {symbol}")
+        # Атомарная замена
+        os.replace(tmp_path, file_path)
+
+        logger.info(f"Metrics saved for {symbol} (atomic)")
         return True
 
     except Exception as e:
