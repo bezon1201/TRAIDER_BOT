@@ -1,156 +1,43 @@
 import logging
 import json
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-TIMEFRAMES_12_6 = ["12h", "6h"]
-TIMEFRAMES_4_2 = ["4h", "2h"]
+def calculate_raw_markets(storage_path: str, symbol: str):
+    from data import DataStorage
 
-def calculate_signal(tf_data: Dict[str, Any]) -> str:
-    try:
-        indicators = tf_data.get("indicators", {})
-        sma14 = float(indicators.get("sma14") or 0)
-        sma14_prev = float(indicators.get("sma14_prev") or 0)
-        atr14 = float(indicators.get("atr14") or 0)
-        if atr14 <= 0:
-            return "RANGE"
-        d_now = sma14 - sma14_prev
-        d_prev = 0
-        H = 0.4 * atr14
-        S = 0.1 * atr14
-        if d_now > H and (d_now - d_prev) >= S:
-            return "UP"
-        elif d_now < -H and (d_now - d_prev) <= -S:
-            return "DOWN"
-        else:
-            return "RANGE"
-    except Exception as e:
-        logger.error(f"Error calculating signal: {e}")
-        return "RANGE"
+    data_storage = DataStorage(storage_path)
+    metrics = data_storage.read_file(f"{symbol}.json")
 
-def calculate_raw_signal(metrics: Dict[str, Any], frame: str) -> Optional[Dict[str, Any]]:
-    try:
-        if frame == "12+6":
-            tfs = TIMEFRAMES_12_6
-        elif frame == "4+2":
-            tfs = TIMEFRAMES_4_2
-        else:
-            return None
-        signals = {}
-        for tf in tfs:
-            tf_data = metrics.get("timeframes", {}).get(tf, {})
-            signals[tf] = calculate_signal(tf_data)
-        if signals[tfs[0]] == "UP" and signals[tfs[1]] == "UP":
-            overall_signal = "UP"
-        elif "DOWN" in signals.values():
-            overall_signal = "DOWN"
-        else:
-            overall_signal = "RANGE"
-        return {"timestamp": datetime.now(timezone.utc).isoformat(), "signal": overall_signal, "signals": signals, "frame": frame}
-    except Exception as e:
-        logger.error(f"Error calculating raw signal for {frame}: {e}")
-        return None
+    if not metrics:
+        return
 
-def append_raw_market(storage_dir: str, symbol: str, frame: str, raw_data: Dict[str, Any]) -> bool:
-    try:
-        filename = f"{symbol}_raw_market_{frame}.jsonl"
-        filepath = Path(storage_dir) / filename
-        tmp_filepath = Path(storage_dir) / (filename + ".tmp")
-        existing_lines = []
-        if filepath.exists():
-            with open(filepath, 'r', encoding='utf-8') as f:
-                existing_lines = f.readlines()
-        new_line = json.dumps(raw_data, ensure_ascii=False) + '\n'
-        with open(tmp_filepath, 'w', encoding='utf-8') as f:
-            f.writelines(existing_lines)
-            f.write(new_line)
-        tmp_filepath.replace(filepath)
-        logger.info(f"✓ Raw market saved: {filename}")
-        return True
-    except Exception as e:
-        logger.error(f"Error appending raw market {symbol} {frame}: {e}")
-        try:
-            tmp_filepath.unlink()
-        except:
-            pass
-        return False
+    klines = metrics.get("klines", {})
 
-def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[str, Any]) -> bool:
-    try:
-        raw_12_6 = calculate_raw_signal(metrics, "12+6")
-        if raw_12_6:
-            append_raw_market(storage_dir, symbol, "12+6", raw_12_6)
-        raw_4_2 = calculate_raw_signal(metrics, "4+2")
-        if raw_4_2:
-            append_raw_market(storage_dir, symbol, "4+2", raw_4_2)
-        logger.info(f"✓ Raw markets calculated for {symbol}")
-        return True
-    except Exception as e:
-        logger.error(f"Error calculating raw markets for {symbol}: {e}")
-        return False
+    def extract_closes(kline_list):
+        return [float(k[4]) for k in kline_list]
 
-def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
-    if frame not in ["12+6", "4+2"]:
-        return "Неподдерживаемый фрейм"
+    closes_12h = extract_closes(klines.get("12h", []))
+    closes_6h = extract_closes(klines.get("6h", []))
+    closes_4h = extract_closes(klines.get("4h", []))
+    closes_2h = extract_closes(klines.get("2h", []))
 
-    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{frame}.jsonl"
-    if not raw_file.exists():
-        return f"Файл не найден"
+    raw_12_6 = {"closes_12h": closes_12h[-3:], "closes_6h": closes_6h[-3:]}
+    raw_4_2 = {"closes_4h": closes_4h[-3:], "closes_2h": closes_2h[-3:]}
 
-    now = datetime.now(timezone.utc)
-    signals_count = {"UP": 0, "DOWN": 0, "RANGE": 0}
-    one_day_ago = now - timedelta(days=1)
+    file_path = Path(storage_path) / f"{symbol}_raw_market_12+6.jsonl"
+    with open(file_path, 'w') as f:
+        f.write(json.dumps(raw_12_6) + "\n")
+    logger.info(f"✓ Raw market saved: {symbol}_raw_market_12+6.jsonl")
 
-    lines = []
-    with open(raw_file, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    file_path = Path(storage_path) / f"{symbol}_raw_market_4+2.jsonl"
+    with open(file_path, 'w') as f:
+        f.write(json.dumps(raw_4_2) + "\n")
+    logger.info(f"✓ Raw market saved: {symbol}_raw_market_4+2.jsonl")
 
-    recent_records = []
-    for line in lines:
-        try:
-            record = json.loads(line)
-            ts = datetime.fromisoformat(record["timestamp"])
-            if ts >= one_day_ago:
-                recent_records.append(record)
-        except:
-            continue
+    logger.info(f"✓ Raw markets calculated for {symbol}")
 
-    if len(recent_records) < 10:
-        recent_records = []
-        for line in lines:
-            try:
-                record = json.loads(line)
-                recent_records.append(record)
-            except:
-                continue
-
-    for rec in recent_records:
-        sig = rec.get("signal", "RANGE")
-        signals_count[sig] = signals_count.get(sig, 0) + 1
-
-    total = len(recent_records)
-    if total == 0:
-        return "Нет данных"
-
-    market_mode = "RANGE"
-    for mode, count in signals_count.items():
-        if count / total > 0.6:
-            market_mode = mode
-            break
-
-    json_file = Path(storage_dir) / f"{symbol}.json"
-    data = {}
-    if json_file.exists():
-        try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except:
-            data = {}
-    data["market_mode"] = market_mode
-    with open(json_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-    return market_mode
+def force_market_mode(storage_path: str, symbol: str, frame: str):
+    calculate_raw_markets(storage_path, symbol)
+    return f"✓ Market mode {frame} updated"

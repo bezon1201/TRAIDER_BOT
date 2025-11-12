@@ -1,3 +1,6 @@
 fastapi
-uvicorn[standard]
+uvicorn
 httpx
+python-dotenv
+uvloop
+python-binance
