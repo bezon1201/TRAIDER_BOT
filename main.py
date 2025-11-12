@@ -145,3 +145,130 @@ def api_now(body: SymbolBody):
     calculate_and_save_raw_markets(storage, symbol, frame=frame)
     mode = force_market_mode(storage, symbol, frame=frame)
     return {"symbol": symbol, "bias": bias, "frame": frame, "market_mode": mode, "collected": True}
+
+
+# ---- Telegram webhook support (since 1.4) ----
+import httpx
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+def _tg_api_url(method: str) -> str:
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN env is not set")
+    return f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
+
+async def _tg_send_message(chat_id: int, text: str):
+    if not TELEGRAM_BOT_TOKEN:
+        return  # silently ignore in local dev
+    async with httpx.AsyncClient(timeout=15) as client:
+        await client.post(_tg_api_url("sendMessage"), json={"chat_id": chat_id, "text": text})
+
+def _parse_command(text: str):
+    # returns (cmd, args_list)
+    if not text or not text.startswith("/"):
+        return None, []
+    parts = text.strip().split()
+    cmd = parts[0].split("@")[0]  # strip @BotName
+    args = parts[1:]
+    return cmd.lower(), args
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(update: dict):
+    # Basic Telegram update handler
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    text = msg.get("text") or ""
+
+    cmd, args = _parse_command(text)
+    if not cmd:
+        return {"ok": True}
+
+    try:
+        if cmd == "/now":
+            symbol = args[0].upper() if args else os.environ.get("DEFAULT_SYMBOL", "")
+            if not symbol:
+                await _tg_send_message(chat_id, "Usage: /now <symbol>")
+                return {"ok": True}
+            storage = get_storage_dir()
+            bias = get_symbol_bias(storage, symbol) or "LONG"
+            collect_all_metrics(symbol)
+            frame = "12+6" if bias == "LONG" else "6+4"
+            calculate_and_save_raw_markets(storage, symbol, frame=frame)
+            mode = force_market_mode(storage, symbol, frame=frame)
+            await _tg_send_message(chat_id, f"{symbol}: collected, frame={frame}, market_mode={mode} (bias={bias})")
+            return {"ok": True}
+
+        if cmd == "/market":
+            # allow "/market force <symbol?>" or "/market <symbol?>"
+            if args and args[0].lower() == "force":
+                args = args[1:]
+            symbol = args[0].upper() if args else os.environ.get("DEFAULT_SYMBOL", "")
+            if not symbol:
+                await _tg_send_message(chat_id, "Usage: /market force <symbol?>")
+                return {"ok": True}
+            storage = get_storage_dir()
+            bias = get_symbol_bias(storage, symbol) or "LONG"
+            frame = "12+6" if bias == "LONG" else "6+4"
+            mode = force_market_mode(storage, symbol, frame=frame)
+            await _tg_send_message(chat_id, f"{symbol}: market_mode={mode} via {frame} (bias={bias})")
+            return {"ok": True}
+
+        if cmd == "/coin":
+            # /coin <symbol> long|short
+            if len(args) < 2:
+                await _tg_send_message(chat_id, "Usage: /coin <symbol> long|short")
+                return {"ok": True}
+            symbol = args[0].upper()
+            mode = args[1].lower()
+            bias = "LONG" if mode == "long" else "SHORT"
+            storage = get_storage_dir()
+            data = load_symbol_json(storage, symbol) or {"symbol": symbol}
+            data["bias"] = bias
+            save_symbol_json(storage, symbol, data)
+            await _tg_send_message(chat_id, f"{symbol} → bias={bias} (saved)")
+            return {"ok": True}
+
+        if cmd == "/coins":
+            storage = get_storage_dir()
+            syms = list_symbols(storage)
+            lines = []
+            for s in syms:
+                lines.append(f"{s} — {get_symbol_bias(storage, s)}")
+            await _tg_send_message(chat_id, "Pairs:\n" + ("\n".join(lines) if lines else "—"))
+            return {"ok": True}
+
+        if cmd == "/data":
+            # /data <symbol?>
+            symbol = args[0].upper() if args else os.environ.get("DEFAULT_SYMBOL", "")
+            if not symbol:
+                await _tg_send_message(chat_id, "Usage: /data <symbol>")
+                return {"ok": True}
+            storage = get_storage_dir()
+            d = load_symbol_json(storage, symbol) or {}
+            # short summary
+            mm = d.get("market_mode", "—")
+            bias = d.get("bias", "LONG")
+            await _tg_send_message(chat_id, f"{symbol}: market_mode={mm}, bias={bias}")
+            return {"ok": True}
+
+        # Unknown command
+        await _tg_send_message(chat_id, "Unknown command")
+        return {"ok": True}
+    except Exception as e:
+        if chat_id:
+            await _tg_send_message(chat_id, f"Error: {e}")
+        return {"ok": False}
+
+@app.post("/telegram/set_webhook")
+def set_webhook():
+    # Helper to register webhook with Telegram
+    base = os.environ.get("WEBHOOK_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
+    if not base:
+        raise HTTPException(status_code=400, detail="Set WEBHOOK_BASE_URL or RENDER_EXTERNAL_URL env")
+    url = base.rstrip("/") + "/telegram/webhook"
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN env is missing")
+    r = httpx.post(_tg_api_url("setWebhook"), json={"url": url}, timeout=15)
+    ok = r.json()
+    return {"requested_url": url, "telegram_response": ok}

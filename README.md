@@ -33,3 +33,22 @@ ASGI app: `main:app`
 - `POST /now` body: `{ "symbol": "BTCUSDT" }`
 
 `DEFAULT_SYMBOL` env var can be used if `symbol` omitted.
+
+
+## Telegram webhook (since 1.4)
+Set envs:
+- `TELEGRAM_BOT_TOKEN` — your bot token
+- `WEBHOOK_BASE_URL` or `RENDER_EXTERNAL_URL` — public https base
+
+Then call:
+```
+POST /telegram/set_webhook
+```
+Telegram will send updates to `POST /telegram/webhook`.
+
+Supported commands (chat):
+- `/now <symbol>`
+- `/market force <symbol?>`  (symbol optional if `DEFAULT_SYMBOL` set)
+- `/coin <symbol> long|short`
+- `/coins`
+- `/data <symbol?>`
