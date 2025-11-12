@@ -81,16 +81,31 @@ def remove_pairs(storage_dir: str, pairs_to_remove: List[str]) -> tuple[bool, Li
         logger.error(f"Error removing pairs: {e}")
         return False, []
 
-def parse_coins_command(text: str) -> tuple[str, List[str]]:
+def parse_coins_command(text: str) -> tuple[str, list[str]]:
+    """
+    Parse /coins command.
+    Returns (action, symbols), where action in:
+      - 'list'            -> show current list
+      - 'delete'          -> remove symbols
+      - 'add'             -> add symbols
+      - 'mode_long'       -> set Mode=LONG for symbols
+      - 'mode_short'      -> set Mode=SHORT for symbols
+    """
     parts = text.strip().split()
     if parts and parts[0].lower() == '/coins':
         parts = parts[1:]
     if not parts:
         return 'list', []
-    if parts[0].lower() == 'delete':
-        return 'delete', [p.strip() for p in parts[1:] if p.strip()]
-    else:
-        return 'add', [p.strip() for p in parts if p.strip()]
+    head = parts[0].lower()
+    rest = [p.strip() for p in parts[1:] if p.strip()]
+    if head == 'delete':
+        return 'delete', rest
+    if head == 'long':
+        return 'mode_long', rest
+    if head == 'short':
+        return 'mode_short', rest
+    # default: add
+    return 'add', [p.strip() for p in parts if p.strip()]
 
 def get_coin_file_path(storage_dir: str, symbol: str) -> str:
     os.makedirs(storage_dir, exist_ok=True)

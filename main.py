@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from data import DataStorage
-from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs
+from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs, set_mode
 from collector import collect_all_metrics
 from market_calculation import force_market_mode
 from metric_scheduler import MetricScheduler
@@ -204,6 +204,18 @@ async def telegram_webhook(request: Request):
 
     if lower_text.startswith('/coins'):
         action, pairs_list = parse_coins_command(text)
+
+        if action in ('mode_long', 'mode_short'):
+            if not pairs_list:
+                await tg_send(chat_id, "❌ Укажите пары для смены режима")
+                return JSONResponse({"ok": True})
+            mode = 'LONG' if action == 'mode_long' else 'SHORT'
+            results = []
+            for s in pairs_list:
+                res = set_mode(DATA_STORAGE, s, mode)
+                results.append(f"{s}: {res}")
+            await tg_send(chat_id, "✅ Mode обновлён:\n" + "\n".join(results))
+            return JSONResponse({"ok": True})
 
         if action == 'list':
             all_pairs = read_pairs(DATA_STORAGE)
