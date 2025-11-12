@@ -93,7 +93,6 @@ def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[
         return False
 
 def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
-    """v5.4 - читает raw_market файл и вычисляет market_mode голосованием >60%"""
     if frame not in ["12+6", "4+2"]:
         return "Неподдерживаемый фрейм"
 
