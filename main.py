@@ -217,7 +217,7 @@ async def telegram_webhook(request: Request):
             results.append(f"{s}: {res}")
         await tg_send(chat_id, "✅ Mode обновлён:\n" + "\n".join(results))
         return JSONResponse({"ok": True})
-if lower_text.startswith('/coins'):
+    if lower_text.startswith('/coins'):
         action, pairs_list = parse_coins_command(text)
 
         if action == 'list':
