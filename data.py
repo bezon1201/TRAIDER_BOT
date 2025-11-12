@@ -1,45 +1,80 @@
-# -*- coding: utf-8 -*-
-"""
-data.py — helpers for reading/writing <SYMBOL>.json including bias.
-"""
-import os, json, glob
-from typing import Optional, Dict, Any, List
+import os
+import logging
+from pathlib import Path
+from typing import List, Optional
 
-DEFAULT_STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")
+logger = logging.getLogger(__name__)
 
-def get_storage_dir() -> str:
-    return DEFAULT_STORAGE_DIR
+class DataStorage:
+    def __init__(self, storage_dir: str):
+        self.storage_dir = Path(storage_dir)
+        self._ensure_storage_exists()
 
-def _symbol_path(storage_dir: str, symbol: str) -> str:
-    os.makedirs(storage_dir, exist_ok=True)
-    return os.path.join(storage_dir, f"{symbol}.json")
+    def _ensure_storage_exists(self):
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"✓ Storage initialized at: {self.storage_dir}")
 
-def load_symbol_json(storage_dir: str, symbol: str) -> Optional[Dict[str, Any]]:
-    path = _symbol_path(storage_dir, symbol)
-    if not os.path.exists(path):
+    def get_files_list(self) -> List[str]:
+        try:
+            files = [f.name for f in self.storage_dir.iterdir() if f.is_file()]
+            return sorted(files)
+        except Exception as e:
+            logger.error(f"Error getting files list: {e}")
+            return []
+
+    def get_file_path(self, filename: str) -> Optional[Path]:
+        file_path = self.storage_dir / filename
+        if file_path.exists() and file_path.is_file():
+            return file_path
         return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
-def save_symbol_json(storage_dir: str, symbol: str, data: Dict[str, Any]) -> None:
-    path = _symbol_path(storage_dir, symbol)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    def delete_all(self) -> bool:
+        try:
+            files = self.get_files_list()
+            for filename in files:
+                file_path = self.storage_dir / filename
+                file_path.unlink()
+                logger.info(f"Deleted: {filename}")
+            logger.info(f"All files deleted. Total: {len(files)}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting files: {e}")
+            return False
 
-def list_symbols(storage_dir: str) -> List[str]:
-    os.makedirs(storage_dir, exist_ok=True)
-    out = []
-    for p in glob.glob(os.path.join(storage_dir, "*.json")):
-        base = os.path.basename(p)
-        if base.endswith(".json"):
-            out.append(base[:-5])
-    return sorted(out)
+    def delete_file(self, filename: str) -> bool:
+        try:
+            file_path = self.get_file_path(filename)
+            if file_path:
+                file_path.unlink()
+                logger.info(f"Deleted: {filename}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting {filename}: {e}")
+            return False
 
-def get_symbol_bias(storage_dir: str, symbol: str) -> str:
-    data = load_symbol_json(storage_dir, symbol) or {}
-    bias = data.get("bias", "LONG")
-    # auto-backfill if missing
-    if "bias" not in data:
-        data["bias"] = bias
-        save_symbol_json(storage_dir, symbol, data)
-    return bias
+    def save_file_atomic(self, filename: str, content: bytes) -> bool:
+        try:
+            file_path = self.storage_dir / filename
+            tmp_path = self.storage_dir / (filename + ".tmp")
+            tmp_path.write_bytes(content)
+            tmp_path.replace(file_path)
+            logger.info(f"✓ File saved: {filename}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving {filename}: {e}")
+            try:
+                tmp_path.unlink()
+            except:
+                pass
+            return False
+
+    def save_file(self, filename: str, content: bytes) -> bool:
+        return self.save_file_atomic(filename, content)
+
+    def get_file_size(self, filename: str) -> Optional[int]:
+        file_path = self.get_file_path(filename)
+        return file_path.stat().st_size if file_path else None
+
+    def file_exists(self, filename: str) -> bool:
+        return self.get_file_path(filename) is not None

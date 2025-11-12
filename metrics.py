@@ -120,3 +120,31 @@ def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error reading metrics {symbol}: {e}")
         return {}
+
+
+# --- Patched add_pairs to create default MODE on new coins ---
+def add_pairs(storage_dir: str, pairs: List[str]) -> bool:
+    """Add pairs to pairs.txt and ensure coin JSON exists with default MODE."""
+    try:
+        existing = set(read_pairs(storage_dir))
+        to_add = [normalize_pair(p) for p in pairs if p]
+        if not to_add:
+            return True
+        new = []
+        for p in to_add:
+            if p not in existing:
+                new.append(p)
+        # write file
+        all_pairs = list(existing | set(new))
+        all_pairs.sort()
+        path = os.path.join(storage_dir, PAIRS_FILE)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(all_pairs))
+        # ensure json defaults
+        for p in new:
+            ensure_coin_file_with_default(storage_dir, p)
+        logger.info(f"Added pairs: {new}")
+        return True
+    except Exception as e:
+        logger.error(f"Error adding pairs: {e}")
+        return False
