@@ -21,6 +21,7 @@ logger.info(f"Using DATA_STORAGE: {DATA_STORAGE}")
 
 data_storage = DataStorage(DATA_STORAGE)
 app = FastAPI()
+
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
 
@@ -29,7 +30,6 @@ async def tg_send(chat_id: str, text: str) -> None:
     if not TELEGRAM_API:
         logger.warning("No TELEGRAM_API")
         return
-
     try:
         response = await client.post(
             f"{TELEGRAM_API}/sendMessage",
@@ -44,7 +44,6 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
     """Send file to Telegram"""
     if not TELEGRAM_API:
         return False
-
     try:
         with open(file_path, 'rb') as f:
             files_data = {"document": (filename, f, "application/octet-stream")}
@@ -53,7 +52,6 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
                 data={"chat_id": chat_id},
                 files=files_data
             )
-
             if response.status_code == 200:
                 logger.info(f"✓ File sent: {filename}")
                 return True
@@ -67,7 +65,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 @app.on_event("startup")
 async def startup():
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.2)")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.3)")
 
 @app.get("/health")
 @app.head("/health")
@@ -77,7 +75,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "5.2"}
+    return {"ok": True, "service": "traider-bot", "version": "5.3"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -97,7 +95,7 @@ async def telegram_webhook(request: Request):
 
     # /start
     if text.lower() == "/start":
-        help_msg = ("✅ Бот готов!\n\n"
+        help_msg = ("✅ Бот готов (v5.3)!\n\n"
                    "📝 Команды:\n"
                    "/coins - показать список пар\n"
                    "/coins PAIR1 PAIR2 - добавить пары\n"
@@ -105,7 +103,9 @@ async def telegram_webhook(request: Request):
                    "/now - собрать метрики + raw режимы\n"
                    "/data - список файлов\n"
                    "/data export all - отправить все файлы\n"
-                   "/data delete all - удалить все файлы")
+                   "/data delete all - удалить все файлы\n"
+                   "/data delete file1.xxx, file2.xxx - удалить конкретные\n"
+                   "/data import - импортировать файлы")
         await tg_send(chat_id, help_msg)
         return JSONResponse({"ok": True})
 
@@ -114,7 +114,6 @@ async def telegram_webhook(request: Request):
         action, pairs_list = parse_coins_command(text)
 
         if action == 'list':
-            # /coins - показать список
             all_pairs = read_pairs(DATA_STORAGE)
             if all_pairs:
                 msg = f"📊 Активные пары ({len(all_pairs)}):\n" + ", ".join(all_pairs)
@@ -123,7 +122,6 @@ async def telegram_webhook(request: Request):
             await tg_send(chat_id, msg)
 
         elif action == 'delete':
-            # /coins delete <pairs>
             if not pairs_list:
                 await tg_send(chat_id, "❌ Укажите пары для удаления: /coins delete BTCUSDT ETHUSDT")
                 return JSONResponse({"ok": True})
@@ -135,7 +133,6 @@ async def telegram_webhook(request: Request):
                 await tg_send(chat_id, "❌ Ошибка при удалении")
 
         else:  # action == 'add'
-            # /coins <pairs> - добавить
             if not pairs_list:
                 await tg_send(chat_id, "❌ Укажите пары: /coins BTCUSDT ETHUSDT")
                 return JSONResponse({"ok": True})
@@ -187,6 +184,36 @@ async def telegram_webhook(request: Request):
                 await tg_send(chat_id, "❌ Ошибка при удалении")
         return JSONResponse({"ok": True})
 
+    # /data delete filename1, filename2 - НОВОЕ В v5.3
+    if text.lower().startswith("/data delete ") and text.lower() != "/data delete all":
+        args = text[13:].strip()
+        if not args:
+            await tg_send(chat_id, "❌ Укажите файлы: /data delete file1.xxx, file2.xxx")
+            return JSONResponse({"ok": True})
+
+        filenames = [f.strip() for f in args.split(",") if f.strip()]
+        if not filenames:
+            await tg_send(chat_id, "❌ Укажите файлы через запятую")
+            return JSONResponse({"ok": True})
+
+        deleted = []
+        failed = []
+
+        for filename in filenames:
+            if data_storage.delete_file(filename):
+                deleted.append(filename)
+            else:
+                failed.append(filename)
+
+        msg = f"✓ Удалено: {len(deleted)}"
+        if deleted:
+            msg += f"\n  {', '.join(deleted)}"
+        if failed:
+            msg += f"\n❌ Не найдены: {len(failed)}\n  {', '.join(failed)}"
+
+        await tg_send(chat_id, msg)
+        return JSONResponse({"ok": True})
+
     # /data export all
     if text.lower() == "/data export all":
         files = data_storage.get_files_list()
@@ -217,6 +244,11 @@ async def telegram_webhook(request: Request):
                 summary += f"\n❌ Ошибки: {error_count}"
             await tg_send(chat_id, summary)
 
+        return JSONResponse({"ok": True})
+
+    # /data import - НОВОЕ В v5.3 (подготовка)
+    if text.lower() == "/data import":
+        await tg_send(chat_id, "📥 Функция импорта готова.\nПрикрепите файлы и напишите /data import")
         return JSONResponse({"ok": True})
 
     # Unknown command
