@@ -4,115 +4,65 @@ import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
-from pathlib import Path
 from data import DataStorage
 from metrics import parse_coins_command, add_pairs
 from collector import collect_all_metrics
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment variables - используем ./storage по умолчанию!
+# Env
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 WEBHOOK_URL = os.getenv('WEBHOOK_BASE', '')
 PORT = int(os.getenv('PORT', 10000))
-DATA_STORAGE = os.getenv('DATA_STORAGE', './storage')  # ← Изменено с /data на ./storage
+DATA_STORAGE = os.getenv('DATA_STORAGE', '/data')  # ← Render Disk path
 
-# Initialize data storage
+logger.info(f"Using DATA_STORAGE: {DATA_STORAGE}")
+
+# Init
 data_storage = DataStorage(DATA_STORAGE)
-
-# FastAPI app
 app = FastAPI()
-
-# Telegram API
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
-
-# HTTP client
 client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
 
 async def tg_send(chat_id: str, text: str) -> None:
-    """Send message to Telegram"""
+    """Send Telegram message"""
     if not TELEGRAM_API:
-        logger.warning("TELEGRAM_API not configured")
+        logger.warning("No TELEGRAM_API")
         return
 
     try:
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True,
-        }
-
         response = await client.post(
             f"{TELEGRAM_API}/sendMessage",
-            json=payload,
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         )
-
-        if response.status_code != 200:
-            logger.error(f"Telegram API error: {response.status_code}")
-        else:
-            logger.info(f"Message sent successfully to {chat_id}")
-
+        if response.status_code == 200:
+            logger.info(f"✓ Message sent to {chat_id}")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
 
 @app.on_event("startup")
-async def startup_event():
-    """Send startup message and set webhook"""
+async def startup():
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "Бот запущен (FastAPI v4.6 с персистентным хранилищем)")
-
-    # Set webhook
-    if WEBHOOK_URL and BOT_TOKEN:
-        try:
-            webhook_path = f"{WEBHOOK_URL}/telegram"
-            payload = {"url": webhook_path}
-
-            response = await client.post(
-                f"{TELEGRAM_API}/setWebhook",
-                json=payload,
-            )
-
-            if response.status_code == 200:
-                logger.info(f"Webhook set to: {webhook_path}")
-            else:
-                logger.error(f"Failed to set webhook: {response.status_code}")
-
-        except Exception as e:
-            logger.error(f"Error setting webhook: {e}")
+        await tg_send(ADMIN_CHAT_ID, "Бот запущен (v4.7 - ЧИСТАЯ СБОРКА)")
 
 @app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {"ok": True}
-
 @app.head("/health")
-async def health_head():
-    """Health check endpoint (HEAD)"""
+async def health():
     return {"ok": True}
 
 @app.get("/")
-async def root():
-    """Root endpoint"""
-    return {"ok": True, "service": "traider-bot", "version": "4.6"}
-
 @app.head("/")
-async def root_head():
-    """Root endpoint (HEAD)"""
-    return {"ok": True}
+async def root():
+    return {"ok": True, "service": "traider-bot", "version": "4.7"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
-    """Handle Telegram updates"""
     try:
         data = await request.json()
-    except Exception:
+    except:
         data = {}
 
     message = data.get("message", {})
@@ -122,121 +72,49 @@ async def telegram_webhook(request: Request):
     if not chat_id or not text:
         return JSONResponse({"ok": True})
 
-    logger.info(f"Received message from {chat_id}: {text[:100]}")
+    logger.info(f"Message from {chat_id}: {text[:50]}")
 
-    # Handle /start command
+    # /start
     if text.lower() == "/start":
-        await tg_send(chat_id, "Привет! Бот запущен (FastAPI v4.6 с персистентным хранилищем).")
+        await tg_send(chat_id, "✓ Бот готов!\n/coins PAIR1 PAIR2 - добавить пары\n/now - собрать метрики\n/data - список файлов")
         return JSONResponse({"ok": True})
 
-    # Handle /coins command
+    # /coins
     if text.lower().startswith('/coins'):
         pairs_list = parse_coins_command(text)
-
         if not pairs_list:
-            await tg_send(chat_id, "Ошибка: укажите пары.\nПример: /coins BTCUSDT ETHUSDT")
+            await tg_send(chat_id, "❌ Укажите пары: /coins BTCUSDT ETHUSDT")
             return JSONResponse({"ok": True})
 
         success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
-
         if success:
-            pairs_str = ', '.join(all_pairs)
-            response_msg = ('✅ Пары обновлены.\n\n' +
-                          'Всего пар: ' + str(len(all_pairs)) + '\n' +
-                          'Список:\n' + pairs_str)
-            await tg_send(chat_id, response_msg)
+            await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)}):\n" + ", ".join(all_pairs))
         else:
-            await tg_send(chat_id, "❌ Ошибка при обновлении пар")
-
+            await tg_send(chat_id, "❌ Ошибка")
         return JSONResponse({"ok": True})
 
-    # Handle /now command
+    # /now - ГЛАВНАЯ КОМАНДА СБОРА МЕТРИК
     if text.lower() == "/now":
-        logger.info(f"Starting metrics collection from {chat_id}")
-
+        logger.info(f"Collecting metrics from {chat_id}...")
         try:
             results = await collect_all_metrics(DATA_STORAGE, delay_ms=50)
-            success_count = sum(1 for v in results.values() if v)
-            total_count = len(results)
-
-            if total_count > 0:
-                logger.info(f"Metrics collected: {success_count}/{total_count}")
+            success = sum(1 for v in results.values() if v)
+            total = len(results)
+            logger.info(f"✓ Collection: {success}/{total}")
         except Exception as e:
-            logger.error(f"Error during metrics collection: {e}")
+            logger.error(f"Collection error: {e}")
 
         return JSONResponse({"ok": True})
 
-    # Handle /data command
+    # /data
     if text.lower() == "/data":
         files = data_storage.get_files_list()
-        if files:
-            files_str = ', '.join(files)
-            response_msg = 'Файлы в хранилище:\n' + files_str
-        else:
-            response_msg = 'Хранилище пусто'
-
-        await tg_send(chat_id, response_msg)
+        msg = f"📁 Файлов: {len(files)}\n" + "\n".join(files) if files else "Пусто"
+        await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 
-    # Handle /data delete all
-    if text.lower() == "/data delete all":
-        files = data_storage.get_files_list()
-        if not files:
-            await tg_send(chat_id, "Хранилище уже пусто")
-        else:
-            if data_storage.delete_all():
-                count_str = str(len(files))
-                response_msg = '✅ Удалено ' + count_str + ' файл(ов)'
-                await tg_send(chat_id, response_msg)
-            else:
-                await tg_send(chat_id, "❌ Ошибка при удалении файлов")
-        return JSONResponse({"ok": True})
-
-    # Handle /data export all
-    if text.lower() == "/data export all":
-        files = data_storage.get_files_list()
-        if not files:
-            await tg_send(chat_id, "Нечего экспортировать - хранилище пусто")
-        else:
-            count_str = str(len(files))
-            await tg_send(chat_id, 'Отправляю ' + count_str + ' файл(ов)...')
-
-            for filename in files:
-                file_path = data_storage.get_file_path(filename)
-                if file_path:
-                    try:
-                        with open(file_path, 'rb') as f:
-                            files_to_send = {"document": (filename, f, "application/json")}
-                            form_data = {"chat_id": chat_id}
-
-                            response = await client.post(
-                                f"{TELEGRAM_API}/sendDocument",
-                                data=form_data,
-                                files=files_to_send,
-                            )
-
-                            if response.status_code == 200:
-                                logger.info(f"Exported: {filename}")
-                    except Exception as e:
-                        logger.error(f"Error exporting {filename}: {e}")
-                        error_msg = 'Ошибка при отправке ' + filename
-                        await tg_send(chat_id, error_msg)
-
-            count_str = str(len(files))
-            success_msg = '✅ Экспортировано ' + count_str + ' файл(ов)'
-            await tg_send(chat_id, success_msg)
-        return JSONResponse({"ok": True})
-
-    # Default response
-    help_text = ('Неизвестная команда.\nДоступные команды:\n' +
-                '/start - приветствие\n' +
-                '/coins - добавить пары для сбора метрик\n' +
-                '/now - собрать ВСЕ метрики (ticker + filters + klines + indicators)\n' +
-                '/data - список файлов\n' +
-                '/data export all - отправить все файлы\n' +
-                '/data delete all - удалить все файлы')
-    await tg_send(chat_id, help_text)
-
+    # Default
+    await tg_send(chat_id, "❓ Неизвестная команда")
     return JSONResponse({"ok": True})
 
 if __name__ == "__main__":

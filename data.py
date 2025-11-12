@@ -6,7 +6,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 class DataStorage:
-    """Модуль для управления файлами в хранилище с атомарной записью"""
+    """Управление файлами в персистентном хранилище Render Disk"""
 
     def __init__(self, storage_dir: str):
         self.storage_dir = Path(storage_dir)
@@ -14,7 +14,7 @@ class DataStorage:
 
     def _ensure_storage_exists(self):
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Storage initialized at: {self.storage_dir}")
+        logger.info(f"✓ Storage initialized at: {self.storage_dir}")
 
     def get_files_list(self) -> List[str]:
         try:
@@ -44,22 +44,18 @@ class DataStorage:
             return False
 
     def save_file_atomic(self, filename: str, content: bytes) -> bool:
-        """Сохраняет файл атомарно через временный файл (как в старом боте)"""
+        """Атомарное сохранение файла (защита от коррупции)"""
         try:
             file_path = self.storage_dir / filename
             tmp_path = self.storage_dir / (filename + ".tmp")
 
-            # Пишем во временный файл
             tmp_path.write_bytes(content)
-
-            # Атомарная замена
             tmp_path.replace(file_path)
 
-            logger.info(f"File saved atomically: {filename}")
+            logger.info(f"✓ File saved: {filename}")
             return True
         except Exception as e:
-            logger.error(f"Error saving file {filename}: {e}")
-            # Очищаем временный файл если что-то пошло не так
+            logger.error(f"Error saving {filename}: {e}")
             try:
                 tmp_path.unlink()
             except:
@@ -72,9 +68,7 @@ class DataStorage:
 
     def get_file_size(self, filename: str) -> Optional[int]:
         file_path = self.get_file_path(filename)
-        if file_path:
-            return file_path.stat().st_size
-        return None
+        return file_path.stat().st_size if file_path else None
 
     def file_exists(self, filename: str) -> bool:
         return self.get_file_path(filename) is not None

@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime, timezone
 
@@ -9,23 +8,19 @@ logger = logging.getLogger(__name__)
 
 PAIRS_FILE = "pairs.txt"
 
-def get_pairs_file_path(storage_dir: str) -> str:
-    """Получает полный путь к файлу pairs.txt"""
-    return os.path.join(storage_dir, PAIRS_FILE)
-
 def normalize_pair(pair: str) -> str:
-    """Нормализует пару: верхний регистр и удаляет пробелы"""
+    """Нормализует пару"""
     return str(pair).strip().upper()
 
 def read_pairs(storage_dir: str) -> List[str]:
-    """Читает список пар из файла pairs.txt"""
+    """Читает список пар"""
     try:
-        pairs_path = get_pairs_file_path(storage_dir)
-        if not os.path.exists(pairs_path):
-            logger.info(f"Pairs file not found: {pairs_path}")
+        path = os.path.join(storage_dir, PAIRS_FILE)
+        if not os.path.exists(path):
+            logger.info(f"Pairs file not found: {path}")
             return []
 
-        with open(pairs_path, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
 
         pairs = []
@@ -34,114 +29,94 @@ def read_pairs(storage_dir: str) -> List[str]:
             if pair and pair not in pairs:
                 pairs.append(pair)
 
-        logger.info(f"Read {len(pairs)} pairs from {pairs_path}")
+        logger.info(f"✓ Read {len(pairs)} pairs")
         return pairs
-
     except Exception as e:
         logger.error(f"Error reading pairs: {e}")
         return []
 
 def write_pairs(storage_dir: str, pairs: List[str]) -> bool:
-    """Записывает список пар в файл pairs.txt с атомарной записью"""
+    """Записывает пары (атомарно)"""
     try:
         os.makedirs(storage_dir, exist_ok=True)
-        pairs_path = get_pairs_file_path(storage_dir)
+        path = os.path.join(storage_dir, PAIRS_FILE)
 
         normalized = []
         seen = set()
         for pair in pairs:
-            normalized_pair = normalize_pair(pair)
-            if normalized_pair and normalized_pair not in seen:
-                normalized.append(normalized_pair)
-                seen.add(normalized_pair)
+            p = normalize_pair(pair)
+            if p and p not in seen:
+                normalized.append(p)
+                seen.add(p)
 
         normalized.sort()
 
-        # Атомарная запись
-        tmp_path = pairs_path + ".tmp"
+        tmp_path = path + ".tmp"
         with open(tmp_path, 'w', encoding='utf-8') as f:
             for pair in normalized:
                 f.write(pair + '\n')
 
-        # Атомарная замена
-        os.replace(tmp_path, pairs_path)
-
-        logger.info(f"Written {len(normalized)} pairs to {pairs_path} (atomic)")
+        os.replace(tmp_path, path)
+        logger.info(f"✓ Written {len(normalized)} pairs")
         return True
-
     except Exception as e:
         logger.error(f"Error writing pairs: {e}")
         return False
 
 def add_pairs(storage_dir: str, new_pairs: List[str]) -> tuple[bool, List[str]]:
-    """Добавляет новые пары к существующему списку"""
+    """Добавляет пары"""
     try:
-        existing_pairs = read_pairs(storage_dir)
-        all_pairs = existing_pairs.copy()
+        existing = read_pairs(storage_dir)
+        all_pairs = existing.copy()
 
-        for new_pair in new_pairs:
-            normalized = normalize_pair(new_pair)
-            if normalized and normalized not in all_pairs:
-                all_pairs.append(normalized)
+        for pair in new_pairs:
+            p = normalize_pair(pair)
+            if p and p not in all_pairs:
+                all_pairs.append(p)
 
         write_pairs(storage_dir, all_pairs)
         return True, all_pairs
-
     except Exception as e:
         logger.error(f"Error adding pairs: {e}")
         return False, []
 
-def parse_coins_command(command_text: str) -> List[str]:
-    """Парсит команду /coins и извлекает пары"""
-    parts = command_text.strip().split()
-
+def parse_coins_command(text: str) -> List[str]:
+    """Парсит команду /coins"""
+    parts = text.strip().split()
     if parts and parts[0].lower() == '/coins':
         parts = parts[1:]
-
-    pairs = [p.strip() for p in parts if p.strip()]
-    return pairs
+    return [p.strip() for p in parts if p.strip()]
 
 def get_coin_file_path(storage_dir: str, symbol: str) -> str:
-    """Получает путь к файлу монеты (например BTCUSDT.json)"""
+    """Путь к файлу метрик"""
     os.makedirs(storage_dir, exist_ok=True)
     return os.path.join(storage_dir, f"{normalize_pair(symbol)}.json")
 
 def save_metrics(storage_dir: str, symbol: str, metrics_data: Dict[str, Any]) -> bool:
-    """Сохраняет метрики монеты в JSON файл с атомарной записью"""
+    """Сохраняет метрики (атомарно)"""
     try:
         file_path = get_coin_file_path(storage_dir, symbol)
-
-        # Добавляем временную метку
         metrics_data["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-        # Атомарная запись
         tmp_path = file_path + ".tmp"
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(metrics_data, f, indent=2, ensure_ascii=False)
 
-        # Атомарная замена
         os.replace(tmp_path, file_path)
-
-        logger.info(f"Metrics saved for {symbol} (atomic)")
+        logger.info(f"✓ Metrics saved: {symbol}")
         return True
-
     except Exception as e:
-        logger.error(f"Error saving metrics for {symbol}: {e}")
+        logger.error(f"Error saving metrics {symbol}: {e}")
         return False
 
 def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
-    """Читает метрики монеты из JSON файла"""
+    """Читает метрики"""
     try:
-        file_path = get_coin_file_path(storage_dir, symbol)
-
-        if not os.path.exists(file_path):
+        path = get_coin_file_path(storage_dir, symbol)
+        if not os.path.exists(path):
             return {}
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        return data
-
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
     except Exception as e:
-        logger.error(f"Error reading metrics for {symbol}: {e}")
+        logger.error(f"Error reading metrics {symbol}: {e}")
         return {}
