@@ -40,7 +40,6 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
     current_time = datetime.now(timezone.utc).timestamp()
     if symbol in _filters_cache and symbol in _filters_cache_time:
         if current_time - _filters_cache_time[symbol] < 21600:
-            logger.debug(f"Cache: {symbol}")
             return _filters_cache[symbol]
     try:
         response = await client.get(f"{BINANCE_API}/exchangeInfo", params={"symbol": symbol})
@@ -53,12 +52,6 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
                     filters["price_filter"] = {"min_price": float(f.get("minPrice", 0)), "max_price": float(f.get("maxPrice", 0)), "tick_size": float(f.get("tickSize", 0))}
                 elif ft == "LOT_SIZE":
                     filters["lot_size"] = {"min_qty": float(f.get("minQty", 0)), "max_qty": float(f.get("maxQty", 0)), "step_size": float(f.get("stepSize", 0))}
-                elif ft == "MIN_NOTIONAL":
-                    filters["min_notional"] = {"min_notional": float(f.get("minNotional", 0))}
-                elif ft == "MAX_NUM_ORDERS":
-                    filters["max_num_orders"] = {"limit": int(f.get("maxNumOrders", 0))}
-                elif ft == "MAX_NUM_ALGO_ORDERS":
-                    filters["max_num_algo_orders"] = {"limit": int(f.get("maxNumAlgoOrders", 0))}
             _filters_cache[symbol] = filters
             _filters_cache_time[symbol] = current_time
             return filters

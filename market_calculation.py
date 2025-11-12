@@ -1,6 +1,6 @@
 import logging
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -92,42 +92,66 @@ def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[
         logger.error(f"Error calculating raw markets for {symbol}: {e}")
         return False
 
-def get_raw_market_summary(storage_dir: str, symbol: str, frame: str, hours: int = 72) -> Optional[str]:
-    try:
-        filename = f"{symbol}_raw_market_{frame}.jsonl"
-        filepath = Path(storage_dir) / filename
-        if not filepath.exists():
-            return None
-        cutoff_time = datetime.now(timezone.utc).timestamp() - (hours * 3600)
-        up_count = 0
-        down_count = 0
-        range_count = 0
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                    ts = datetime.fromisoformat(record["timestamp"]).timestamp()
-                    if ts >= cutoff_time:
-                        signal = record.get("signal", "RANGE")
-                        if signal == "UP":
-                            up_count += 1
-                        elif signal == "DOWN":
-                            down_count += 1
-                        else:
-                            range_count += 1
-                except:
-                    pass
-        total = up_count + down_count + range_count
-        if total == 0:
-            return "RANGE"
-        up_pct = (up_count / total) * 100
-        down_pct = (down_count / total) * 100
-        if up_pct >= 60:
-            return "UP"
-        elif down_pct >= 60:
-            return "DOWN"
-        else:
-            return "RANGE"
-    except Exception as e:
-        logger.error(f"Error getting raw market summary {symbol} {frame}: {e}")
-        return None
+def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
+    """v5.4 - читает raw_market файл и вычисляет market_mode голосованием >60%"""
+    if frame not in ["12+6", "4+2"]:
+        return "Неподдерживаемый фрейм"
+
+    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{frame}.jsonl"
+    if not raw_file.exists():
+        return f"Файл не найден"
+
+    now = datetime.now(timezone.utc)
+    signals_count = {"UP": 0, "DOWN": 0, "RANGE": 0}
+    one_day_ago = now - timedelta(days=1)
+
+    lines = []
+    with open(raw_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    recent_records = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+            ts = datetime.fromisoformat(record["timestamp"])
+            if ts >= one_day_ago:
+                recent_records.append(record)
+        except:
+            continue
+
+    if len(recent_records) < 10:
+        recent_records = []
+        for line in lines:
+            try:
+                record = json.loads(line)
+                recent_records.append(record)
+            except:
+                continue
+
+    for rec in recent_records:
+        sig = rec.get("signal", "RANGE")
+        signals_count[sig] = signals_count.get(sig, 0) + 1
+
+    total = len(recent_records)
+    if total == 0:
+        return "Нет данных"
+
+    market_mode = "RANGE"
+    for mode, count in signals_count.items():
+        if count / total > 0.6:
+            market_mode = mode
+            break
+
+    json_file = Path(storage_dir) / f"{symbol}.json"
+    data = {}
+    if json_file.exists():
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except:
+            data = {}
+    data["market_mode"] = market_mode
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return market_mode
