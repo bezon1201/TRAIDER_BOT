@@ -1,3 +1,6 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 # -*- coding: utf-8 -*-
 """
 main.py — Telegram bot command handlers (updated for version 1.1)
@@ -88,3 +91,57 @@ def cmd_now(update, ctx):
 # dispatcher.add_handler(CommandHandler("coin", cmd_coin))
 # dispatcher.add_handler(CommandHandler("market", cmd_market_force, filters=Filters.regex(r"^force\b")))
 # dispatcher.add_handler(CommandHandler("now", cmd_now))
+
+
+# ---- FastAPI ASGI app ----
+app = FastAPI(title="Market Bot API", version="1.3")
+
+class CoinBody(BaseModel):
+    symbol: Optional[str] = None
+    mode: Optional[str] = None  # "long" | "short"
+
+class SymbolBody(BaseModel):
+    symbol: Optional[str] = None
+
+def _resolve_symbol(symbol: Optional[str]) -> str:
+    sym = (symbol or os.environ.get("DEFAULT_SYMBOL", "")).upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol is required (body.symbol or DEFAULT_SYMBOL)")
+    return sym
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "version": "1.3"}
+
+@app.post("/coin")
+def set_coin(body: CoinBody):
+    symbol = _resolve_symbol(body.symbol)
+    mode = (body.mode or "long").lower()
+    bias = "LONG" if mode == "long" else "SHORT"
+    storage = get_storage_dir()
+    data = load_symbol_json(storage, symbol) or {"symbol": symbol}
+    data["bias"] = bias
+    save_symbol_json(storage, symbol, data)
+    return {"symbol": symbol, "bias": bias, "status": "saved"}
+
+@app.post("/market/force")
+def api_market_force(body: SymbolBody):
+    symbol = _resolve_symbol(body.symbol)
+    storage = get_storage_dir()
+    bias = get_symbol_bias(storage, symbol) or "LONG"
+    frame = "12+6" if bias == "LONG" else "6+4"
+    mode = force_market_mode(storage, symbol, frame=frame)
+    return {"symbol": symbol, "bias": bias, "frame": frame, "market_mode": mode}
+
+@app.post("/now")
+def api_now(body: SymbolBody):
+    symbol = _resolve_symbol(body.symbol)
+    storage = get_storage_dir()
+    bias = get_symbol_bias(storage, symbol) or "LONG"
+    # Full collection (collector decides details internally)
+    collect_all_metrics(symbol)
+    # Calculate raw + force mode by bias
+    frame = "12+6" if bias == "LONG" else "6+4"
+    calculate_and_save_raw_markets(storage, symbol, frame=frame)
+    mode = force_market_mode(storage, symbol, frame=frame)
+    return {"symbol": symbol, "bias": bias, "frame": frame, "market_mode": mode, "collected": True}

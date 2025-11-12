@@ -21,3 +21,15 @@ Updated: 2025-11-12T15:46:13.774058
 
 
 **Compat note (v1.2):** switched to `collector.collect_all_metrics(symbol)` to match existing API. The scheduler and commands now trigger a full metrics collection; market calculation still uses the bias to pick 12+6 or 6+4.
+
+
+## HTTP API (since 1.3)
+
+ASGI app: `main:app`
+
+- `GET /healthz` → `{ ok: true, version: "1.3" }`
+- `POST /coin` body: `{ "symbol": "BTCUSDT", "mode": "long|short" }`
+- `POST /market/force` body: `{ "symbol": "BTCUSDT" }`
+- `POST /now` body: `{ "symbol": "BTCUSDT" }`
+
+`DEFAULT_SYMBOL` env var can be used if `symbol` omitted.
