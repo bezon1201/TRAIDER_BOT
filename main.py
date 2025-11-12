@@ -66,7 +66,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 async def startup():
     await start_scheduler(DATA_STORAGE)
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.0.1) + Планировщик активирован")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.0.2) + Планировщик активирован")
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -80,7 +80,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "6.0.1"}
+    return {"ok": True, "service": "traider-bot", "version": "6.0.2"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -99,7 +99,7 @@ async def telegram_webhook(request: Request):
     logger.info(f"Message from {chat_id}: {text[:50]}")
 
     if text.lower() == "/start":
-        help_msg = ("✅ Бот готов (v6.0.1)!\n\n"
+        help_msg = ("✅ Бот готов (v6.0.2)!\n\n"
                    "📝 Команды:\n"
                    "/coins - показать пары\n"
                    "/coins PAIR1 PAIR2 - добавить пары\n"
@@ -124,8 +124,7 @@ async def telegram_webhook(request: Request):
         if action == 'list':
             all_pairs = read_pairs(DATA_STORAGE)
             if all_pairs:
-                msg = f"📊 Активные пары ({len(all_pairs)}):
-" + ", ".join(all_pairs)
+                msg = f"📊 Активные пары ({len(all_pairs)}):\n" + ", ".join(all_pairs)
             else:
                 msg = "📊 Список пар пуст"
             await tg_send(chat_id, msg)
@@ -146,8 +145,8 @@ async def telegram_webhook(request: Request):
                 return JSONResponse({"ok": True})
             success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
             if success:
-                await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)})
-" + ", ".join(all_pairs))
+                msg = f"✓ Пары обновлены ({len(all_pairs)})\n" + ", ".join(all_pairs)
+                await tg_send(chat_id, msg)
             else:
                 await tg_send(chat_id, "❌ Ошибка")
 
@@ -185,9 +184,7 @@ async def telegram_webhook(request: Request):
             result = force_market_mode(DATA_STORAGE, symbol, frame)
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для фрейма {frame}:
-" + "
-".join(results)
+        msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 
@@ -201,15 +198,14 @@ async def telegram_webhook(request: Request):
 
         if cmd == "confyg":
             cfg = get_config(DATA_STORAGE)
-            msg = f"⚙️ Конфиг планировщика:
-"
-            msg += f"enabled: {cfg.get('enabled')}
-"
-            msg += f"period: {cfg.get('period_seconds')}s
-"
-            msg += f"publish: {cfg.get('publish_hours')}h
-"
-            msg += f"last_publish: {cfg.get('last_publish', 'never')}"
+            lines = [
+                "⚙️ Конфиг планировщика:",
+                f"enabled: {cfg.get('enabled')}",
+                f"period: {cfg.get('period_seconds')}s",
+                f"publish: {cfg.get('publish_hours')}h",
+                f"last_publish: {cfg.get('last_publish', 'never')}"
+            ]
+            msg = "\n".join(lines)
             await tg_send(chat_id, msg)
 
         elif cmd == "on":
@@ -255,8 +251,7 @@ async def telegram_webhook(request: Request):
     if text.lower() == "/data":
         files = data_storage.get_files_list()
         if files:
-            msg = f"📁 Файлов: {len(files)}
-" + ", ".join(files)
+            msg = f"📁 Файлов: {len(files)}\n" + ", ".join(files)
         else:
             msg = "📁 Хранилище пусто"
         await tg_send(chat_id, msg)
@@ -291,11 +286,9 @@ async def telegram_webhook(request: Request):
 
         msg = f"✓ Удалено: {len(deleted)}"
         if deleted:
-            msg += f"
-  {', '.join(deleted)}"
+            msg += f"\n  {', '.join(deleted)}"
         if failed:
-            msg += f"
-❌ Не найдены: {len(failed)}"
+            msg += f"\n❌ Не найдены: {len(failed)}"
 
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
