@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from data import DataStorage
-from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs, set_coin_long_short, read_metrics, get_coin_file_path
+from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs
 from collector import collect_all_metrics
 from market_calculation import force_market_mode
 from metric_scheduler import MetricScheduler
@@ -402,34 +402,6 @@ async def telegram_webhook(request: Request):
                         logger.error(f"Error: {e}")
             await tg_send(chat_id, f"✓ Отправлено: {success_count}")
         return JSONResponse({"ok": True})
-
-
-        # /coin long [SYMBOL] or /coin short [SYMBOL]
-        if text.startswith('/coin'):
-            parts = text.strip().split()
-            # parts: ['/coin', 'long'|'short', optional SYMBOL]
-            action = parts[1] if len(parts) > 1 else ''
-            sym = parts[2] if len(parts) > 2 else None
-            if action.lower() in ('long','short'):
-                value = 'LONG' if action.lower() == 'long' else 'SHORT'
-                targets = []
-                if sym:
-                    targets = [sym]
-                else:
-                    # apply to all from pairs.txt if symbol missing
-                    targets = read_pairs(DATA_STORAGE)
-                ok_n = 0
-                for s in targets:
-                    if set_coin_long_short(DATA_STORAGE, s, value):
-                        ok_n += 1
-                if sym:
-                    await tg_send(chat_id, f"✓ {sym.upper()} MODE={value}")
-                else:
-                    await tg_send(chat_id, f"✓ Установлено MODE={value} для {ok_n} монет")
-                return JSONResponse({"ok": True})
-            else:
-                await tg_send(chat_id, "Использование: /coin long [SYMBOL] или /coin short [SYMBOL]")
-                return JSONResponse({"ok": True})
 
     await tg_send(chat_id, "❓ Неизвестная команда")
     return JSONResponse({"ok": True})
