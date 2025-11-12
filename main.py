@@ -71,10 +71,10 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 @app.on_event("startup")
 async def startup():
     global scheduler, scheduler_task
-
+    
     scheduler = MetricScheduler(DATA_STORAGE)
     scheduler_task = asyncio.create_task(scheduler.start_loop())
-
+    
     if ADMIN_CHAT_ID:
         await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.0)\n⏲️ Планировщик активен")
 
@@ -109,23 +109,17 @@ async def telegram_webhook(request: Request):
         data = await request.json()
     except:
         data = {}
-
+    
     message = data.get("message", {})
     text = (message.get("text") or "").strip()
     chat_id = str((message.get("chat") or {}).get("id") or "")
-
+    
     if not chat_id or not text:
         return JSONResponse({"ok": True})
-
+    
     logger.info(f"Message from {chat_id}: {text[:50]}")
-
-    lower_text = text.lower()
-    parts = lower_text.split(maxsplit=1)
-    cmd_token = parts[0] if parts else ""
-    cmd_root = cmd_token.split("@", 1)[0]
-    tail_lower = parts[1].strip() if len(parts) > 1 else ""
-
-    if cmd_root == "/start" and tail_lower == "":
+    
+    if text.lower() == "/start":
         help_msg = (
             "✅ Бот готов (v6.0)!\n\n"
             "📝 Команды:\n"
@@ -146,10 +140,10 @@ async def telegram_webhook(request: Request):
         )
         await tg_send(chat_id, help_msg)
         return JSONResponse({"ok": True})
-
+    
     # === КОМАНДЫ ПЛАНИРОВЩИКА ===
-
-    if cmd_root == "/scheduler" and tail_lower in ("config", "confyg"):
+    
+    if text.lower() == "/scheduler config":
         config = scheduler.get_config()
         msg = (
             f"⚙️ Конфиг планировщика:\n"
@@ -160,8 +154,8 @@ async def telegram_webhook(request: Request):
         )
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/scheduler" and tail_lower.startswith("period "):
+    
+    if text.lower().startswith("/scheduler period "):
         try:
             new_period = int(text.split()[-1])
             if scheduler.update_period(new_period):
@@ -171,8 +165,8 @@ async def telegram_webhook(request: Request):
         except:
             await tg_send(chat_id, "❌ Некорректное значение")
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/scheduler" and tail_lower.startswith("publish "):
+    
+    if text.lower().startswith("/scheduler publish "):
         try:
             new_interval = int(text.split()[-1])
             if scheduler.update_publish_interval(new_interval):
@@ -182,22 +176,22 @@ async def telegram_webhook(request: Request):
         except:
             await tg_send(chat_id, "❌ Некорректное значение")
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/scheduler" and tail_lower == "on":
+    
+    if text.lower() == "/scheduler on":
         scheduler.toggle_scheduler(True)
         await tg_send(chat_id, "✅ Планировщик включен")
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/scheduler" and tail_lower == "off":
+    
+    if text.lower() == "/scheduler off":
         scheduler.toggle_scheduler(False)
         await tg_send(chat_id, "✅ Планировщик отключен")
         return JSONResponse({"ok": True})
-
+    
     # === КОМАНДЫ МОНЕТ ===
-
-    if lower_text.startswith('/coins'):
+    
+    if text.lower().startswith('/coins'):
         action, pairs_list = parse_coins_command(text)
-
+        
         if action == 'list':
             all_pairs = read_pairs(DATA_STORAGE)
             if all_pairs:
@@ -205,21 +199,18 @@ async def telegram_webhook(request: Request):
             else:
                 msg = "📊 Список пар пуст"
             await tg_send(chat_id, msg)
-
+        
         elif action == 'delete':
             if not pairs_list:
                 await tg_send(chat_id, "❌ Укажите пары для удаления")
                 return JSONResponse({"ok": True})
             success, remaining = remove_pairs(DATA_STORAGE, pairs_list)
             if success:
-                if remaining:
-                    msg = f"✓ Пары обновлены ({len(remaining)}):\n" + ", ".join(remaining)
-                else:
-                    msg = "✓ Все пары удалены, список пуст"
-                await tg_send(chat_id, msg)
+                await tg_send(chat_id, f"✓ Пары удалены ({len(remaining)} осталось)")
             else:
                 await tg_send(chat_id, "❌ Ошибка")
-        else:
+        
+        else:  # add
             if not pairs_list:
                 await tg_send(chat_id, "❌ Укажите пары")
                 return JSONResponse({"ok": True})
@@ -228,12 +219,12 @@ async def telegram_webhook(request: Request):
                 await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)}):\n" + ", ".join(all_pairs))
             else:
                 await tg_send(chat_id, "❌ Ошибка")
-
+        
         return JSONResponse({"ok": True})
-
+    
     # === СБОР МЕТРИК ===
-
-    if lower_text == "/now":
+    
+    if text.lower() == "/now":
         logger.info(f"Collecting metrics...")
         try:
             results = await collect_all_metrics(DATA_STORAGE, delay_ms=50)
@@ -244,37 +235,37 @@ async def telegram_webhook(request: Request):
             logger.error(f"Collection error: {e}")
             await tg_send(chat_id, "❌ Ошибка")
         return JSONResponse({"ok": True})
-
+    
     # === MARKET_MODE ===
-
-    if cmd_root == "/market" and tail_lower.startswith("force"):
+    
+    if text.lower().startswith('/market force'):
         parts = text.split()
         if len(parts) < 3:
             await tg_send(chat_id, "❌ Используйте: /market force 12+6 или /market force 4+2")
             return JSONResponse({"ok": True})
-
+        
         frame = parts[2]
         if frame not in ["12+6", "4+2"]:
             await tg_send(chat_id, "❌ Фрейм должен быть 12+6 или 4+2")
             return JSONResponse({"ok": True})
-
+        
         all_pairs = read_pairs(DATA_STORAGE)
         if not all_pairs:
             await tg_send(chat_id, "❌ Нет пар в списке")
             return JSONResponse({"ok": True})
-
+        
         results = []
         for symbol in all_pairs:
             result = force_market_mode(DATA_STORAGE, symbol, frame)
             results.append(f"{symbol}: {result}")
-
+        
         msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
+    
     # === РАБОТА С ФАЙЛАМИ ===
-
-    if cmd_root == "/data" and tail_lower == "":
+    
+    if text.lower() == "/data":
         files = data_storage.get_files_list()
         if files:
             msg = f"📁 Файлов: {len(files)}\n" + ", ".join(files)
@@ -282,8 +273,8 @@ async def telegram_webhook(request: Request):
             msg = "📁 Хранилище пусто"
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/data" and tail_lower == "delete all":
+    
+    if text.lower() == "/data delete all":
         files = data_storage.get_files_list()
         if not files:
             await tg_send(chat_id, "📁 Уже пусто")
@@ -293,33 +284,33 @@ async def telegram_webhook(request: Request):
             else:
                 await tg_send(chat_id, "❌ Ошибка")
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/data" and tail_lower.startswith("delete ") and tail_lower != "delete all":
+    
+    if text.lower().startswith("/data delete ") and text.lower() != "/data delete all":
         args = text[13:].strip()
         if not args:
             await tg_send(chat_id, "❌ Укажите файлы: /data delete file1.xxx, file2.xxx")
             return JSONResponse({"ok": True})
-
+        
         filenames = [f.strip() for f in args.split(",") if f.strip()]
         deleted = []
         failed = []
-
+        
         for filename in filenames:
             if data_storage.delete_file(filename):
                 deleted.append(filename)
             else:
                 failed.append(filename)
-
+        
         msg = f"✓ Удалено: {len(deleted)}"
         if deleted:
             msg += f"\n{', '.join(deleted)}"
         if failed:
             msg += f"\n❌ Не найдены: {len(failed)}"
-
+        
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
-
-    if cmd_root == "/data" and tail_lower == "export all":
+    
+    if text.lower() == "/data export all":
         files = data_storage.get_files_list()
         if not files:
             await tg_send(chat_id, "📁 Нечего экспортировать")
@@ -338,7 +329,7 @@ async def telegram_webhook(request: Request):
                         logger.error(f"Error: {e}")
             await tg_send(chat_id, f"✓ Отправлено: {success_count}")
         return JSONResponse({"ok": True})
-
+    
     await tg_send(chat_id, "❓ Неизвестная команда")
     return JSONResponse({"ok": True})
 
