@@ -67,7 +67,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 @app.on_event("startup")
 async def startup():
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v4.9)")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.0)")
 
 @app.get("/health")
 @app.head("/health")
@@ -77,7 +77,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "4.9"}
+    return {"ok": True, "service": "traider-bot", "version": "5.0"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):

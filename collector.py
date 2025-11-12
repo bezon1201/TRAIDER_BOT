@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 BINANCE_API = "https://api.binance.com/api/v3"
 TIMEFRAMES = ["12h", "6h", "4h", "2h"]
+KLINES_LIMIT = 30
 
 _filters_cache = {}
 _filters_cache_time = {}
@@ -79,7 +80,7 @@ async def fetch_exchange_info(client: httpx.AsyncClient, symbol: str) -> Optiona
         logger.error(f"Error fetching exchange info {symbol}: {e}")
     return None
 
-async def fetch_klines(client: httpx.AsyncClient, symbol: str, interval: str, limit: int = 100) -> Optional[List[List[Any]]]:
+async def fetch_klines(client: httpx.AsyncClient, symbol: str, interval: str, limit: int = KLINES_LIMIT) -> Optional[List[List[Any]]]:
     """Свечи"""
     try:
         response = await client.get(f"{BINANCE_API}/klines", params={"symbol": symbol, "interval": interval, "limit": limit})
@@ -89,7 +90,7 @@ async def fetch_klines(client: httpx.AsyncClient, symbol: str, interval: str, li
     return None
 
 async def collect_metrics_for_symbol(client: httpx.AsyncClient, symbol: str, storage_dir: str) -> bool:
-    """Собирает ВСЁ: ticker + filters + свечи + индикаторы"""
+    """Собирает все данные: ticker + filters + klines(30) + indicators с историей"""
     try:
         ticker = await fetch_ticker_price(client, symbol)
         if not ticker:
@@ -100,7 +101,7 @@ async def collect_metrics_for_symbol(client: httpx.AsyncClient, symbol: str, sto
 
         timeframes_data = {}
         for tf in TIMEFRAMES:
-            klines = await fetch_klines(client, symbol, tf, 100)
+            klines = await fetch_klines(client, symbol, tf, KLINES_LIMIT)
             if klines:
                 indicators = calculate_indicators(klines)
                 timeframes_data[tf] = {"klines": klines, "indicators": indicators}

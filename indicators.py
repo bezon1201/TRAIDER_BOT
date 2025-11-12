@@ -48,13 +48,30 @@ def extract_ohlcv(klines: List[List[Any]]) -> Dict[str, List[float]]:
     return {"opens": opens, "highs": highs, "lows": lows, "closes": closes, "volumes": volumes}
 
 def calculate_indicators(klines: List[List[Any]]) -> Dict[str, Any]:
-    """SMA14 + ATR14"""
-    if not klines:
-        return {"sma14": None, "atr14": None}
+    """SMA14 + ATR14 с историей для расчета raw режимов"""
+    if not klines or len(klines) < 14:
+        return {"sma14": None, "sma14_prev": None, "atr14": None, "atr14_prev": None}
 
     ohlcv = extract_ohlcv(klines)
+    closes = ohlcv["closes"]
+    highs = ohlcv["highs"]
+    lows = ohlcv["lows"]
+
+    # Текущие значения
+    sma14_now = calculate_sma(closes, 14)
+    atr14_now = calculate_atr(highs, lows, closes, 14)
+
+    # Предыдущие значения (если есть минимум 28 свечей)
+    sma14_prev = None
+    atr14_prev = None
+
+    if len(closes) >= 28:
+        sma14_prev = calculate_sma(closes[:-1], 14)
+        atr14_prev = calculate_atr(highs[:-1], lows[:-1], closes[:-1], 14)
 
     return {
-        "sma14": calculate_sma(ohlcv["closes"], 14),
-        "atr14": calculate_atr(ohlcv["highs"], ohlcv["lows"], ohlcv["closes"], 14),
+        "sma14": sma14_now,
+        "sma14_prev": sma14_prev,
+        "atr14": atr14_now,
+        "atr14_prev": atr14_prev
     }
