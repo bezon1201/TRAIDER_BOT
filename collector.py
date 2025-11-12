@@ -21,6 +21,7 @@ async def collect_all_metrics(storage_path: str, delay_ms: int = 50):
 
     try:
         for symbol in pairs:
+            symbol = symbol.strip().upper()
             try:
                 ticker = httpx.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}", timeout=10).json()
                 klines_12h = httpx.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=12h&limit=30", timeout=10).json()

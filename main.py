@@ -39,6 +39,8 @@ async def tg_send(chat_id: str, text: str) -> None:
         )
         if response.status_code == 200:
             logger.info(f"✓ Message sent to {chat_id}")
+        else:
+            logger.error(f"Telegram API error: {response.status_code}")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
 
@@ -67,7 +69,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 async def startup():
     await start_scheduler(DATA_STORAGE)
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.1)\nПланировщик активирован")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v6.2)\nПланировщик активирован")
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -81,7 +83,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "6.1"}
+    return {"ok": True, "service": "traider-bot", "version": "6.2"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -100,7 +102,7 @@ async def telegram_webhook(request: Request):
     logger.info(f"Message from {chat_id}: {text[:50]}")
 
     if text.lower() == "/start":
-        help_text = "✅ Бот готов (v6.1)!\n\n📝 Команды:\n/coins - показать пары\n/coins PAIR1 PAIR2 - добавить пары\n/coins delete PAIR1 PAIR2 - удалить пары\n/now - собрать метрики\n/market force 12+6 - market_mode для 12+6\n/market force 4+2 - market_mode для 4+2\n/scheduler confyg - показать конфиг\n/scheduler on|off - вкл/выкл планировщик\n/scheduler period <P> - период сбора (900-86400)\n/scheduler publish <N> - период публик (1-96ч)\n/data - список файлов\n/data export all - отправить все\n/data delete all - удалить все\n/data delete file1.xxx, file2.xxx - удалить конкретные"
+        help_text = "✅ Бот готов (v6.2)!\n\n📝 Команды:\n/coins - показать пары\n/coins PAIR1 PAIR2 - добавить пары\n/coins delete PAIR1 PAIR2 - удалить пары\n/now - собрать метрики\n/market force 12+6 - market_mode\n/scheduler confyg - конфиг\n/scheduler on|off - вкл/выкл\n/scheduler period <900-86400> - период\n/scheduler publish <1-96> - публик\n/data - файлы\n/data export all - скачать все\n/data delete all - удалить все"
         await tg_send(chat_id, help_text)
         return JSONResponse({"ok": True})
 
@@ -170,7 +172,7 @@ async def telegram_webhook(request: Request):
             result = force_market_mode(DATA_STORAGE, symbol, frame)
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для фрейма {frame}:" + "\n" + "\n".join(results)
+        msg = f"market_mode {frame}:" + "\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 
@@ -184,7 +186,7 @@ async def telegram_webhook(request: Request):
 
         if cmd == "confyg":
             cfg = get_config(DATA_STORAGE)
-            msg = f"⚙️ Конфиг планировщика:\nenabled: {cfg.get('enabled')}\nperiod: {cfg.get('period_seconds')}s\npublish: {cfg.get('publish_hours')}h\nlast_publish: {cfg.get('last_publish', 'never')}"
+            msg = f"⚙️ Конфиг:\nenabled: {cfg.get('enabled')}\nperiod: {cfg.get('period_seconds')}s\npublish: {cfg.get('publish_hours')}h"
             await tg_send(chat_id, msg)
 
         elif cmd == "on":
@@ -206,7 +208,7 @@ async def telegram_webhook(request: Request):
             try:
                 period = int(parts[2])
                 if set_scheduler_period(DATA_STORAGE, period):
-                    await tg_send(chat_id, f"✓ Период установлен: {period}s")
+                    await tg_send(chat_id, f"✓ Период: {period}s")
                 else:
                     await tg_send(chat_id, "❌ Период должен быть 900-86400")
             except:
@@ -219,7 +221,7 @@ async def telegram_webhook(request: Request):
             try:
                 hours = int(parts[2])
                 if set_scheduler_publish(DATA_STORAGE, hours):
-                    await tg_send(chat_id, f"✓ Период публик установлен: {hours}h")
+                    await tg_send(chat_id, f"✓ Публик: {hours}h")
                 else:
                     await tg_send(chat_id, "❌ Часы должны быть 1-96")
             except:

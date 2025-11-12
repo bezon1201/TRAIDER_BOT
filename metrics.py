@@ -8,24 +8,27 @@ def read_pairs(storage_path: str):
     data_storage = DataStorage(storage_path)
     pairs_file = data_storage.read_file("pairs.txt")
     if pairs_file:
-        return [p.strip().upper() for p in pairs_file.split(",") if p.strip()]
+        pairs = [p.strip().upper() for p in pairs_file.split(",") if p.strip()]
+        return pairs
     return []
 
 def write_pairs(storage_path: str, pairs: list):
     data_storage = DataStorage(storage_path)
-    data_storage.save_file("pairs.txt", ",".join(pairs))
+    clean_pairs = [p.strip().upper() for p in pairs if p.strip()]
+    data_storage.save_file("pairs.txt", ",".join(clean_pairs))
 
 def add_pairs(storage_path: str, new_pairs: list):
     current_pairs = read_pairs(storage_path)
-    new_pairs = [p.strip().upper() for p in new_pairs if p.strip()]
+    new_pairs = [p.strip().upper() for p in new_pairs if p and p.strip()]
     all_pairs = list(set(current_pairs + new_pairs))
+    all_pairs.sort()
     write_pairs(storage_path, all_pairs)
     logger.info(f"✓ Pairs added: {len(all_pairs)} total")
     return True, all_pairs
 
 def remove_pairs(storage_path: str, pairs_to_remove: list):
     current_pairs = read_pairs(storage_path)
-    pairs_to_remove = [p.strip().upper() for p in pairs_to_remove]
+    pairs_to_remove = [p.strip().upper() for p in pairs_to_remove if p and p.strip()]
     remaining = [p for p in current_pairs if p not in pairs_to_remove]
     write_pairs(storage_path, remaining)
     logger.info(f"✓ Pairs removed: {len(remaining)} remaining")
@@ -36,13 +39,13 @@ def parse_coins_command(text: str):
     if "delete" in text:
         match = re.search(r'delete\s+(.+)', text)
         if match:
-            pairs = [p.strip() for p in match.group(1).split()]
+            pairs = [p.strip() for p in match.group(1).split() if p.strip()]
             return 'delete', pairs
     elif text == "/coins":
         return 'list', []
     else:
         match = re.search(r'/coins\s+(.+)', text)
         if match:
-            pairs = [p.strip() for p in match.group(1).split()]
+            pairs = [p.strip() for p in match.group(1).split() if p.strip()]
             return 'add', pairs
     return 'list', []

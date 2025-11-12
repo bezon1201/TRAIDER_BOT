@@ -18,7 +18,6 @@ def get_log_path(storage_path: str):
     return Path(storage_path) / "metric_scheduler.jsonl"
 
 def get_config(storage_path: str):
-    """Получить конфиг, создать дефолтный если не существует"""
     config_path = get_config_path(storage_path)
     if config_path.exists():
         try:
@@ -29,7 +28,6 @@ def get_config(storage_path: str):
     return {"enabled": True, "period_seconds": 3600, "publish_hours": 24, "last_publish": None}
 
 def save_config(storage_path: str, config: dict):
-    """Сохранить конфиг"""
     config_path = get_config_path(storage_path)
     try:
         with open(config_path, 'w') as f:
@@ -39,7 +37,6 @@ def save_config(storage_path: str, config: dict):
         logger.error(f"Error saving config: {e}")
 
 def log_action(storage_path: str, action: str, status: str, details: str = ""):
-    """Логировать действие в JSONL"""
     log_path = get_log_path(storage_path)
     try:
         log_entry = {
@@ -54,7 +51,6 @@ def log_action(storage_path: str, action: str, status: str, details: str = ""):
         logger.error(f"Error logging action: {e}")
 
 def set_scheduler_enabled(storage_path: str, enabled: bool):
-    """Включить/выключить планировщик"""
     global ENABLED
     cfg = get_config(storage_path)
     cfg["enabled"] = enabled
@@ -64,7 +60,6 @@ def set_scheduler_enabled(storage_path: str, enabled: bool):
     return True
 
 def set_scheduler_period(storage_path: str, period: int):
-    """Установить период сбора (900-86400 сек)"""
     if period < 900 or period > 86400:
         return False
     cfg = get_config(storage_path)
@@ -74,7 +69,6 @@ def set_scheduler_period(storage_path: str, period: int):
     return True
 
 def set_scheduler_publish(storage_path: str, hours: int):
-    """Установить период публикации (1-96 часов)"""
     if hours < 1 or hours > 96:
         return False
     cfg = get_config(storage_path)
@@ -84,7 +78,6 @@ def set_scheduler_publish(storage_path: str, hours: int):
     return True
 
 async def start_scheduler(storage_path: str):
-    """Запустить планировщик при старте приложения"""
     global SCHEDULER_TASK, ENABLED
 
     cfg = get_config(storage_path)
@@ -96,7 +89,6 @@ async def start_scheduler(storage_path: str):
     logger.info("🚀 Scheduler started (no lock)")
 
 async def _scheduler_loop(storage_path: str):
-    """Основной цикл планировщика"""
     global ENABLED
 
     from collector import collect_all_metrics
@@ -131,6 +123,7 @@ async def _scheduler_loop(storage_path: str):
             try:
                 pairs = read_pairs(storage_path)
                 for pair in pairs:
+                    pair = pair.strip().upper()
                     force_market_mode(storage_path, pair, "12+6")
                     force_market_mode(storage_path, pair, "4+2")
 
@@ -159,7 +152,6 @@ async def _scheduler_loop(storage_path: str):
             await asyncio.sleep(60)
 
 def stop_scheduler():
-    """Остановить планировщик при shutdown"""
     global SCHEDULER_TASK
 
     if SCHEDULER_TASK:

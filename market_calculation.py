@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 def calculate_raw_markets(storage_path: str, symbol: str):
     from data import DataStorage
 
+    symbol = symbol.strip().upper()
     data_storage = DataStorage(storage_path)
     metrics = data_storage.read_file(f"{symbol}.json")
 
@@ -26,16 +27,17 @@ def calculate_raw_markets(storage_path: str, symbol: str):
     raw_12_6 = {"closes_12h": closes_12h[-3:], "closes_6h": closes_6h[-3:]}
     raw_4_2 = {"closes_4h": closes_4h[-3:], "closes_2h": closes_2h[-3:]}
 
-    file_path = Path(storage_path) / f"{symbol}_raw_market_12+6.jsonl"
+    file_path = Path(storage_path) / f"{symbol}_raw_market_12-6.jsonl"
     with open(file_path, 'w') as f:
         f.write(json.dumps(raw_12_6) + "\n")
-    logger.info(f"✓ Raw market saved: {symbol}_raw_market_12+6.jsonl")
+    logger.info(f"✓ Raw market saved: {symbol}_raw_market_12-6.jsonl")
 
-    file_path = Path(storage_path) / f"{symbol}_raw_market_4+2.jsonl"
+    file_path = Path(storage_path) / f"{symbol}_raw_market_4-2.jsonl"
     with open(file_path, 'w') as f:
         f.write(json.dumps(raw_4_2) + "\n")
-    logger.info(f"✓ Raw market saved: {symbol}_raw_market_4+2.jsonl")
+    logger.info(f"✓ Raw market saved: {symbol}_raw_market_4-2.jsonl")
 
 def force_market_mode(storage_path: str, symbol: str, frame: str):
+    symbol = symbol.strip().upper()
     calculate_raw_markets(storage_path, symbol)
     return f"✓ {frame}"
