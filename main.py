@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from data import DataStorage
-from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs, set_mode
+from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs
 from collector import collect_all_metrics
 from market_calculation import force_market_mode
 from metric_scheduler import MetricScheduler
@@ -202,21 +202,6 @@ async def telegram_webhook(request: Request):
 
     # === КОМАНДЫ МОНЕТ ===
 
-    
-    # New in 1.3: /coins long|short SYMBOL...
-    if lower_text.startswith('/coins long') or lower_text.startswith('/coins short'):
-        parts = text.strip().split()
-        mode = 'LONG' if len(parts) > 1 and parts[1].lower() == 'long' else 'SHORT'
-        symbols = [p.strip().upper() for p in parts[2:] if p.strip()]
-        if not symbols:
-            await tg_send(chat_id, "❌ Укажите пары: /coins long BTCUSDT ETHUSDT или /coins short ...")
-            return JSONResponse({"ok": True})
-        results = []
-        for s in symbols:
-            res = set_mode(DATA_STORAGE, s, mode)
-            results.append(f"{s}: {res}")
-        await tg_send(chat_id, "✅ Mode обновлён:\n" + "\n".join(results))
-        return JSONResponse({"ok": True})
     if lower_text.startswith('/coins'):
         action, pairs_list = parse_coins_command(text)
 
