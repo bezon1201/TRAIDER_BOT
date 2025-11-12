@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from data import DataStorage
-from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs, set_mode
+from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs, set_mode, get_symbol_mode
 from collector import collect_all_metrics
 from market_calculation import force_market_mode
 from metric_scheduler import MetricScheduler
