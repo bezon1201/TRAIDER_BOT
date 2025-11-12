@@ -120,3 +120,20 @@ def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error reading metrics {symbol}: {e}")
         return {}
+
+
+def get_symbol_mode(storage_dir: str, symbol: str) -> str | None:
+    """Return Mode (LONG/SHORT) from <symbol>.json, or None if not set/missing."""
+    try:
+        path = get_coin_file_path(storage_dir, symbol)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mode = data.get("Mode")
+        if isinstance(mode, str):
+            up = mode.upper()
+            return up if up in ("LONG", "SHORT") else None
+        return None
+    except Exception:
+        return None

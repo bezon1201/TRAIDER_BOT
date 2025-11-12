@@ -255,31 +255,63 @@ async def telegram_webhook(request: Request):
     # === MARKET_MODE ===
 
     if cmd_root == "/market" and tail_lower.startswith("force"):
+
         parts = text.split()
+
         if len(parts) < 3:
-            await tg_send(chat_id, "❌ Используйте: /market force 12+6 или /market force 4+2")
+
+            await tg_send(chat_id, "❌ Используйте: /market force long|short")
+
             return JSONResponse({"ok": True})
 
-        frame = parts[2]
-        if frame not in ["12+6", "4+2"]:
-            await tg_send(chat_id, "❌ Фрейм должен быть 12+6 или 4+2")
+    
+
+        mode = parts[2].upper()
+
+        if mode not in ["LONG", "SHORT"]:
+
+            await tg_send(chat_id, "❌ Режим должен быть LONG или SHORT")
+
             return JSONResponse({"ok": True})
+
+    
 
         all_pairs = read_pairs(DATA_STORAGE)
+
         if not all_pairs:
+
             await tg_send(chat_id, "❌ Нет пар в списке")
+
             return JSONResponse({"ok": True})
 
+    
+
+        filtered = [s for s in all_pairs if get_symbol_mode(DATA_STORAGE, s) == mode]
+
+        if not filtered:
+
+            await tg_send(chat_id, f"⚠️ Нет монет с Mode={mode}")
+
+            return JSONResponse({"ok": True})
+
+    
+
         results = []
-        for symbol in all_pairs:
-            result = force_market_mode(DATA_STORAGE, symbol, frame)
+
+        for symbol in filtered:
+
+            result = force_market_mode(DATA_STORAGE, symbol, mode)
+
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
-        await tg_send(chat_id, msg)
-        return JSONResponse({"ok": True})
+    
 
-    # === РАБОТА С ФАЙЛАМИ ===
+        msg = "market_mode для режима " + mode + "\n" + "\n".join(results)
+
+        await tg_send(chat_id, msg)
+
+        return JSONResponse({"ok": True})
+# === РАБОТА С ФАЙЛАМИ ===
 
     # импорт файла(ов): отправь документ с Caption "/data import" (или "/data@Bot import")
     if cmd_root == "/data" and tail_lower.startswith("import"):
