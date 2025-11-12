@@ -122,6 +122,32 @@ def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
         return {}
 
 
+
+
+def set_coin_long_short(storage_dir: str, symbol: str, value: str) -> bool:
+    """Set MODE to LONG or SHORT for a given coin JSON (always uppercase)."""
+    try:
+        value = str(value).upper()
+        if value not in ("LONG", "SHORT"):
+            return False
+        path = get_coin_file_path(storage_dir, symbol)
+        os.makedirs(storage_dir, exist_ok=True)
+        data = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data["symbol"] = normalize_pair(symbol)
+        data["MODE"] = value
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"Error set MODE for {symbol}: {e}")
+        return False
 # --- Patched add_pairs to create default MODE on new coins ---
 def add_pairs(storage_dir: str, pairs: List[str]) -> bool:
     """Add pairs to pairs.txt and ensure coin JSON exists with default MODE."""
