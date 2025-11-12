@@ -1,80 +1,68 @@
 import os
-import logging
+import json
 from pathlib import Path
-from typing import List, Optional
+import logging
 
 logger = logging.getLogger(__name__)
 
 class DataStorage:
-    def __init__(self, storage_dir: str):
-        self.storage_dir = Path(storage_dir)
-        self._ensure_storage_exists()
+    def __init__(self, storage_path: str):
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"✓ Storage initialized at: {self.storage_path}")
 
-    def _ensure_storage_exists(self):
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"✓ Storage initialized at: {self.storage_dir}")
-
-    def get_files_list(self) -> List[str]:
-        try:
-            files = [f.name for f in self.storage_dir.iterdir() if f.is_file()]
-            return sorted(files)
-        except Exception as e:
-            logger.error(f"Error getting files list: {e}")
-            return []
-
-    def get_file_path(self, filename: str) -> Optional[Path]:
-        file_path = self.storage_dir / filename
-        if file_path.exists() and file_path.is_file():
+    def get_file_path(self, filename: str):
+        file_path = self.storage_path / filename
+        if file_path.exists():
             return file_path
         return None
 
-    def delete_all(self) -> bool:
+    def get_files_list(self):
+        files = [f.name for f in self.storage_path.iterdir() if f.is_file()]
+        return sorted(files)
+
+    def save_file(self, filename: str, content):
+        file_path = self.storage_path / filename
+        if isinstance(content, dict):
+            with open(file_path, 'w') as f:
+                json.dump(content, f, indent=2)
+        else:
+            with open(file_path, 'w') as f:
+                f.write(str(content))
+        logger.info(f"✓ File saved: {filename}")
+
+    def read_file(self, filename: str):
+        file_path = self.get_file_path(filename)
+        if not file_path:
+            return None
         try:
-            files = self.get_files_list()
-            for filename in files:
-                file_path = self.storage_dir / filename
-                file_path.unlink()
-                logger.info(f"Deleted: {filename}")
-            logger.info(f"All files deleted. Total: {len(files)}")
-            return True
+            with open(file_path, 'r') as f:
+                if filename.endswith('.json'):
+                    return json.load(f)
+                return f.read()
         except Exception as e:
-            logger.error(f"Error deleting files: {e}")
-            return False
+            logger.error(f"Error reading {filename}: {e}")
+            return None
 
     def delete_file(self, filename: str) -> bool:
-        try:
-            file_path = self.get_file_path(filename)
-            if file_path:
+        file_path = self.get_file_path(filename)
+        if file_path:
+            try:
                 file_path.unlink()
-                logger.info(f"Deleted: {filename}")
+                logger.info(f"✓ File deleted: {filename}")
                 return True
-            return False
-        except Exception as e:
-            logger.error(f"Error deleting {filename}: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"Error deleting {filename}: {e}")
+                return False
+        return False
 
-    def save_file_atomic(self, filename: str, content: bytes) -> bool:
+    def delete_all(self) -> bool:
         try:
-            file_path = self.storage_dir / filename
-            tmp_path = self.storage_dir / (filename + ".tmp")
-            tmp_path.write_bytes(content)
-            tmp_path.replace(file_path)
-            logger.info(f"✓ File saved: {filename}")
+            for f in self.storage_path.iterdir():
+                if f.is_file():
+                    f.unlink()
+            logger.info("✓ All files deleted")
             return True
         except Exception as e:
-            logger.error(f"Error saving {filename}: {e}")
-            try:
-                tmp_path.unlink()
-            except:
-                pass
+            logger.error(f"Error deleting all files: {e}")
             return False
-
-    def save_file(self, filename: str, content: bytes) -> bool:
-        return self.save_file_atomic(filename, content)
-
-    def get_file_size(self, filename: str) -> Optional[int]:
-        file_path = self.get_file_path(filename)
-        return file_path.stat().st_size if file_path else None
-
-    def file_exists(self, filename: str) -> bool:
-        return self.get_file_path(filename) is not None
