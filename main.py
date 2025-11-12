@@ -300,7 +300,8 @@ async def telegram_webhook(request: Request):
 
         results = []
         for symbol in all_pairs:
-            result = force_market_mode(DATA_STORAGE, symbol, frame)
+            result = force_market_mode(DATA_STORAGE, symbol, mode)
+            set_market_mode(DATA_STORAGE, symbol, result)
             results.append(f"{symbol}: {result}")
 
         msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
