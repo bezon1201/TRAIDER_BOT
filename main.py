@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from data import DataStorage
-from metrics import parse_coins_command, add_pairs
+from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs
 from collector import collect_all_metrics
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -67,7 +67,7 @@ async def tg_send_file(chat_id: str, file_path: str, filename: str) -> bool:
 @app.on_event("startup")
 async def startup():
     if ADMIN_CHAT_ID:
-        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.1)")
+        await tg_send(ADMIN_CHAT_ID, "✅ Бот запущен (v5.2)")
 
 @app.get("/health")
 @app.head("/health")
@@ -77,7 +77,7 @@ async def health():
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"ok": True, "service": "traider-bot", "version": "5.1"}
+    return {"ok": True, "service": "traider-bot", "version": "5.2"}
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
@@ -99,7 +99,9 @@ async def telegram_webhook(request: Request):
     if text.lower() == "/start":
         help_msg = ("✅ Бот готов!\n\n"
                    "📝 Команды:\n"
+                   "/coins - показать список пар\n"
                    "/coins PAIR1 PAIR2 - добавить пары\n"
+                   "/coins delete PAIR1 PAIR2 - удалить пары\n"
                    "/now - собрать метрики + raw режимы\n"
                    "/data - список файлов\n"
                    "/data export all - отправить все файлы\n"
@@ -107,18 +109,43 @@ async def telegram_webhook(request: Request):
         await tg_send(chat_id, help_msg)
         return JSONResponse({"ok": True})
 
-    # /coins
+    # /coins (все варианты)
     if text.lower().startswith('/coins'):
-        pairs_list = parse_coins_command(text)
-        if not pairs_list:
-            await tg_send(chat_id, "❌ Укажите пары: /coins BTCUSDT ETHUSDT")
-            return JSONResponse({"ok": True})
+        action, pairs_list = parse_coins_command(text)
 
-        success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
-        if success:
-            await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)}):\n" + ", ".join(all_pairs))
-        else:
-            await tg_send(chat_id, "❌ Ошибка при обновлении")
+        if action == 'list':
+            # /coins - показать список
+            all_pairs = read_pairs(DATA_STORAGE)
+            if all_pairs:
+                msg = f"📊 Активные пары ({len(all_pairs)}):\n" + ", ".join(all_pairs)
+            else:
+                msg = "📊 Список пар пуст. Добавьте пары: /coins BTCUSDT ETHUSDT"
+            await tg_send(chat_id, msg)
+
+        elif action == 'delete':
+            # /coins delete <pairs>
+            if not pairs_list:
+                await tg_send(chat_id, "❌ Укажите пары для удаления: /coins delete BTCUSDT ETHUSDT")
+                return JSONResponse({"ok": True})
+
+            success, remaining = remove_pairs(DATA_STORAGE, pairs_list)
+            if success:
+                await tg_send(chat_id, f"✓ Пары удалены ({len(remaining)} осталось)\n" + (", ".join(remaining) if remaining else "Список пуст"))
+            else:
+                await tg_send(chat_id, "❌ Ошибка при удалении")
+
+        else:  # action == 'add'
+            # /coins <pairs> - добавить
+            if not pairs_list:
+                await tg_send(chat_id, "❌ Укажите пары: /coins BTCUSDT ETHUSDT")
+                return JSONResponse({"ok": True})
+
+            success, all_pairs = add_pairs(DATA_STORAGE, pairs_list)
+            if success:
+                await tg_send(chat_id, f"✓ Пары обновлены ({len(all_pairs)}):\n" + ", ".join(all_pairs))
+            else:
+                await tg_send(chat_id, "❌ Ошибка при обновлении")
+
         return JSONResponse({"ok": True})
 
     # /now

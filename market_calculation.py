@@ -54,7 +54,6 @@ def calculate_raw_signal(metrics: Dict[str, Any], frame: str) -> Optional[Dict[s
             tf_data = metrics.get("timeframes", {}).get(tf, {})
             signals[tf] = calculate_signal(tf_data)
 
-        # Итоговый режим по логике старого бота
         if signals[tfs[0]] == "UP" and signals[tfs[1]] == "UP":
             overall_signal = "UP"
         elif "DOWN" in signals.values():
@@ -79,16 +78,13 @@ def append_raw_market(storage_dir: str, symbol: str, frame: str, raw_data: Dict[
         filepath = Path(storage_dir) / filename
         tmp_filepath = Path(storage_dir) / (filename + ".tmp")
 
-        # Читаем существующее содержимое
         existing_lines = []
         if filepath.exists():
             with open(filepath, 'r', encoding='utf-8') as f:
                 existing_lines = f.readlines()
 
-        # Добавляем новую строку
         new_line = json.dumps(raw_data, ensure_ascii=False) + '\n'
 
-        # Пишем атомарно
         with open(tmp_filepath, 'w', encoding='utf-8') as f:
             f.writelines(existing_lines)
             f.write(new_line)
@@ -107,12 +103,10 @@ def append_raw_market(storage_dir: str, symbol: str, frame: str, raw_data: Dict[
 def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[str, Any]) -> bool:
     """Расчет и сохранение raw режимов для обеих пар фреймов"""
     try:
-        # Расчет для 12h+6h
         raw_12_6 = calculate_raw_signal(metrics, "12+6")
         if raw_12_6:
             append_raw_market(storage_dir, symbol, "12+6", raw_12_6)
 
-        # Расчет для 4h+2h
         raw_4_2 = calculate_raw_signal(metrics, "4+2")
         if raw_4_2:
             append_raw_market(storage_dir, symbol, "4+2", raw_4_2)

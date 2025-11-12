@@ -115,10 +115,8 @@ async def collect_metrics_for_symbol(client: httpx.AsyncClient, symbol: str, sto
             "timeframes": timeframes_data,
         }
 
-        # Сохраняем метрики
         success = save_metrics(storage_dir, symbol, metrics)
         if success:
-            # Сразу рассчитываем и сохраняем raw режимы
             calculate_and_save_raw_markets(storage_dir, symbol, metrics)
 
         return success

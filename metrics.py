@@ -80,12 +80,45 @@ def add_pairs(storage_dir: str, new_pairs: List[str]) -> tuple[bool, List[str]]:
         logger.error(f"Error adding pairs: {e}")
         return False, []
 
-def parse_coins_command(text: str) -> List[str]:
-    """Парсит команду /coins"""
+def remove_pairs(storage_dir: str, pairs_to_remove: List[str]) -> tuple[bool, List[str]]:
+    """Удаляет пары из списка"""
+    try:
+        existing = read_pairs(storage_dir)
+
+        # Нормализуем пары для удаления
+        normalized_to_remove = set()
+        for pair in pairs_to_remove:
+            normalized_to_remove.add(normalize_pair(pair))
+
+        # Фильтруем список
+        remaining_pairs = [p for p in existing if p not in normalized_to_remove]
+
+        write_pairs(storage_dir, remaining_pairs)
+        logger.info(f"✓ Removed {len(existing) - len(remaining_pairs)} pairs")
+        return True, remaining_pairs
+    except Exception as e:
+        logger.error(f"Error removing pairs: {e}")
+        return False, []
+
+def parse_coins_command(text: str) -> tuple[str, List[str]]:
+    """Парсит команду /coins
+    Возвращает (action, pairs)
+    action: 'list', 'add', 'delete'
+    """
     parts = text.strip().split()
     if parts and parts[0].lower() == '/coins':
         parts = parts[1:]
-    return [p.strip() for p in parts if p.strip()]
+
+    if not parts:
+        # /coins без аргументов - показать список
+        return 'list', []
+
+    if parts[0].lower() == 'delete':
+        # /coins delete <pairs>
+        return 'delete', [p.strip() for p in parts[1:] if p.strip()]
+    else:
+        # /coins <pairs> - добавить
+        return 'add', [p.strip() for p in parts if p.strip()]
 
 def get_coin_file_path(storage_dir: str, symbol: str) -> str:
     """Путь к файлу метрик"""
