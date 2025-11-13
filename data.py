@@ -1,5 +1,4 @@
 import os
-import json
 from pathlib import Path
 from typing import List
 
@@ -174,7 +173,8 @@ async def handle_data_import(message: types.Message):
 
     # Проверяем, что caption начинается с "/data import"
     parts = caption.split(maxsplit=2)
-    if not parts or parts[0] not in {"/data", "/data@"+(message.bot.username or "")}:
+    first = parts[0] if parts else ""
+    if first not in {"/data", "/data@" + (message.bot.username or "")}:
         return
     if len(parts) < 2 or parts[1].lower() != "import":
         return
