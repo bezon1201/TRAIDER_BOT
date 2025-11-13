@@ -1,75 +1,73 @@
+
 import os
 import json
 import time
 from pathlib import Path
-from typing import List, Dict, Any
-
-from aiogram import Router, types
-from aiogram.filters import Command
-
-router = Router()
+from typing import Any, Dict, List, Optional
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
 
-MARKET_PUBLISH_DEFAULT_HOURS = 24
+TF1 = os.environ.get("TF1", "12")
+TF2 = os.environ.get("TF2", "6")
+
+# Окно голосования по рынку в часах
+try:
+    MARKET_PUBLISH = int(os.environ.get("MARKET_PUBLISH", "24"))
+except ValueError:
+    MARKET_PUBLISH = 24
 
 
-def _symbols_file() -> Path:
-    return STORAGE_PATH / "symbols_list.json"
-
-
-def load_symbols() -> List[str]:
-    path = _symbols_file()
-    try:
-        if not path.exists():
-            return []
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        symbols = data.get("symbols", [])
-        if not isinstance(symbols, list):
-            return []
-        result: List[str] = []
-        for s in symbols:
-            if not isinstance(s, str):
-                continue
-            s_up = s.upper()
-            if s_up and s_up not in result:
-                result.append(s_up)
-        return result
-    except Exception:
-        return []
+def _symbol_raw_path(symbol: str) -> Path:
+    """Путь к сырьевому JSON по монете, например BNBUSDC.json."""
+    return STORAGE_PATH / f"{symbol}.json"
 
 
 def _raw_market_path(symbol: str) -> Path:
+    """Путь к jsonl-логу рынка, например BNBUSDCraw_market.jsonl."""
     return STORAGE_PATH / f"{symbol}raw_market.jsonl"
 
 
-def _state_path(symbol: str) -> Path:
+def _symbol_state_path(symbol: str) -> Path:
+    """Путь к файлу агрегированного состояния, например BNBUSDCstate.json."""
     return STORAGE_PATH / f"{symbol}state.json"
 
 
-def get_market_publish_hours() -> int:
-    val = os.environ.get("MARKET_PUBLISH")
-    if not val:
-        return MARKET_PUBLISH_DEFAULT_HOURS
+def _safe_load_json(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
     try:
-        hours = int(val)
-        if hours <= 0:
-            return MARKET_PUBLISH_DEFAULT_HOURS
-        return hours
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
-        return MARKET_PUBLISH_DEFAULT_HOURS
+        return {}
 
 
-def compute_market_mode(symbol: str, hours: int, now_ts: int) -> str:
+def load_symbol_raw(symbol: str) -> Dict[str, Any]:
+    """Загружает сырьевой файл SYMBOL.json (если есть)."""
+    return _safe_load_json(_symbol_raw_path(symbol))
+
+
+def read_raw_market_window(
+    symbol: str,
+    now_ts: Optional[int] = None,
+    window_hours: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Читает SYMBOLraw_market.jsonl и возвращает записи за окно window_hours часов.
+    Если файла нет или записей нет — вернётся пустой список.
+    """
+    if now_ts is None:
+        now_ts = int(time.time())
+    if window_hours is None:
+        window_hours = MARKET_PUBLISH
+
     path = _raw_market_path(symbol)
     if not path.exists():
-        return "RANGE"
+        return []
 
-    window_start = now_ts - hours * 3600
-    up = down = rng = 0
-
+    cutoff = now_ts - int(window_hours) * 3600
+    result: List[Dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -80,86 +78,148 @@ def compute_market_mode(symbol: str, hours: int, now_ts: int) -> str:
                     rec = json.loads(line)
                 except Exception:
                     continue
-                ts = int(rec.get("ts", 0))
-                if ts < window_start:
+                ts = rec.get("ts")
+                if not isinstance(ts, (int, float)):
                     continue
-                mode = rec.get("market_mode")
-                if mode == "UP":
-                    up += 1
-                elif mode == "DOWN":
-                    down += 1
-                else:
-                    rng += 1
+                if int(ts) >= cutoff:
+                    result.append(rec)
     except Exception:
+        return []
+
+    return result
+
+
+def aggregate_market_mode(records: List[Dict[str, Any]]) -> str:
+    """
+    Считает режим рынка по голосам:
+    - записи с market_mode == "UP" → UP
+    - market_mode == "DOWN" → DOWN
+    - всё остальное → RANGE
+    Если UP > 50% → UP; DOWN > 50% → DOWN; иначе RANGE.
+    Если записей нет — RANGE.
+    """
+    if not records:
         return "RANGE"
+
+    up = 0
+    down = 0
+    rng = 0
+
+    for rec in records:
+        mode = str(rec.get("market_mode", "")).upper()
+        if mode == "UP":
+            up += 1
+        elif mode == "DOWN":
+            down += 1
+        else:
+            rng += 1
 
     total = up + down + rng
     if total == 0:
         return "RANGE"
 
-    if up / total > 0.5:
+    if up > total * 0.5:
         return "UP"
-    if down / total > 0.5:
+    if down > total * 0.5:
         return "DOWN"
     return "RANGE"
 
 
-def write_state(symbol: str, market_mode: str, now_ts: int) -> None:
-    raw_path = STORAGE_PATH / f"{symbol}.json"
-    raw_data: Dict[str, Any] = {}
-    if raw_path.exists():
-        try:
-            with raw_path.open("r", encoding="utf-8") as f:
-                raw_data = json.load(f)
-        except Exception:
-            raw_data = {}
+def compute_market_mode(
+    symbol: str,
+    now_ts: Optional[int] = None,
+    window_hours: Optional[int] = None,
+) -> str:
+    """Высчитывает итоговый режим рынка для символа за окно по логам raw_market."""
+    records = read_raw_market_window(symbol, now_ts=now_ts, window_hours=window_hours)
+    mode = aggregate_market_mode(records)
+    return mode
 
-    state: Dict[str, Any] = {}
-    state["symbol"] = symbol
-    state["tf1"] = raw_data.get("tf1")
-    state["tf2"] = raw_data.get("tf2")
-    state["updated_ts"] = now_ts
-    state["market_mode"] = market_mode
 
-    trading_params = raw_data.get("trading_params")
-    if isinstance(trading_params, dict):
-        state["trading_params"] = trading_params
-    else:
-        state["trading_params"] = {}
+def build_symbol_state(
+    symbol: str,
+    market_mode: str,
+    now_ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Собирает структуру для SYMBOLstate.json на основе:
+    - SYMBOL.json (tf1/tf2, raw, trading_params)
+    - рассчитанного market_mode.
+    """
+    if now_ts is None:
+        now_ts = int(time.time())
 
-    path = _state_path(symbol)
+    raw_data = load_symbol_raw(symbol)
+
+    tf1 = raw_data.get("tf1", TF1)
+    tf2 = raw_data.get("tf2", TF2)
+
+    trading_params = raw_data.get("trading_params") or {}
+
+    # пробуем достать MA30 и ATR14 из сигнала по TF1
+    ma30_val = 0.0
+    atr14_val = 0.0
+    try:
+        raw_block = (raw_data.get("raw") or {}).get(str(tf1))
+        if isinstance(raw_block, dict):
+            sig = raw_block.get("signal") or {}
+            ma30_val = float(sig.get("ma30", 0.0))
+            atr14_val = float(sig.get("atr14", 0.0))
+    except Exception:
+        # на всякий случай не падаем
+        ma30_val = 0.0
+        atr14_val = 0.0
+
+    state: Dict[str, Any] = {
+        "symbol": symbol,
+        "tf1": tf1,
+        "tf2": tf2,
+        "updated_ts": now_ts,
+        "market_mode": market_mode,
+        "MA30": ma30_val,
+        "ATR14": atr14_val,
+        "trading_params": trading_params if isinstance(trading_params, dict) else {},
+    }
+    return state
+
+
+def save_symbol_state(symbol: str, state: Dict[str, Any]) -> None:
+    """Сохраняет SYMBOLstate.json."""
+    path = _symbol_state_path(symbol)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-@router.message(Command("market"))
-async def cmd_market(message: types.Message):
-    text = message.text or ""
-    parts = text.split()
+def update_symbol_state(
+    symbol: str,
+    now_ts: Optional[int] = None,
+    window_hours: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Полный цикл для одной монеты:
+    - читает лог raw_market за окно,
+    - считает режим рынка,
+    - собирает state,
+    - сохраняет SYMBOLstate.json,
+    - возвращает state.
+    """
+    if now_ts is None:
+        now_ts = int(time.time())
+    mode = compute_market_mode(symbol, now_ts=now_ts, window_hours=window_hours)
+    state = build_symbol_state(symbol, market_mode=mode, now_ts=now_ts)
+    save_symbol_state(symbol, state)
+    return state
 
-    if len(parts) < 2 or parts[1].lower() != "force":
-        await message.answer("Используйте: /market force")
-        return
 
-    symbols = load_symbols()
-    if not symbols:
-        await message.answer("В symbols_list нет ни одной пары.")
-        return
-
-    hours = get_market_publish_hours()
-    now_ts = int(time.time())
-
-    lines = []
-    updated = 0
-    for sym in symbols:
-        mode = compute_market_mode(sym, hours, now_ts)
-        write_state(sym, mode, now_ts)
-        lines.append(f"{sym}: {mode}")
-        updated += 1
-
-    if updated == 0:
-        await message.answer("Не удалось обновить state ни для одной пары.")
-    else:
-        body = "\n".join(lines)
-        await message.answer(f"Обновили state для {updated} пар:\n{body}")
+def market_mode_only(
+    symbol: str,
+    now_ts: Optional[int] = None,
+    window_hours: Optional[int] = None,
+) -> str:
+    """
+    Утилита для /market: только режим рынка по логам, без обновления state-файла.
+    """
+    if now_ts is None:
+        now_ts = int(time.time())
+    return compute_market_mode(symbol, now_ts=now_ts, window_hours=window_hours)

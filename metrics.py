@@ -9,6 +9,8 @@ import aiohttp
 from aiogram import Router, types
 from aiogram.filters import Command
 
+from coin_state import update_symbol_state, market_mode_only, MARKET_PUBLISH
+
 router = Router()
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
@@ -459,3 +461,60 @@ async def cmd_now(message: types.Message):
         await message.answer(f"Обновили {symbols[0]}.")
     else:
         await message.answer(f"Обновили {len(symbols)} пар.")
+
+
+@router.message(Command("market"))
+async def cmd_market(message: types.Message):
+    """
+    /market
+    /market force
+    /market force <symbol>
+    """
+    text = (message.text or "").strip()
+    parts = text.split()
+
+    # Ветка /market force [...]
+    if len(parts) >= 2 and parts[1].lower() == "force":
+        # /market force  -> все пары из symbols_list.json
+        if len(parts) == 2:
+            symbols = load_symbols()
+            if not symbols:
+                await message.answer("В symbols_list нет ни одной пары.")
+                return
+        else:
+            # /market force <symbol> — только одна пара
+            sym_raw = parts[2].strip()
+            if not sym_raw:
+                await message.answer("Не указан символ после force.")
+                return
+            symbols = [sym_raw.upper()]
+
+        now_ts = int(time.time())
+        lines: List[str] = []
+        updated = 0
+        for sym in symbols:
+            state = update_symbol_state(sym, now_ts=now_ts)
+            mode = str(state.get("market_mode", "RANGE")).upper()
+            lines.append(f"{sym}: {mode}")
+            updated += 1
+
+        header = f"Обновили state для {updated} пар:"
+        body = "\n".join(lines) if lines else "(нет пар)"
+        await message.answer(f"{header}\n{body}")
+        return
+
+    # Базовый /market — только показать режим рынка по логам, без обновления state-файлов
+    symbols = load_symbols()
+    if not symbols:
+        await message.answer("В symbols_list нет ни одной пары.")
+        return
+
+    now_ts = int(time.time())
+    lines: List[str] = []
+    for sym in symbols:
+        mode = market_mode_only(sym, now_ts=now_ts)
+        lines.append(f"{sym}: {mode}")
+
+    header = f"Режим рынка за последние {MARKET_PUBLISH} ч для {len(symbols)} пар:"
+    body = "\n".join(lines) if lines else "(нет пар)"
+    await message.answer(f"{header}\n{body}")
