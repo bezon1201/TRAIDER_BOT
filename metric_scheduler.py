@@ -6,6 +6,76 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
+import os, json
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, List, Tuple
+from metrics import read_pairs, get_symbol_mode, set_market_mode
+
+def _read_jsonl(path: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return out
+
+def _parse_iso(ts: str) -> datetime:
+    try:
+        return datetime.fromisoformat(ts.replace("Z","+00:00"))
+    except Exception:
+        return datetime.now(timezone.utc) - timedelta(days=365*10)
+
+def _tally_market_mode_from_raw(storage_dir: str, symbol: str, mode: str, since: datetime) -> str:
+    raw_name = f"{symbol}_raw_market_{mode.upper()}.jsonl"
+    raw_path = os.path.join(storage_dir, raw_name)
+    rows = _read_jsonl(raw_path)
+    # filter by timestamp >= since
+    votes = []
+    for r in rows:
+        ts = r.get("timestamp")
+        sig = r.get("signal")
+        if not ts or not sig:
+            continue
+        if _parse_iso(ts) >= since:
+            votes.append(sig.upper())
+    # If no rows in window -> fallback to last row signal if exists
+    if not votes and rows:
+        votes = [rows[-1].get("signal","").upper()]
+    if not votes:
+        return "RANGE"  # safe default
+
+    total = len(votes)
+    up = votes.count("UP")
+    down = votes.count("DOWN")
+    rng = votes.count("RANGE")
+
+    # 60% threshold
+    def has60(n): 
+        return n/total >= 0.6
+
+    if has60(up):
+        return "UP"
+    if has60(down):
+        return "DOWN"
+    if has60(rng):
+        return "RANGE"
+
+    # Otherwise choose simple majority (tie -> RANGE)
+    if up>=down and up>=rng:
+        return "UP"
+    if down>=up and down>=rng:
+        return "DOWN"
+    return "RANGE"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -209,3 +279,49 @@ class MetricScheduler:
         """Остановить цикл"""
         self._running = False
         logger.info("✓ Scheduler stop signal sent")
+
+def _load_publish_state(storage_dir: str) -> Dict[str, Any]:
+    path = os.path.join(storage_dir, "metric_scheduler_config.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_publish_state(storage_dir: str, data: Dict[str, Any]) -> None:
+    path = os.path.join(storage_dir, "metric_scheduler_config.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+def _run_publish_cycle(storage_dir: str, now_dt: datetime) -> Tuple[int,int]:
+    cfg = _load_publish_state(storage_dir)
+    # read publish period hours (default 24) from config if exists
+    publish_hours = cfg.get("publish_hours", 24)
+    last_pub_iso = cfg.get("last_publish_ts")
+    if last_pub_iso:
+        last_pub_dt = _parse_iso(last_pub_iso)
+    else:
+        last_pub_dt = now_dt - timedelta(hours=publish_hours)
+    if now_dt - last_pub_dt < timedelta(hours=publish_hours):
+        return (0,0)  # not time yet
+
+    pairs = read_pairs(storage_dir)
+    updated = 0
+    total = 0
+    for sym in pairs:
+        mode = get_symbol_mode(storage_dir, sym)
+        mm = _tally_market_mode_from_raw(storage_dir, sym, mode or "LONG", since=last_pub_dt)
+        try:
+            set_market_mode(storage_dir, sym, mm)
+            updated += 1
+        except Exception:
+            pass
+        total += 1
+    # update last_publish_ts
+    cfg["publish_hours"] = publish_hours
+    cfg["last_publish_ts"] = now_dt.isoformat()
+    _save_publish_state(storage_dir, cfg)
+    logger.info(f"✓ Publish: wrote market_mode for {updated}/{total} symbols")
+    return (updated, total)
