@@ -1,1 +1,0 @@
-TRAIDER_BOT v6.1 - Production Ready
