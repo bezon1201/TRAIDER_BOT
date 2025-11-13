@@ -8,8 +8,11 @@ from typing import List, Dict, Any
 import aiohttp
 from aiogram import Router, types
 from aiogram.filters import Command
-
-from coin_state import update_symbol_state, market_mode_only, MARKET_PUBLISH
+from coin_state import (
+    MARKET_PUBLISH,
+    calc_market_mode_for_symbol,
+    recalc_state_for_symbol,
+)
 
 router = Router()
 
@@ -324,7 +327,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
                 filters_block[ftype] = f
             lot = filters_block.get("LOT_SIZE") or {}
             price_f = filters_block.get("PRICE_FILTER") or {}
-            min_not = filters_block.get("MIN_NOTIONAL") or {}
+            min_not = filters_block.get("NOTIONAL") or {}
             def _to_float(v):
                 try:
                     return float(v)
@@ -425,6 +428,86 @@ async def cmd_help(message: types.Message):
         await message.answer("Не удалось прочитать Bot_commands.txt.")
 
 
+
+
+@router.message(Command("market"))
+async def cmd_market(message: types.Message):
+    """
+    Команда /market и /market force.
+
+    /market
+        — посчитать режим рынка (UP/DOWN/RANGE) за последние MARKET_PUBLISH часов
+          для всех пар из symbols_list.json, без записи в state.
+
+    /market force
+        — пересчитать и сохранить SYMBOLstate.json для всех пар, используя уже собранное сырьё.
+
+    /market force <symbol>
+        — то же самое, но только для одной конкретной пары.
+    """
+    text = message.text or ""
+    parts = text.split(maxsplit=2)
+
+    # Просто /market — показываем режимы рынка для всех пар
+    if len(parts) == 1:
+        symbols = load_symbols()
+        if not symbols:
+            await message.answer("В symbols_list нет ни одной пары.")
+            return
+
+        now_ts = int(time.time())
+        lines = []
+        for sym in symbols:
+            mode = calc_market_mode_for_symbol(sym, now_ts=now_ts)
+            lines.append(f"{sym}: {mode}")
+
+        body = "\n".join(lines) if lines else "нет данных"
+        await message.answer(
+            f"Режим рынка за последние {MARKET_PUBLISH} ч для {len(symbols)} пар:\n{body}"
+        )
+        return
+
+    # Есть подкоманда
+    sub = (parts[1] or "").lower()
+    if sub != "force":
+        await message.answer("Неизвестная подкоманда для /market. Доступно: /market, /market force, /market force <symbol>.")
+        return
+
+    # /market force или /market force <symbol>
+    if len(parts) == 2:
+        symbols = load_symbols()
+        if not symbols:
+            await message.answer("В symbols_list нет ни одной пары.")
+            return
+    else:
+        raw_items = (parts[2] or "").split(",")
+        symbols = []
+        for item in raw_items:
+            s = item.strip()
+            if not s:
+                continue
+            s_up = s.upper()
+            if s_up not in symbols:
+                symbols.append(s_up)
+        if not symbols:
+            await message.answer("Не удалось распознать ни одной торговой пары.")
+            return
+
+    now_ts = int(time.time())
+    lines = []
+    updated = 0
+    for sym in symbols:
+        state = recalc_state_for_symbol(sym, now_ts=now_ts)
+        mode = str(state.get("market_mode", "RANGE")).upper()
+        lines.append(f"{sym}: {mode}")
+        updated += 1
+
+    body = "\n".join(lines) if lines else "нет данных"
+    await message.answer(
+        f"Обновили state для {updated} пар:\n{body}"
+    )
+
+
 @router.message(Command("now"))
 async def cmd_now(message: types.Message):
     text = message.text or ""
@@ -461,60 +544,3 @@ async def cmd_now(message: types.Message):
         await message.answer(f"Обновили {symbols[0]}.")
     else:
         await message.answer(f"Обновили {len(symbols)} пар.")
-
-
-@router.message(Command("market"))
-async def cmd_market(message: types.Message):
-    """
-    /market
-    /market force
-    /market force <symbol>
-    """
-    text = (message.text or "").strip()
-    parts = text.split()
-
-    # Ветка /market force [...]
-    if len(parts) >= 2 and parts[1].lower() == "force":
-        # /market force  -> все пары из symbols_list.json
-        if len(parts) == 2:
-            symbols = load_symbols()
-            if not symbols:
-                await message.answer("В symbols_list нет ни одной пары.")
-                return
-        else:
-            # /market force <symbol> — только одна пара
-            sym_raw = parts[2].strip()
-            if not sym_raw:
-                await message.answer("Не указан символ после force.")
-                return
-            symbols = [sym_raw.upper()]
-
-        now_ts = int(time.time())
-        lines: List[str] = []
-        updated = 0
-        for sym in symbols:
-            state = update_symbol_state(sym, now_ts=now_ts)
-            mode = str(state.get("market_mode", "RANGE")).upper()
-            lines.append(f"{sym}: {mode}")
-            updated += 1
-
-        header = f"Обновили state для {updated} пар:"
-        body = "\n".join(lines) if lines else "(нет пар)"
-        await message.answer(f"{header}\n{body}")
-        return
-
-    # Базовый /market — только показать режим рынка по логам, без обновления state-файлов
-    symbols = load_symbols()
-    if not symbols:
-        await message.answer("В symbols_list нет ни одной пары.")
-        return
-
-    now_ts = int(time.time())
-    lines: List[str] = []
-    for sym in symbols:
-        mode = market_mode_only(sym, now_ts=now_ts)
-        lines.append(f"{sym}: {mode}")
-
-    header = f"Режим рынка за последние {MARKET_PUBLISH} ч для {len(symbols)} пар:"
-    body = "\n".join(lines) if lines else "(нет пар)"
-    await message.answer(f"{header}\n{body}")

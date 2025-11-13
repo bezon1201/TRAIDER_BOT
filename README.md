@@ -1,4 +1,4 @@
-# Trader Bot — версия 1.8
+# Trader Bot — версия 1.9
 
 Телеграм-бот под деплой на Render, работающий через webhook.
 
@@ -6,8 +6,8 @@
 
 - Вебхук для Telegram через FastAPI.
 - Health-check эндпоинты: `GET /health` и `HEAD /health`.
-- Уведомление админа при запуске: сообщение "Бот запущен. Версия 1.8".
-- Команда `/start` отвечает: "Бот онлайн. Версия 1.8".
+- Уведомление админа при запуске: сообщение "Бот запущен. Версия 1.9".
+- Команда `/start` отвечает: "Бот онлайн. Версия 1.9".
 
 ## Команды бота
 
@@ -47,10 +47,11 @@
 - `WEBHOOK_BASE` — публичный URL сервиса на Render без завершающего `/`
 - `TF1` — старший таймфрейм (например, "12")
 - `TF2` — младший таймфрейм (например, "6")
-- `MARKET_PUBLISH` — окно (в часах) для голосования /market и /market force (по умолчанию 24)
+- `MARKET_PUBLISH` — окно (в часах) для агрегации рынка в командах `/market` и `/market force` (по умолчанию 24)
 
 ## История версий (кратко)
 
-- **1.8** — команды `/market` и `/market force`, агрегированный `SYMBOLstate.json` по окну `MARKET_PUBLISH`.
-- **1.7** — расширенный `/now`: 100 свечей, расчёт MA/ATR/сигналов, `market_mode`, расширенный `trading_params`, лог `raw_market.jsonl`.
+- **1.9** — корректный min_notional в symbol_info из NOTIONAL, float-дубли числовых фильтров в SYMBOLstate.json, команды `/market` и `/market force` работают с окном MARKET_PUBLISH.
+- **1.8** — агрегированный SYMBOLstate.json на основе логов `SYMBOLraw_market.jsonl`, команды `/market` и `/market force`.
+- **1.7** — расширенный `/now`: 100 свечей, расчёт MA/ATR/сигнал/`market_mode`, расширенный `trading_params`, лог `raw_market.jsonl`.
 - **1.6 и ниже** — базовый скелет бота, `/symbols`, `/help`, `/now` с созданием каркаса сырья, `/data` для работы с файлами.
