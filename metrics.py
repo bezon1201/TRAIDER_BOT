@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import math
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -62,6 +63,7 @@ def _raw_market_path(symbol: str) -> Path:
 
 
 def tf_to_interval(tf: str) -> str:
+    # По умолчанию считаем, что tf — число часов
     tf = str(tf).strip()
     if tf.endswith("m") or tf.endswith("h") or tf.endswith("d"):
         return tf
@@ -178,6 +180,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
 
     base_url = "https://api.binance.com"
 
+    # --- свечи TF1 ---
     candles1: list = []
     try:
         interval1 = tf_to_interval(TF1)
@@ -200,6 +203,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
     except Exception:
         candles1 = []
 
+    # --- свечи TF2 ---
     candles2: list = []
     try:
         interval2 = tf_to_interval(TF2)
@@ -222,6 +226,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
     except Exception:
         candles2 = []
 
+    # ограничиваем до 100
     if len(candles1) > 100:
         candles1 = candles1[-100:]
     if len(candles2) > 100:
@@ -230,6 +235,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
     block1["candles"] = candles1
     block2["candles"] = candles2
 
+    # --- метрики для рынка по TF1 / TF2 ---
     closes1 = [c["c"] for c in candles1]
     closes2 = [c["c"] for c in candles2]
 
@@ -253,6 +259,8 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
     sig2 = make_signal(ma30_2, ma90_2, atr2)
     block2["signal"] = sig2
 
+    # --- агрегированный режим рынка ---
+    # если оба UP -> UP; если любой DOWN -> DOWN; иначе RANGE
     if sig1["value"] == "UP" and sig2["value"] == "UP":
         overall = "UP"
     elif sig1["value"] == "DOWN" or sig2["value"] == "DOWN":
@@ -261,8 +269,9 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
         overall = "RANGE"
     data["market_mode"] = overall
 
+    # --- торговые параметры ---
     trading_params: Dict[str, Any] = {}
-
+    # цены
     try:
         ticker_price = await fetch_json(
             session,
@@ -292,6 +301,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
         "ask": ask,
     }
 
+    # exchangeInfo
     symbol_info_block: Dict[str, Any] = {}
     filters_block: Dict[str, Any] = {}
     try:
@@ -310,17 +320,14 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
                 if not ftype:
                     continue
                 filters_block[ftype] = f
-
             lot = filters_block.get("LOT_SIZE") or {}
             price_f = filters_block.get("PRICE_FILTER") or {}
             min_not = filters_block.get("MIN_NOTIONAL") or {}
-
             def _to_float(v):
                 try:
                     return float(v)
                 except Exception:
                     return 0.0
-
             symbol_info_block["tick_size"] = _to_float(price_f.get("tickSize", 0))
             symbol_info_block["step_size"] = _to_float(lot.get("stepSize", 0))
             symbol_info_block["min_qty"] = _to_float(lot.get("minQty", 0))
@@ -331,6 +338,7 @@ async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict
     trading_params["symbol_info"] = symbol_info_block
     trading_params["filters"] = filters_block
 
+    # комиссии — пока статично, можно будет потом сделать динамически
     trading_params["fees"] = {
         "maker": 0.0002,
         "taker": 0.0004,
