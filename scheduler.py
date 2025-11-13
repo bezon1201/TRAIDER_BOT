@@ -131,6 +131,8 @@ async def _step2_market_force_all(bot: "Bot", admin_chat_id: int, logger: loggin
     2) если есть изменения: перечисляем их.
     """
     from aiogram import Bot  # импорт для type hints и во избежание циклических зависимостей
+    # Ленивая загрузка списка символов из metrics, чтобы избежать циклического импорта
+    from metrics import load_symbols
 
     symbols = load_symbols()
     if not symbols:
