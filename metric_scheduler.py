@@ -172,16 +172,14 @@ class MetricScheduler:
                         published_count = 0
                         
                         for symbol in pairs:
-                            try:
-                                from metrics import get_symbol_mode
-                                mode = get_symbol_mode(self.storage_dir, symbol)
-                                if mode in ("LONG", "SHORT"):
-                                    market_mode = force_market_mode(self.storage_dir, symbol, mode)
-                                    self._log_event("scheduler_market_mode_published", symbol=symbol, frame=mode, mode=market_mode)
+                            for frame in ["12+6", "4+2"]:
+                                try:
+                                    market_mode = force_market_mode(self.storage_dir, symbol, frame)
+                                    self._log_event("scheduler_market_mode_published", symbol=symbol, frame=frame, mode=market_mode)
                                     published_count += 1
-                            except Exception as e:
-                                self._log_event("scheduler_publish_error", symbol=symbol, frame=str(mode), error=str(e))
-                                logger.error(f"Scheduler publish error {symbol} {mode}: {e}")
+                                except Exception as e:
+                                    self._log_event("scheduler_publish_error", symbol=symbol, frame=frame, error=str(e))
+                                    logger.error(f"Scheduler publish error {symbol} {frame}: {e}")
                         
                         self.config["last_published"] = now.isoformat()
                         self.save_config()

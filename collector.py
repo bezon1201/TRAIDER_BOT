@@ -3,7 +3,7 @@ import asyncio
 from typing import Dict, Any, List, Optional
 import httpx
 from datetime import datetime, timezone
-from metrics import save_metrics, read_pairs
+from metrics import save_metrics_and_update_state, read_pairs
 from indicators import calculate_indicators
 from market_calculation import calculate_and_save_raw_markets
 
@@ -82,7 +82,7 @@ async def collect_metrics_for_symbol(client: httpx.AsyncClient, symbol: str, sto
                 timeframes_data[tf] = {"klines": klines, "indicators": indicators}
             await asyncio.sleep(0.05)
         metrics = {"symbol": symbol, "ticker": ticker, "filters": filters, "timeframes": timeframes_data}
-        success = save_metrics(storage_dir, symbol, metrics)
+        success = save_metrics_and_update_state(storage_dir, symbol, metrics)
         if success:
             calculate_and_save_raw_markets(storage_dir, symbol, metrics)
         return success

@@ -122,73 +122,94 @@ def read_metrics(storage_dir: str, symbol: str) -> Dict[str, Any]:
         return {}
 
 
-# === STATE FILES (v1.6) ===
-def get_state_file_path(storage_dir: str, symbol: str) -> str:
-    return os.path.join(storage_dir, f"{normalize_pair(symbol)}.state.json")
+def _safe_get(dct, *keys, default=None):
+    cur = dct
+    for k in keys:
+        if cur is None or not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return cur if cur is not None else default
 
-def read_state(storage_dir: str, symbol: str) -> Dict[str, Any]:
+def _extract_ohlcv_lists(klines):
+    highs, lows, closes = [], [], []
+    for k in klines or []:
+        try:
+            highs.append(float(k[2]))
+            lows.append(float(k[3]))
+            closes.append(float(k[4]))
+        except Exception:
+            continue
+    return highs, lows, closes
+
+def _compute_ma_atr(klines, ma_period=30, atr_period=14):
+    from indicators import calculate_sma, calculate_atr
+    highs, lows, closes = _extract_ohlcv_lists(klines)
+    ma = calculate_sma(closes, ma_period)
+    atr = calculate_atr(highs, lows, closes, atr_period)
+    return ma, atr
+
+def _read_state(path):
     try:
-        p = get_state_file_path(storage_dir, symbol)
-        if os.path.exists(p):
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
-        pass
-    return {}
+        return {}
 
-def write_state(storage_dir: str, symbol: str, updates: Dict[str, Any]) -> bool:
+def _write_state(path, state):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+def update_state_from_metrics(storage_dir: str, symbol: str, metrics: Dict[str, Any]) -> bool:
+    """
+    Writes ma30_12h, atr14_12h, ma30_6h, atr14_6h, price, tick_size, last_metrics_ts into <SYMBOL>.state.json.
+    Keeps existing Mode / market_mode unchanged.
+    """
     try:
-        p = get_state_file_path(storage_dir, symbol)
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        data = {}
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f) or {}
-            except Exception:
-                data = {}
-        data.update(updates or {})
-        data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        tmp = p + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, p)
+        state_path = os.path.join(storage_dir, f"{symbol}.state.json")
+        state = _read_state(state_path)
+
+        # Pull klines for 12h and 6h
+        tf = _safe_get(metrics, "timeframes", default={})
+        kl_12h = _safe_get(tf, "12h", "klines", default=[])
+        kl_6h  = _safe_get(tf, "6h",  "klines", default=[])
+
+        ma30_12h, atr14_12h = _compute_ma_atr(kl_12h, 30, 14)
+        ma30_6h,  atr14_6h  = _compute_ma_atr(kl_6h,  30, 14)
+
+        price = float(_safe_get(metrics, "ticker", "lastPrice", default=_safe_get(metrics, "ticker", "last_price", default=0.0)) or 0.0)
+        tick_size = float(_safe_get(metrics, "filters", "price_filter", "tick_size", default=0.0) or 0.0)
+
+        # Update flat fields
+        if ma30_12h is not None: state["ma30_12h"] = ma30_12h
+        if atr14_12h is not None: state["atr14_12h"] = atr14_12h
+        if ma30_6h is not None: state["ma30_6h"] = ma30_6h
+        if atr14_6h is not None: state["atr14_6h"] = atr14_6h
+
+        state["price"] = price
+        if tick_size:
+            state["tick_size"] = tick_size
+        if "tick_size" not in state:
+            state["tick_size"] = 0.01  # sane default
+
+        # timestamps
+        now_iso = datetime.now(timezone.utc).isoformat()
+        state["last_metrics_ts"] = now_iso
+        state["updated_at"] = now_iso
+
+        _write_state(state_path, state)
+        logger.info(f"✓ State updated from metrics: {symbol}")
         return True
     except Exception as e:
-        logger.error(f"write_state error {symbol}: {e}")
+        logger.error(f"update_state_from_metrics error for {symbol}: {e}")
         return False
 
-def set_market_mode(storage_dir: str, symbol: str, market_mode: str) -> bool:
-    return write_state(storage_dir, symbol, {"market_mode": market_mode})
-
-def set_mode(storage_dir: str, symbol: str, mode: str) -> str:
+def save_metrics_and_update_state(storage_dir: str, symbol: str, metrics: Dict[str, Any]) -> bool:
+    """Compat wrapper: write metrics json (as before) AND update state fields needed for step 1."""
+    ok = save_metrics(storage_dir, symbol, metrics)
     try:
-        mode_up = str(mode).upper()
-        if mode_up not in ("LONG","SHORT"):
-            return "invalid mode"
-        ok = write_state(storage_dir, symbol, {"Mode": mode_up})
-        return "OK" if ok else "error"
+        update_state_from_metrics(storage_dir, symbol, metrics)
     except Exception as e:
-        logger.error(f"set_mode error {symbol}: {e}")
-        return f"error: {e}"
-
-def get_symbol_mode(storage_dir: str, symbol: str) -> str | None:
-    # 1) read from state
-    st = read_state(storage_dir, symbol)
-    if isinstance(st.get("Mode"), str) and st.get("Mode").upper() in ("LONG","SHORT"):
-        return st["Mode"].upper()
-    # 2) migrate from old <symbol>.json if present
-    try:
-        oldp = get_coin_file_path(storage_dir, symbol)
-        if os.path.exists(oldp):
-            with open(oldp,"r",encoding="utf-8") as f:
-                old = json.load(f) or {}
-            m = old.get("Mode")
-            if isinstance(m, str) and m.upper() in ("LONG","SHORT"):
-                write_state(storage_dir, symbol, {"Mode": m.upper()})
-                return m.upper()
-    except Exception:
-        pass
-    # 3) default LONG and create state
-    write_state(storage_dir, symbol, {"Mode":"LONG"})
-    return "LONG"
+        logger.error(f"state update failed (non-fatal): {e}")
+    return ok

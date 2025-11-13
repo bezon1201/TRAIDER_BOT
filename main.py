@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 from data import DataStorage
-from metrics import add_pairs, get_symbol_mode, parse_coins_command, read_pairs, remove_pairs, set_market_mode, set_mode
+from metrics import parse_coins_command, add_pairs, remove_pairs, read_pairs
 from collector import collect_all_metrics
 from market_calculation import force_market_mode
 from metric_scheduler import MetricScheduler
@@ -204,17 +204,6 @@ async def telegram_webhook(request: Request):
 
     if lower_text.startswith('/coins'):
         action, pairs_list = parse_coins_command(text)
-        if action in ('mode_long','mode_short'):
-            if not pairs_list:
-                await tg_send(chat_id, '❌ Укажите пары для смены режима')
-                return JSONResponse({'ok': True})
-            mode = 'LONG' if action == 'mode_long' else 'SHORT'
-            results = []
-            for s in pairs_list:
-                res = set_mode(DATA_STORAGE, s, mode)
-                results.append(f"{s}: {res}")
-            await tg_send(chat_id, '✅ Mode обновлён:\n' + '\n'.join(results))
-            return JSONResponse({'ok': True})
 
         if action == 'list':
             all_pairs = read_pairs(DATA_STORAGE)
@@ -268,31 +257,14 @@ async def telegram_webhook(request: Request):
     if cmd_root == "/market" and tail_lower.startswith("force"):
         parts = text.split()
         if len(parts) < 3:
-            await tg_send(chat_id, "❌ Используйте: /market force long|short")
+            await tg_send(chat_id, "❌ Используйте: /market force 12+6 или /market force 4+2")
             return JSONResponse({"ok": True})
 
-        mode = parts[2].upper()
-        if mode not in ["LONG", "SHORT"]:
-            await tg_send(chat_id, "❌ Режим должен быть LONG или SHORT")
+        frame = parts[2]
+        if frame not in ["12+6", "4+2"]:
+            await tg_send(chat_id, "❌ Фрейм должен быть 12+6 или 4+2")
             return JSONResponse({"ok": True})
 
-        all_pairs = read_pairs(DATA_STORAGE)
-        if not all_pairs:
-            await tg_send(chat_id, "❌ Нет пар в списке")
-            return JSONResponse({"ok": True})
-
-        filtered = [s for s in all_pairs if get_symbol_mode(DATA_STORAGE, s) == mode]
-        if not filtered:
-            await tg_send(chat_id, f"⚠️ Нет монет с Mode={mode}")
-            return JSONResponse({"ok": True})
-
-        results = []
-        for symbol in filtered:
-            result = force_market_mode(DATA_STORAGE, symbol, mode)
-            set_market_mode(DATA_STORAGE, symbol, result)
-            results.append(f"{symbol}: {result}")
-
-        msg = "market_mode для режима " + mode + "\n" + "\n".join(results)
         all_pairs = read_pairs(DATA_STORAGE)
         if not all_pairs:
             await tg_send(chat_id, "❌ Нет пар в списке")
@@ -300,11 +272,10 @@ async def telegram_webhook(request: Request):
 
         results = []
         for symbol in all_pairs:
-            result = force_market_mode(DATA_STORAGE, symbol, mode)
-            set_market_mode(DATA_STORAGE, symbol, result)
+            result = force_market_mode(DATA_STORAGE, symbol, frame)
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для режима {mode}\n" + "\n".join(results)
+        msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 
