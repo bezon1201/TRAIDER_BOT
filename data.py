@@ -31,7 +31,7 @@ def safe_names_from_args(args: str) -> list[str]:
         if not name:
             continue
         # не позволяем указывать подкаталоги
-        if "/" in name or "\" in name:
+        if "/" in name or chr(92) in name:
             continue
         if name not in result:
             result.append(name)
@@ -183,7 +183,7 @@ async def handle_data_import(message: types.Message):
     STORAGE_PATH.mkdir(parents=True, exist_ok=True)
     filename = message.document.file_name or "file.bin"
     # запрещаем поддиректории в имени
-    if "/" in filename or "\" in filename:
+    if "/" in filename or chr(92) in filename:
         await message.answer("Некорректное имя файла.")
         return
 
