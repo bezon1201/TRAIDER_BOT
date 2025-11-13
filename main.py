@@ -139,8 +139,8 @@ async def telegram_webhook(request: Request):
             "/coins PAIR1 PAIR2 - добавить пары\n"
             "/coins delete PAIR1 PAIR2 - удалить пары\n"
             "/now - собрать метрики\n"
-            "/market force 12+6 - market_mode для 12+6\n"
-            "/market force 4+2 - market_mode для 4+2\n"
+            "/market force long - market_mode для LONG\n"
+            "/market force short - market_mode для SHORT\n"
             "/data - список файлов\n"
             "/data import - импортировать присланный файл (caption)\n"
             "/data export all - отправить все\n"
@@ -257,11 +257,11 @@ async def telegram_webhook(request: Request):
     if cmd_root == "/market" and tail_lower.startswith("force"):
         parts = text.split()
         if len(parts) < 3:
-            await tg_send(chat_id, "❌ Используйте: /market force 12+6 или /market force 4+2")
+            await tg_send(chat_id, "❌ Используйте: /market force long или /market force short")
             return JSONResponse({"ok": True})
 
-        frame = parts[2]
-        if frame not in ["12+6", "4+2"]:
+        mode = parts[2].upper()
+        if mode not in ["LONG","SHORT"]:
             await tg_send(chat_id, "❌ Фрейм должен быть 12+6 или 4+2")
             return JSONResponse({"ok": True})
 
@@ -272,10 +272,10 @@ async def telegram_webhook(request: Request):
 
         results = []
         for symbol in all_pairs:
-            result = force_market_mode(DATA_STORAGE, symbol, frame)
+            result = force_market_mode(DATA_STORAGE, symbol, mode)
             results.append(f"{symbol}: {result}")
 
-        msg = f"market_mode для фрейма {frame}:\n" + "\n".join(results)
+        msg = f"market_mode для режима {mode}:\n" + "\n".join(results)
         await tg_send(chat_id, msg)
         return JSONResponse({"ok": True})
 

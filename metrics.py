@@ -213,3 +213,43 @@ def save_metrics_and_update_state(storage_dir: str, symbol: str, metrics: Dict[s
     except Exception as e:
         logger.error(f"state update failed (non-fatal): {e}")
     return ok
+
+
+def _state_path(storage_dir: str, symbol: str) -> str:
+    return os.path.join(storage_dir, f"{normalize_pair(symbol)}.state.json")
+
+def read_state(storage_dir: str, symbol: str) -> Dict[str, Any]:
+    try:
+        with open(_state_path(storage_dir, symbol), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def write_state(storage_dir: str, symbol: str, state: Dict[str, Any]) -> None:
+    path = _state_path(storage_dir, symbol)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+def get_symbol_mode(storage_dir: str, symbol: str) -> str:
+    """Return Mode from <SYMBOL>.state.json; default LONG if absent."""
+    st = read_state(storage_dir, symbol)
+    mode = str(st.get("Mode") or "LONG").upper()
+    if mode not in ("LONG","SHORT"):
+        mode = "LONG"
+    return mode
+
+def set_market_mode(storage_dir: str, symbol: str, market_mode: str) -> bool:
+    """Set market_mode in <SYMBOL>.state.json; keep other fields."""
+    try:
+        st = read_state(storage_dir, symbol)
+        st["market_mode"] = str(market_mode).upper()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        st["updated_at"] = now_iso
+        write_state(storage_dir, symbol, st)
+        logger.info(f"✓ market_mode updated in state: {symbol} -> {st['market_mode']}")
+        return True
+    except Exception as e:
+        logger.error(f"set_market_mode error for {symbol}: {e}")
+        return False

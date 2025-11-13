@@ -6,8 +6,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-TIMEFRAMES_12_6 = ["12h", "6h"]
-TIMEFRAMES_4_2 = ["4h", "2h"]
+TIMEFRAMES_LONG = ["12h", "6h"]
+TIMEFRAMES_SHORT = ["4h", "2h"]
 
 def calculate_signal(tf_data: Dict[str, Any]) -> str:
     try:
@@ -31,12 +31,12 @@ def calculate_signal(tf_data: Dict[str, Any]) -> str:
         logger.error(f"Error calculating signal: {e}")
         return "RANGE"
 
-def calculate_raw_signal(metrics: Dict[str, Any], frame: str) -> Optional[Dict[str, Any]]:
+def calculate_raw_signal(metrics: Dict[str, Any], mode: str) -> Optional[Dict[str, Any]]:
     try:
-        if frame == "12+6":
-            tfs = TIMEFRAMES_12_6
-        elif frame == "4+2":
-            tfs = TIMEFRAMES_4_2
+        if mode == "LONG":
+            tfs = TIMEFRAMES_LONG
+        elif mode == "SHORT":
+            tfs = TIMEFRAMES_SHORT
         else:
             return None
         signals = {}
@@ -49,14 +49,14 @@ def calculate_raw_signal(metrics: Dict[str, Any], frame: str) -> Optional[Dict[s
             overall_signal = "DOWN"
         else:
             overall_signal = "RANGE"
-        return {"timestamp": datetime.now(timezone.utc).isoformat(), "signal": overall_signal, "signals": signals, "frame": frame}
+        return {"timestamp": datetime.now(timezone.utc).isoformat(), "signal": overall_signal, "signals": signals, "frame": mode}
     except Exception as e:
         logger.error(f"Error calculating raw signal for {frame}: {e}")
         return None
 
-def append_raw_market(storage_dir: str, symbol: str, frame: str, raw_data: Dict[str, Any]) -> bool:
+def append_raw_market(storage_dir: str, symbol: str, mode: str, raw_data: Dict[str, Any]) -> bool:
     try:
-        filename = f"{symbol}_raw_market_{frame}.jsonl"
+        filename = f"{symbol}_raw_market_{mode}.jsonl"
         filepath = Path(storage_dir) / filename
         tmp_filepath = Path(storage_dir) / (filename + ".tmp")
         existing_lines = []
@@ -71,7 +71,7 @@ def append_raw_market(storage_dir: str, symbol: str, frame: str, raw_data: Dict[
         logger.info(f"✓ Raw market saved: {filename}")
         return True
     except Exception as e:
-        logger.error(f"Error appending raw market {symbol} {frame}: {e}")
+        logger.error(f"Error appending raw market {symbol} {mode}: {e}")
         try:
             tmp_filepath.unlink()
         except:
@@ -80,23 +80,23 @@ def append_raw_market(storage_dir: str, symbol: str, frame: str, raw_data: Dict[
 
 def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[str, Any]) -> bool:
     try:
-        raw_12_6 = calculate_raw_signal(metrics, "12+6")
+        raw_long = calculate_raw_signal(metrics, "LONG")
         if raw_12_6:
-            append_raw_market(storage_dir, symbol, "12+6", raw_12_6)
-        raw_4_2 = calculate_raw_signal(metrics, "4+2")
+            append_raw_market(storage_dir, symbol, "LONG", raw_long)
+        raw_short = calculate_raw_signal(metrics, "SHORT")
         if raw_4_2:
-            append_raw_market(storage_dir, symbol, "4+2", raw_4_2)
+            append_raw_market(storage_dir, symbol, "SHORT", raw_short)
         logger.info(f"✓ Raw markets calculated for {symbol}")
         return True
     except Exception as e:
         logger.error(f"Error calculating raw markets for {symbol}: {e}")
         return False
 
-def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
-    if frame not in ["12+6", "4+2"]:
+def force_market_mode(storage_dir: str, symbol: str, mode: str) -> str:
+    if mode not in ["LONG", "SHORT"]:
         return "Неподдерживаемый фрейм"
 
-    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{frame}.jsonl"
+    raw_file = Path(storage_dir) / f"{symbol}_raw_market_{mode}.jsonl"
     if not raw_file.exists():
         return f"Файл не найден"
 
@@ -153,4 +153,6 @@ def force_market_mode(storage_dir: str, symbol: str, frame: str) -> str:
     with open(json_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+    from metrics import set_market_mode
+    set_market_mode(storage_dir, symbol, market_mode)
     return market_mode

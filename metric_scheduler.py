@@ -242,7 +242,7 @@ class MetricScheduler:
                         published_count = 0
                         
                         for symbol in pairs:
-                            for frame in ["12+6", "4+2"]:
+                            for frame in ["LONG", "SHORT"]:
                                 try:
                                     market_mode = force_market_mode(self.storage_dir, symbol, frame)
                                     self._log_event("scheduler_market_mode_published", symbol=symbol, frame=frame, mode=market_mode)
