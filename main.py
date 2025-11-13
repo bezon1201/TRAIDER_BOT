@@ -1,6 +1,5 @@
 import os
 import logging
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -29,13 +28,13 @@ dp = Dispatcher()
 dp.include_router(metrics_router)
 
 # --- FastAPI-приложение ---
-app = FastAPI(title="Trader Bot 1.1")
+app = FastAPI(title="Trader Bot 1.2")
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Простейший хэндлер /start, чтобы проверить, что бот жив."""
-    await message.answer("Бот онлайн. Версия 1.1")
+    await message.answer("Бот онлайн. Версия 1.2")
 
 
 @app.on_event("startup")
@@ -50,7 +49,7 @@ async def on_startup():
     try:
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text="Бот запущен. Версия 1.1",
+            text="Бот запущен. Версия 1.2",
         )
         logger.info("Стартовое сообщение админу отправлено")
     except Exception:
