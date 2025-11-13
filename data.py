@@ -33,9 +33,23 @@ def safe_names_from_args(args: str) -> list[str]:
 
 @router.message(Command("data"))
 async def cmd_data(message: types.Message):
-    text = message.text or ""
+    """
+    Управление файлами в STORAGE_DIR.
+
+    /data                      — показать список файлов.
+    /data export all           — отправить все файлы.
+    /data export <FILES>       — отправить указанные файлы.
+    /data delete all           — удалить все файлы.
+    /data delete <FILES>       — удалить указанные файлы.
+    """
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Не указаны аргументы для /data.")
+        return
+
     parts = text.split(maxsplit=2)
 
+    # Просто /data — показываем список файлов
     if len(parts) == 1:
         files = list_storage_files()
         if not files:
@@ -45,17 +59,18 @@ async def cmd_data(message: types.Message):
         await message.answer(names)
         return
 
-    subcmd = parts[1].lower()
-
-    if subcmd == "import":
-        await message.answer("Для импорта отправьте файл с подписью `/data import`.")
-        return
-
-    if len(parts) == 2:
+    if len(parts) < 2:
         await message.answer("Не указаны аргументы для /data.")
         return
 
-    args = parts[2]
+    subcmd = parts[1].lower()
+
+    # Для export/delete нам обязательно нужны аргументы
+    if subcmd in {"export", "delete"} and len(parts) < 3:
+        await message.answer("Не указаны аргументы для /data.")
+        return
+
+    args = parts[2] if len(parts) >= 3 else ""
 
     if subcmd == "export":
         if args.strip().lower() == "all":
@@ -106,18 +121,19 @@ async def cmd_data(message: types.Message):
 
         names = safe_names_from_args(args)
         if not names:
-            await message.answer("Не удалось распознать ни одного файла.")
+            await message.answer("Не удалось распознать ни одного файла для удаления.")
             return
 
         deleted = 0
         for name in names:
             path = STORAGE_PATH / name
-            if path.is_file():
-                try:
-                    path.unlink()
-                    deleted += 1
-                except Exception:
-                    pass
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except Exception:
+                pass
 
         if deleted == 0:
             await message.answer("Не удалось удалить указанные файлы.")
@@ -128,8 +144,6 @@ async def cmd_data(message: types.Message):
         return
 
     await message.answer("Неизвестная подкоманда для /data.")
-
-
 @router.message()
 async def handle_data_import(message: types.Message):
     if not message.document:
