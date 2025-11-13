@@ -14,7 +14,7 @@ from coin_state import (
     recalc_state_for_symbol,
 )
 
-from scheduler import load_config, save_config, _log_event
+from scheduler_conf import load_config, save_config, _log_event
 router = Router()
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
@@ -444,7 +444,7 @@ async def cmd_scheduler(message: types.Message) -> None:
     """
     text = (message.text or "").strip()
     parts = text.split()
-    cfg = load_config()
+    cfg = load_config(MARKET_PUBLISH)
 
     if len(parts) == 1:
         status = "включен" if cfg.get("status") else "выключен"
