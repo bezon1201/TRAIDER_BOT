@@ -3,6 +3,7 @@ import json
 import time
 from pathlib import Path
 
+import aiohttp
 from aiogram import Router, types
 from aiogram.filters import Command
 
@@ -56,30 +57,83 @@ def _symbol_raw_path(symbol: str) -> Path:
     return Path(STORAGE_DIR) / f"{symbol}.json"
 
 
-def init_or_touch_symbol_raw(symbol: str) -> None:
+def _tf_to_interval(tf: str) -> str:
+    """Преобразовать TF в интервал Binance (по умолчанию часы)."""
+    s = str(tf).strip()
+    if not s:
+        return "1h"
+    # если уже содержит букву интервала, используем как есть (например '4h')
+    if s[-1].isalpha():
+        return s
+    return s + "h"
+
+
+async def fetch_klines(symbol: str, tf: str, limit: int = 50) -> list[dict]:
+    """Запросить свечи с Binance Spot для символа и таймфрейма.
+
+    Возвращает список dict'ов с полями ts, o, h, l, c, v.
+    """
+    interval = _tf_to_interval(tf)
+    url = (
+        "https://api.binance.com/api/v3/klines"
+        f"?symbol={symbol}&interval={interval}&limit={limit}"
+    )
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+    except Exception:
+        return []
+
+    candles: list[dict] = []
+    for item in data:
+        try:
+            # item: [openTime, open, high, low, close, volume, closeTime, ...]
+            open_time_ms = int(item[0])
+            o = float(item[1])
+            h = float(item[2])
+            l = float(item[3])
+            c = float(item[4])
+            v = float(item[5])
+        except (ValueError, TypeError, IndexError):
+            continue
+
+        candles.append(
+            {
+                "ts": open_time_ms // 1000,
+                "o": o,
+                "h": h,
+                "l": l,
+                "c": c,
+                "v": v,
+            }
+        )
+
+    return candles
+
+
+async def update_symbol_raw(symbol: str) -> None:
     """Создать или обновить сырьевой файл <SYMBOL>.json.
 
-    Пока без реальных метрик: гарантируем структуру и updated_ts.
+    Если файл существует — подтягиваем свечи с Binance и перезаписываем 'candles'
+    для TF1 и TF2. Если файла нет — создаём только каркас без запросов к Binance.
     """
     path = _symbol_raw_path(symbol)
+    existed = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
-    now_ts = int(time.time())
 
-    if path.exists():
+    if existed:
         try:
             with path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             data = {}
-
-        data.setdefault("symbol", symbol)
-        data["tf1"] = TF1
-        data["tf2"] = TF2
-        data["updated_ts"] = now_ts
-        raw = data.setdefault("raw", {})
-        raw.setdefault(TF1, {"candles": [], "ma30": [], "ma90": [], "atr14": []})
-        raw.setdefault(TF2, {"candles": [], "ma30": [], "ma90": [], "atr14": []})
     else:
+        # создаём каркас как раньше
+        now_ts = int(time.time())
         data = {
             "symbol": symbol,
             "tf1": TF1,
@@ -90,6 +144,26 @@ def init_or_touch_symbol_raw(symbol: str) -> None:
                 TF2: {"candles": [], "ma30": [], "ma90": [], "atr14": []},
             },
         }
+
+    # гарантируем структуру raw
+    raw = data.setdefault("raw", {})
+    raw.setdefault(TF1, {"candles": [], "ma30": [], "ma90": [], "atr14": []})
+    raw.setdefault(TF2, {"candles": [], "ma30": [], "ma90": [], "atr14": []})
+
+    # если файл был, подтягиваем свечи
+    if existed:
+        candles_tf1 = await fetch_klines(symbol, TF1, limit=50)
+        if candles_tf1:
+            raw[TF1]["candles"] = candles_tf1
+
+        candles_tf2 = await fetch_klines(symbol, TF2, limit=50)
+        if candles_tf2:
+            raw[TF2]["candles"] = candles_tf2
+
+        data["symbol"] = data.get("symbol") or symbol
+        data["tf1"] = TF1
+        data["tf2"] = TF2
+        data["updated_ts"] = int(time.time())
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -158,6 +232,10 @@ async def cmd_now(message: types.Message):
 
     /now            - для всех пар из symbols_list.json
     /now btcusdc    - только для указанных пар
+
+    Если файл уже существует — подтягиваются последние свечи с Binance (50 шт)
+    по TF1 и TF2 и перезаписывается блок raw[TF].candles.
+    Если файла нет — создаётся только каркас структуры, без запросов к Binance.
     """
     text = message.text or ""
     parts = text.split(maxsplit=1)
@@ -170,7 +248,7 @@ async def cmd_now(message: types.Message):
             return
 
         for symbol in symbols:
-            init_or_touch_symbol_raw(symbol)
+            await update_symbol_raw(symbol)
 
         await message.answer(f"Обновили {len(symbols)} пар.")
         return
@@ -192,7 +270,7 @@ async def cmd_now(message: types.Message):
         return
 
     for symbol in symbols:
-        init_or_touch_symbol_raw(symbol)
+        await update_symbol_raw(symbol)
 
     if len(symbols) == 1:
         await message.answer(f"Обновили {symbols[0]}.")
