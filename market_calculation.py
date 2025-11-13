@@ -81,11 +81,11 @@ def append_raw_market(storage_dir: str, symbol: str, mode: str, raw_data: Dict[s
 def calculate_and_save_raw_markets(storage_dir: str, symbol: str, metrics: Dict[str, Any]) -> bool:
     try:
         raw_long = calculate_raw_signal(metrics, "LONG")
-        if raw_12_6:
+        if raw_long:
             append_raw_market(storage_dir, symbol, "LONG", raw_long)
         raw_short = calculate_raw_signal(metrics, "SHORT")
-        if raw_4_2:
-            append_raw_market(storage_dir, symbol, "SHORT", raw_short)
+        if raw_short:
+            append_raw_market(storage_dir, symbol, "SHORT", raw_short)hort)
         logger.info(f"✓ Raw markets calculated for {symbol}")
         return True
     except Exception as e:
