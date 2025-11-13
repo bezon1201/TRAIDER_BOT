@@ -1,5 +1,0 @@
-{
-  "note": "Metric scheduler example config for v1.1. Frames are chosen by per-symbol bias at runtime.",
-  "interval_seconds": 900,
-  "symbols": ["BTCUSDT", "ETHUSDT"]
-}
