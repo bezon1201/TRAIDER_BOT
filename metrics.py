@@ -1,8 +1,9 @@
 import os
 import json
 import time
+import math
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Dict, Any
 
 import aiohttp
 from aiogram import Router, types
@@ -10,12 +11,9 @@ from aiogram.filters import Command
 
 router = Router()
 
-# Путь к persistent-диску Render
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
-SYMBOLS_FILE = STORAGE_PATH / "symbols_list.json"
 
-# Путь к Bot_commands.txt (лежит в корне проекта)
 PROJECT_ROOT = Path(__file__).resolve().parent
 BOT_COMMANDS_FILE = PROJECT_ROOT / "Bot_commands.txt"
 
@@ -23,12 +21,16 @@ TF1 = os.environ.get("TF1", "12")
 TF2 = os.environ.get("TF2", "6")
 
 
+def _symbols_file() -> Path:
+    return STORAGE_PATH / "symbols_list.json"
+
+
 def load_symbols() -> List[str]:
-    """Загрузить список символов из symbols_list.json."""
+    path = _symbols_file()
     try:
-        if not SYMBOLS_FILE.exists():
+        if not path.exists():
             return []
-        with SYMBOLS_FILE.open("r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
         symbols = data.get("symbols", [])
         if not isinstance(symbols, list):
@@ -46,90 +48,120 @@ def load_symbols() -> List[str]:
 
 
 def save_symbols(symbols: List[str]) -> None:
-    """Сохранить список символов в symbols_list.json."""
-    STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-    data = {"symbols": symbols}
-    with SYMBOLS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    path = _symbols_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump({"symbols": symbols}, f, ensure_ascii=False, indent=2)
 
 
 def _symbol_raw_path(symbol: str) -> Path:
-    """Путь к файлу сырья <SYMBOL>.json."""
     return STORAGE_PATH / f"{symbol}.json"
 
 
+def _raw_market_path(symbol: str) -> Path:
+    return STORAGE_PATH / f"{symbol}raw_market.jsonl"
+
+
 def tf_to_interval(tf: str) -> str:
-    """Преобразовать TF (например, '12' или '12h') в формат интервала Binance."""
-    tf_norm = (tf or "").strip().lower()
-    if not tf_norm:
-        return "1h"
-    # если уже содержит буквы (например, 12h, 4h, 1d) — отдаем как есть
-    if any(ch.isalpha() for ch in tf_norm):
-        return tf_norm
-    # иначе считаем, что это количество часов
-    return f"{tf_norm}h"
+    # По умолчанию считаем, что tf — число часов
+    tf = str(tf).strip()
+    if tf.endswith("m") or tf.endswith("h") or tf.endswith("d"):
+        return tf
+    if tf.isdigit():
+        return f"{tf}h"
+    return tf
 
 
-async def fetch_binance_klines(symbol: str, interval: str, limit: int = 100) -> Optional[list]:
-    """Получить свечи с Binance Spot public API.
+def sma(values: List[float], period: int) -> List[float]:
+    if period <= 0 or len(values) < period:
+        return []
+    res: List[float] = []
+    window_sum = sum(values[:period])
+    res.append(window_sum / period)
+    for i in range(period, len(values)):
+        window_sum += values[i] - values[i - period]
+        res.append(window_sum / period)
+    return res
 
-    Возвращает список словарей с полями ts, o, h, l, c, v.
-    При ошибке возвращает None.
-    """
-    url = "https://api.binance.com/api/v3/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
+
+def atr14(candles: List[Dict[str, Any]], period: int = 14) -> List[float]:
+    if len(candles) <= period:
+        return []
+    trs: List[float] = []
+    prev_close = float(candles[0]["c"])
+    for c in candles[1:]:
+        high = float(c["h"])
+        low = float(c["l"])
+        close = float(c["c"])
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close),
+        )
+        trs.append(tr)
+        prev_close = close
+    if len(trs) < period:
+        return []
+    return sma(trs, period)
+
+
+def make_signal(ma30_arr: List[float], ma90_arr: List[float], atr_arr: List[float]) -> Dict[str, Any]:
+    if not ma30_arr or not ma90_arr or not atr_arr:
+        return {
+            "value": "RANGE",
+            "ma30": 0.0,
+            "ma90": 0.0,
+            "atr14": 0.0,
+            "d_now": 0.0,
+            "d_prev": 0.0,
+        }
+    ma30 = float(ma30_arr[-1])
+    ma90 = float(ma90_arr[-1])
+    atr = float(atr_arr[-1])
+    if atr <= 0:
+        return {
+            "value": "RANGE",
+            "ma30": ma30,
+            "ma90": ma90,
+            "atr14": atr,
+            "d_now": 0.0,
+            "d_prev": 0.0,
+        }
+    d_now = ma30 - ma90
+    if len(ma30_arr) > 1 and len(ma90_arr) > 1:
+        d_prev = float(ma30_arr[-2]) - float(ma90_arr[-2])
+    else:
+        d_prev = 0.0
+    H = 0.4 * atr
+    S = 0.1 * atr
+    if d_now > H and (d_prev >= 0 or abs(d_prev) <= S):
+        val = "UP"
+    elif d_now < -H and (d_prev <= 0 or abs(d_prev) <= S):
+        val = "DOWN"
+    else:
+        val = "RANGE"
+    return {
+        "value": val,
+        "ma30": ma30,
+        "ma90": ma90,
+        "atr14": atr,
+        "d_now": d_now,
+        "d_prev": d_prev,
     }
-    try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, params=params) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-    except Exception:
-        return None
-
-    candles = []
-    for item in data:
-        try:
-            open_time = int(item[0])
-            o = float(item[1])
-            h = float(item[2])
-            l = float(item[3])
-            c = float(item[4])
-            v = float(item[5])
-            candles.append(
-                {
-                    "ts": open_time // 1000,
-                    "o": o,
-                    "h": h,
-                    "l": l,
-                    "c": c,
-                    "v": v,
-                }
-            )
-        except Exception:
-            continue
-
-    # Обрезаем до не более 100 на всякий случай
-    return candles[-limit:]
 
 
-async def update_symbol_raw(symbol: str) -> None:
-    """Создать или обновить сырьевой файл <SYMBOL>.json.
+async def fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, Any]) -> Any:
+    async with session.get(url, params=params, timeout=10) as resp:
+        resp.raise_for_status()
+        return await resp.json()
 
-    - Если файла нет: создаём каркас без запросов к Binance.
-    - Если файл есть: подтягиваем ~100 свечей по TF1 и TF2 с Binance и подрезаем.
-    """
+
+async def update_symbol_raw(session: aiohttp.ClientSession, symbol: str) -> Dict[str, Any]:
     path = _symbol_raw_path(symbol)
-    STORAGE_PATH.mkdir(parents=True, exist_ok=True)
     now_ts = int(time.time())
-    existed = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    if existed:
+    if path.exists():
         try:
             with path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -138,68 +170,215 @@ async def update_symbol_raw(symbol: str) -> None:
     else:
         data = {}
 
-    data["symbol"] = symbol
+    data.setdefault("symbol", symbol)
     data["tf1"] = TF1
     data["tf2"] = TF2
     data["updated_ts"] = now_ts
+    raw = data.setdefault("raw", {})
+    block1 = raw.setdefault(TF1, {})
+    block2 = raw.setdefault(TF2, {})
 
-    raw = data.get("raw")
-    if not isinstance(raw, dict):
-        raw = {}
-    data["raw"] = raw
+    base_url = "https://api.binance.com"
 
-    # гарантируем наличие блоков по TF1/TF2
-    if TF1 not in raw or not isinstance(raw.get(TF1), dict):
-        raw[TF1] = {}
-    if TF2 not in raw or not isinstance(raw.get(TF2), dict):
-        raw[TF2] = {}
-
-    # очищаем старые ключи метрик, если они были
-    for tf_key in (TF1, TF2):
-        block = raw.get(tf_key)
-        if isinstance(block, dict):
-            block.pop("ma30", None)
-            block.pop("ma90", None)
-            block.pop("atr14", None)
-
-    if existed:
-        # тянем свечи только если файл уже был создан ранее
+    # --- свечи TF1 ---
+    candles1: list = []
+    try:
         interval1 = tf_to_interval(TF1)
+        kl1 = await fetch_json(
+            session,
+            f"{base_url}/api/v3/klines",
+            {"symbol": symbol, "interval": interval1, "limit": 100},
+        )
+        for k in kl1:
+            candles1.append(
+                {
+                    "ts": int(k[0] / 1000),
+                    "o": float(k[1]),
+                    "h": float(k[2]),
+                    "l": float(k[3]),
+                    "c": float(k[4]),
+                    "v": float(k[5]),
+                }
+            )
+    except Exception:
+        candles1 = []
+
+    # --- свечи TF2 ---
+    candles2: list = []
+    try:
         interval2 = tf_to_interval(TF2)
+        kl2 = await fetch_json(
+            session,
+            f"{base_url}/api/v3/klines",
+            {"symbol": symbol, "interval": interval2, "limit": 100},
+        )
+        for k in kl2:
+            candles2.append(
+                {
+                    "ts": int(k[0] / 1000),
+                    "o": float(k[1]),
+                    "h": float(k[2]),
+                    "l": float(k[3]),
+                    "c": float(k[4]),
+                    "v": float(k[5]),
+                }
+            )
+    except Exception:
+        candles2 = []
 
-        candles1 = await fetch_binance_klines(symbol, interval1, limit=100)
-        candles2 = await fetch_binance_klines(symbol, interval2, limit=100)
+    # ограничиваем до 100
+    if len(candles1) > 100:
+        candles1 = candles1[-100:]
+    if len(candles2) > 100:
+        candles2 = candles2[-100:]
 
-        if candles1:
-            raw[TF1]["candles"] = candles1[-100:]
-        else:
-            # если не удалось получить, хотя бы гарантируем поле
-            raw[TF1].setdefault("candles", [])
+    block1["candles"] = candles1
+    block2["candles"] = candles2
 
-        if candles2:
-            raw[TF2]["candles"] = candles2[-100:]
-        else:
-            raw[TF2].setdefault("candles", [])
+    # --- метрики для рынка по TF1 / TF2 ---
+    closes1 = [c["c"] for c in candles1]
+    closes2 = [c["c"] for c in candles2]
+
+    ma30_1 = sma(closes1, 30)
+    ma90_1 = sma(closes1, 90)
+    atr1 = atr14(candles1, 14)
+
+    ma30_2 = sma(closes2, 30)
+    ma90_2 = sma(closes2, 90)
+    atr2 = atr14(candles2, 14)
+
+    block1["ma30_arr"] = ma30_1
+    block1["ma90_arr"] = ma90_1
+    block1["atr14_arr"] = atr1
+    sig1 = make_signal(ma30_1, ma90_1, atr1)
+    block1["signal"] = sig1
+
+    block2["ma30_arr"] = ma30_2
+    block2["ma90_arr"] = ma90_2
+    block2["atr14_arr"] = atr2
+    sig2 = make_signal(ma30_2, ma90_2, atr2)
+    block2["signal"] = sig2
+
+    # --- агрегированный режим рынка ---
+    # если оба UP -> UP; если любой DOWN -> DOWN; иначе RANGE
+    if sig1["value"] == "UP" and sig2["value"] == "UP":
+        overall = "UP"
+    elif sig1["value"] == "DOWN" or sig2["value"] == "DOWN":
+        overall = "DOWN"
     else:
-        # новый файл: только каркас, без реальных данных
-        raw[TF1].setdefault("candles", [])
-        raw[TF2].setdefault("candles", [])
+        overall = "RANGE"
+    data["market_mode"] = overall
+
+    # --- торговые параметры ---
+    trading_params: Dict[str, Any] = {}
+    # цены
+    try:
+        ticker_price = await fetch_json(
+            session,
+            f"{base_url}/api/v3/ticker/price",
+            {"symbol": symbol},
+        )
+        last_price = float(ticker_price.get("price", 0.0))
+    except Exception:
+        last_price = 0.0
+
+    bid = last_price
+    ask = last_price
+    try:
+        book = await fetch_json(
+            session,
+            f"{base_url}/api/v3/ticker/bookTicker",
+            {"symbol": symbol},
+        )
+        bid = float(book.get("bidPrice", bid))
+        ask = float(book.get("askPrice", ask))
+    except Exception:
+        pass
+
+    trading_params["price"] = {
+        "last": last_price,
+        "bid": bid,
+        "ask": ask,
+    }
+
+    # exchangeInfo
+    symbol_info_block: Dict[str, Any] = {}
+    filters_block: Dict[str, Any] = {}
+    try:
+        info = await fetch_json(
+            session,
+            f"{base_url}/api/v3/exchangeInfo",
+            {"symbol": symbol},
+        )
+        symbols = info.get("symbols") or []
+        if symbols:
+            s0 = symbols[0]
+            symbol_info_block["base_asset"] = s0.get("baseAsset")
+            symbol_info_block["quote_asset"] = s0.get("quoteAsset")
+            for f in s0.get("filters", []):
+                ftype = f.get("filterType")
+                if not ftype:
+                    continue
+                filters_block[ftype] = f
+            lot = filters_block.get("LOT_SIZE") or {}
+            price_f = filters_block.get("PRICE_FILTER") or {}
+            min_not = filters_block.get("MIN_NOTIONAL") or {}
+            def _to_float(v):
+                try:
+                    return float(v)
+                except Exception:
+                    return 0.0
+            symbol_info_block["tick_size"] = _to_float(price_f.get("tickSize", 0))
+            symbol_info_block["step_size"] = _to_float(lot.get("stepSize", 0))
+            symbol_info_block["min_qty"] = _to_float(lot.get("minQty", 0))
+            symbol_info_block["min_notional"] = _to_float(min_not.get("minNotional", 0))
+    except Exception:
+        pass
+
+    trading_params["symbol_info"] = symbol_info_block
+    trading_params["filters"] = filters_block
+
+    # комиссии — пока статично, можно будет потом сделать динамически
+    trading_params["fees"] = {
+        "maker": 0.0002,
+        "taker": 0.0004,
+    }
+
+    data["trading_params"] = trading_params
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+    return {
+        "overall_mode": overall,
+        "signal_tf1": sig1.get("value"),
+        "signal_tf2": sig2.get("value"),
+        "updated_ts": now_ts,
+    }
+
+
+def append_raw_market_line(symbol: str, info: Dict[str, Any]) -> None:
+    path = _raw_market_path(symbol)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts": info.get("updated_ts", int(time.time())),
+        "symbol": symbol,
+        "market_mode": info.get("overall_mode", "RANGE"),
+        "tf1": TF1,
+        "tf2": TF2,
+        "signal_tf1": info.get("signal_tf1"),
+        "signal_tf2": info.get("signal_tf2"),
+    }
+    line = json.dumps(record, ensure_ascii=False)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
 
 @router.message(Command("symbols"))
 async def cmd_symbols(message: types.Message):
-    """Управление списком торговых пар.
-
-    /symbols                - показать текущий список
-    /symbols btcusdc,...    - задать список заново
-    """
     text = message.text or ""
     parts = text.split(maxsplit=1)
 
-    # Вариант без аргументов: просто показать список
     if len(parts) == 1:
         symbols = load_symbols()
         if not symbols:
@@ -209,7 +388,6 @@ async def cmd_symbols(message: types.Message):
             await message.answer(f"Текущий список торговых пар:\n{body}")
         return
 
-    # Вариант с аргументами: перезаписать список
     args = parts[1]
     raw_items = args.split(",")
     symbols: List[str] = []
@@ -232,7 +410,6 @@ async def cmd_symbols(message: types.Message):
 
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
-    """Отправить содержимое Bot_commands.txt пользователю."""
     try:
         with BOT_COMMANDS_FILE.open("r", encoding="utf-8") as f:
             content = f.read()
@@ -248,45 +425,35 @@ async def cmd_help(message: types.Message):
 
 @router.message(Command("now"))
 async def cmd_now(message: types.Message):
-    """Создать или обновить сырые файлы <SYMBOL>.json.
-
-    /now            - для всех пар из symbols_list.json
-    /now btcusdc    - только для указанных пар
-    """
     text = message.text or ""
     parts = text.split(maxsplit=1)
 
-    # Без аргументов: работаем по всему списку symbols_list.json
     if len(parts) == 1:
         symbols = load_symbols()
         if not symbols:
             await message.answer("В symbols_list нет ни одной пары.")
             return
+    else:
+        args = parts[1]
+        raw_items = args.split(",")
+        symbols: List[str] = []
+        for item in raw_items:
+            s = item.strip()
+            if not s:
+                continue
+            s_up = s.upper()
+            if s_up not in symbols:
+                symbols.append(s_up)
+        if not symbols:
+            await message.answer("Не удалось распознать ни одной торговой пары.")
+            return
 
-        for symbol in symbols:
-            await update_symbol_raw(symbol)
-
-        await message.answer(f"Обновили {len(symbols)} пар.")
-        return
-
-    # С аргументами: только указанные пары
-    args = parts[1]
-    raw_items = args.split(",")
-    symbols: List[str] = []
-    for item in raw_items:
-        s = item.strip()
-        if not s:
-            continue
-        s_up = s.upper()
-        if s_up not in symbols:
-            symbols.append(s_up)
-
-    if not symbols:
-        await message.answer("Не удалось распознать ни одной торговой пары.")
-        return
-
-    for symbol in symbols:
-        await update_symbol_raw(symbol)
+    async with aiohttp.ClientSession() as session:
+        updated = 0
+        for sym in symbols:
+            info = await update_symbol_raw(session, sym)
+            append_raw_market_line(sym, info)
+            updated += 1
 
     if len(symbols) == 1:
         await message.answer(f"Обновили {symbols[0]}.")
