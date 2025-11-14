@@ -78,10 +78,22 @@ def _raw_market_path(symbol: str) -> Path:
 
 
 def tf_to_interval(tf: str) -> str:
-    # По умолчанию считаем, что tf — число часов
+    # По умолчанию считаем, что tf — число часов.
+    # Поддерживаем два варианта:
+    # - '12', '6'  -> '12h', '6h'
+    # - '12h', '6h', '1m', '1d' -> возвращаем как есть.
     tf = str(tf).strip()
+
+    # Если уже в формате Binance (1m, 5m, 1h, 12h, 1d) — возвращаем как есть
     if tf.endswith("m") or tf.endswith("h") or tf.endswith("d"):
         return tf
+
+    # Если это просто число — считаем, что это часы и добавляем "h"
+    if tf.isdigit():
+        return f"{tf}h"
+
+    # На всякий случай возвращаем как есть, чтобы не падать
+    return tf
 
 
 def get_symbol_min_notional(symbol: str) -> float:
