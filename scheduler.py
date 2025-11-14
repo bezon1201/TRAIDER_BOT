@@ -1,36 +1,80 @@
+
+import os
+import json
+import time
 import asyncio
 import logging
-import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 from aiogram import Bot
 
 from coin_state import MARKET_PUBLISH, recalc_state_for_symbol, _state_path
-from scheduler_conf import load_config, save_config, _log_event, STORAGE_PATH
+
+STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
+STORAGE_PATH = Path(STORAGE_DIR)
+
+
+CONFIG_PATH = STORAGE_PATH / "sheduler_confyg.json"
+LOG_PATH = STORAGE_PATH / "scheduler.jsonl"
 
 # Глобальная задача планировщика
 _scheduler_task: Optional[asyncio.Task] = None
 
 
-def _load_old_market_mode(symbol: str) -> str:
-    """Возвращает старый режим рынка из SYMBOLstate.json, либо пустую строку, если файла нет/повреждён."""
-    path = _state_path(symbol)
-    if not path.exists():
-        return ""
+def _log_event(payload: Dict[str, Any]) -> None:
+    """Пишем строку JSON в scheduler.jsonl."""
+    rec = dict(payload)
+    rec.setdefault("ts", int(time.time()))
     try:
-        with path.open("r", encoding="utf-8") as f:
-            data = f.read()
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
-        return ""
-    try:
-        import json
+        # Лог планировщика не критичен для работы
+        pass
 
-        obj = json.loads(data)
+
+def _default_config() -> Dict[str, Any]:
+    return {
+        "status": True,
+        "period": 900,
+        "publish": MARKET_PUBLISH,
+        "last_publish_ts": 0,
+    }
+
+
+def load_config() -> Dict[str, Any]:
+    if not CONFIG_PATH.exists():
+        cfg = _default_config()
+        try:
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with CONFIG_PATH.open("w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        _log_event({"event": "config_created", **cfg})
+        return cfg
+
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as f:
+            cfg = json.load(f)
     except Exception:
-        return ""
-    val = obj.get("market_mode")
-    return str(val).upper() if val is not None else ""
+        cfg = _default_config()
+    # Гарантируем обязательные поля
+    for k, v in _default_config().items():
+        cfg.setdefault(k, v)
+    return cfg
+
+
+def save_config(cfg: Dict[str, Any]) -> None:
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CONFIG_PATH.open("w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 async def _step1_collect_raw(logger: logging.Logger) -> int:
@@ -39,7 +83,7 @@ async def _step1_collect_raw(logger: logging.Logger) -> int:
 
     Возвращает количество обновлённых пар.
     """
-    # Ленивая загрузка, чтобы избежать циклического импорта при старте приложения
+    # Ленивая загрузка функций из metrics, чтобы избежать циклического импорта
     from metrics import load_symbols, update_symbol_raw, append_raw_market_line
 
     symbols = load_symbols()
@@ -64,7 +108,21 @@ async def _step1_collect_raw(logger: logging.Logger) -> int:
     return updated
 
 
-async def _step2_market_force_all(bot: Bot, admin_chat_id: int, logger: logging.Logger) -> Dict[str, Any]:
+def _load_old_market_mode(symbol: str) -> str:
+    """Возвращает старый режим рынка из SYMBOLstate.json, либо пустую строку, если файла нет/повреждён."""
+    path = _state_path(symbol)
+    if not path.exists():
+        return ""
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return ""
+    val = data.get("market_mode")
+    return str(val).upper() if val is not None else ""
+
+
+async def _step2_market_force_all(bot: "Bot", admin_chat_id: int, logger: logging.Logger) -> Dict[str, Any]:
     """
     Шаг 2: раз в publish часов пересчитываем state для всех пар (аналог /market force без ответов в чат).
 
@@ -72,7 +130,7 @@ async def _step2_market_force_all(bot: Bot, admin_chat_id: int, logger: logging.
     1) если изменений нет:  "Рынок пересчитан. Изменений нет";
     2) если есть изменения: перечисляем их.
     """
-    from metrics import load_symbols  # ленивая загрузка
+    from aiogram import Bot  # импорт для type hints и во избежание циклических зависимостей
 
     symbols = load_symbols()
     if not symbols:
@@ -133,12 +191,12 @@ async def _step2_market_force_all(bot: Bot, admin_chat_id: int, logger: logging.
     return {"symbols": total, "changes": changed_count}
 
 
-async def _scheduler_loop(bot: Bot, admin_chat_id: int, logger: logging.Logger) -> None:
+async def _scheduler_loop(bot: "Bot", admin_chat_id: int, logger: logging.Logger) -> None:
     """Основной цикл планировщика."""
     _log_event({"event": "scheduler_started"})
     logger.info("[scheduler] Планировщик запущен.")
     while True:
-        cfg = load_config(MARKET_PUBLISH)
+        cfg = load_config()
         status = bool(cfg.get("status", True))
         period = int(cfg.get("period", 900) or 900)
         publish = int(cfg.get("publish", MARKET_PUBLISH) or MARKET_PUBLISH)
@@ -190,12 +248,14 @@ async def _scheduler_loop(bot: Bot, admin_chat_id: int, logger: logging.Logger) 
         await asyncio.sleep(period)
 
 
-def start_scheduler(bot: Bot, admin_chat_id: int, logger: Optional[logging.Logger] = None) -> None:
+def start_scheduler(bot: "Bot", admin_chat_id: int, logger: Optional[logging.Logger] = None) -> None:
     """
     Запускает фоновую задачу планировщика.
 
     Вызывать один раз при старте приложения.
     """
+    from aiogram import Bot  # noqa: F401
+
     global _scheduler_task
     if _scheduler_task is not None and not _scheduler_task.done():
         return
