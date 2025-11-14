@@ -31,7 +31,7 @@ dp.include_router(metrics_router)
 dp.include_router(data_router)
 
 # --- FastAPI-приложение ---
-app = FastAPI(title="Trader Bot 2.6")
+app = FastAPI(title="Trader Bot 2.7")
 
 
 @dp.message(CommandStart())
