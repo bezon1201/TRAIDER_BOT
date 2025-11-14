@@ -17,6 +17,7 @@ from dca_models import DCAConfigPerSymbol
 
 router = Router()
 
+
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
 
@@ -24,9 +25,34 @@ STORAGE_PATH = Path(STORAGE_DIR)
 def _symbol_raw_path(symbol: str) -> Path:
     return STORAGE_PATH / f"{symbol}.json"
 
+
 def get_symbol_min_notional(symbol: str) -> float:
-    """
-    Получить minNotional для символа из локального файла SYMBOL.json.
+    """Получить minNotional для символа из локального файла SYMBOL.json."""
+    symbol = symbol.upper()
+    path = _symbol_raw_path(symbol)
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        return 0.0
+
+    tp = data.get("trading_params") or {}
+    # Сначала пробуем удобный дублированный float
+    si = tp.get("symbol_info") or {}
+    min_not = si.get("min_notional")
+    if isinstance(min_not, (int, float)):
+        try:
+            return float(min_not)
+        except Exception:
+            pass
+
+    # Если не получилось — пробуем исходный фильтр NOTIONAL
+    filters = tp.get("filters") or {}
+    notional_f = filters.get("NOTIONAL") or {}
+    try:
+        return float(notional_f.get("minNotional", 0))
+    except Exception:
+        return 0.0
 
 
 # -----------------------------
@@ -95,7 +121,6 @@ def _get_last_price_from_raw(symbol: str) -> float:
 def _select_anchor_price(symbol: str, state: dict) -> float:
     """Выбор якоря сетки по GRID_ANCHOR (MA или PRICE)."""
     anchor_mode = (GRID_ANCHOR or "MA").upper()
-    ma = 0.0
     try:
         ma = float(state.get("MA30") or 0.0)
     except Exception:
@@ -216,39 +241,6 @@ def _build_grid_for_symbol(symbol: str, cfg: DCAConfigPerSymbol, state: dict) ->
     }
     return grid
 
-    Используем данные, которые уже сохраняет команда /now:
-    - trading_params.symbol_info.min_notional (float)
-    - либо filters.NOTIONAL.minNotional (строка), если нужно.
-    """
-    symbol = symbol.upper()
-    path = _symbol_raw_path(symbol)
-    try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except Exception:
-        return 0.0
-
-    tp = data.get("trading_params") or {}
-    # Сначала пробуем удобный дублированный float
-    si = tp.get("symbol_info") or {}
-    min_not = si.get("min_notional")
-    if isinstance(min_not, (int, float)):
-        try:
-            return float(min_not)
-        except Exception:
-            pass
-
-    # Если не получилось — пробуем исходный фильтр NOTIONAL
-    filters = tp.get("filters") or {}
-    notional_f = filters.get("NOTIONAL") or {}
-    try:
-        return float(notional_f.get("minNotional", 0))
-    except Exception:
-        return 0.0
-
-    if tf.isdigit():
-        return f"{tf}h"
-    return tf
 
 @router.message(Command("dca"))
 async def cmd_dca(message: types.Message) -> None:
