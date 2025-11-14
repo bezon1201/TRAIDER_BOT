@@ -12,6 +12,7 @@ from dca_config import (
     get_symbol_config,
     upsert_symbol_config,
     validate_budget_vs_min_notional,
+    zero_symbol_budget,
 )
 from dca_models import DCAConfigPerSymbol
 from grid_log import log_grid_created, log_grid_manualy_closed
@@ -474,6 +475,12 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer(f"DCA: не удалось обновить файл сетки для {symbol}: {e}")
             return
 
+        # Обнуляем бюджет в DCA-конфиге для безопасности
+        try:
+            zero_symbol_budget(symbol)
+        except Exception:
+            pass
+
         # Логируем ручное закрытие кампании
         try:
             log_grid_manualy_closed(grid)
@@ -482,6 +489,7 @@ async def cmd_dca(message: types.Message) -> None:
 
         await message.answer(f"DCA: кампания для {symbol} остановлена.")
         return
+
 
 
     # /dca set <symbol> budget <USDC> | /dca set <symbol> levels <N>

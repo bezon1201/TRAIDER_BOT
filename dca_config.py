@@ -88,6 +88,25 @@ def upsert_symbol_config(cfg: DCAConfigPerSymbol) -> None:
     save_dca_config(all_cfg)
 
 
+
+
+def zero_symbol_budget(symbol: str) -> None:
+    """
+    Обнуляет budget_usdc для указанного символа в dca_config.json.
+    Если символа нет в конфиге — ничего не делает.
+    """
+    symbol = symbol.upper()
+    all_cfg = load_dca_config()
+    cfg = all_cfg.get(symbol)
+    if not cfg:
+        return
+    try:
+        cfg.budget_usdc = 0.0
+    except Exception:
+        return
+    all_cfg[symbol] = cfg
+    save_dca_config(all_cfg)
+
 def validate_budget_vs_min_notional(
     cfg: DCAConfigPerSymbol,
     min_notional: float,

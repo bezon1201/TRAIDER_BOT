@@ -35,13 +35,13 @@ dp.include_router(scheduler_router)
 dp.include_router(data_router)
 
 # --- FastAPI-приложение ---
-app = FastAPI(title="Trader Bot 2.8.1")
+app = FastAPI(title="Trader Bot 2.8.2")
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Простейший хэндлер /start, чтобы проверить, что бот жив.""" 
-    await message.answer("Бот онлайн. Версия 2.8.1")
+    await message.answer("Бот онлайн. Версия 2.8.2")
 
 
 @app.on_event("startup")
@@ -56,7 +56,7 @@ async def on_startup():
     try:
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text="Бот запущен. Версия 2.8.1",
+            text="Бот запущен. Версия 2.8.2",
         )
         logger.info("Стартовое сообщение админу отправлено")
     except Exception:
