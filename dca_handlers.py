@@ -14,6 +14,7 @@ from dca_config import (
     validate_budget_vs_min_notional,
 )
 from dca_models import DCAConfigPerSymbol
+from grid_log import log_grid_created
 
 router = Router()
 
@@ -388,6 +389,12 @@ async def cmd_dca(message: types.Message) -> None:
         except Exception as e:
             await message.answer(f"DCA: не удалось сохранить файл сетки для {symbol}: {e}")
             return
+
+        # Логируем создание сетки
+        try:
+            log_grid_created(grid)
+        except Exception:
+            pass
 
         await message.answer(
             "DCA start выполнен. Сетка создана.\n"
