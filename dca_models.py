@@ -59,6 +59,7 @@ class DCALevel:
     notional: float = 0.0      # price * qty в USDC
 
     status: str = "NEW"        # NEW / OPEN / FILLED / CANCELED / ...
+    filled: bool = False
 
     created_ts: Optional[int] = None
     updated_ts: Optional[int] = None
