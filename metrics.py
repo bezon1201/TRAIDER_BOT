@@ -14,7 +14,6 @@ from coin_state import (
     recalc_state_for_symbol,
 )
 
-from scheduler import load_config, save_config, _log_event
 
 router = Router()
 
@@ -443,90 +442,6 @@ async def cmd_help(message: types.Message):
 
 
 
-@router.message(Command("scheduler"))
-async def cmd_scheduler(message: types.Message) -> None:
-    """
-    Управление планировщиком.
-
-    /scheduler                 — показать текущие настройки.
-    /scheduler period XXX      — задать период в сек (60–21600).
-    /scheduler publish XXX     — задать период publish в часах (1–168).
-    /scheduler on              — включить планировщик.
-    /scheduler off             — выключить планировщик.
-    """
-    text = (message.text or "").strip()
-    parts = text.split()
-    cfg = load_config()
-
-    if len(parts) == 1:
-        status = "включен" if cfg.get("status") else "выключен"
-        period = int(cfg.get("period", 900))
-        publish = int(cfg.get("publish", MARKET_PUBLISH))
-        await message.answer(
-            f"Планировщик {status}.\n"
-            f"period = {period} сек\n"
-            f"publish = {publish} ч"
-        )
-        return
-
-    if len(parts) >= 2:
-        sub = parts[1].lower()
-    else:
-        sub = ""
-
-    if sub == "period" and len(parts) >= 3:
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await message.answer("Некорректное значение period. Нужна целочисленная секунда.")
-            return
-        if value < 60 or value > 21600:
-            await message.answer("Период должен быть от 60 до 21600 секунд.")
-            return
-        old = cfg.get("period")
-        cfg["period"] = value
-        save_config(cfg)
-        _log_event({"event": "config_update", "field": "period", "old": old, "new": value})
-        await message.answer(f"Период обновлён: {value} сек.")
-        return
-
-    if sub == "publish" and len(parts) >= 3:
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await message.answer("Некорректное значение publish. Нужны целые часы.")
-            return
-        if value < 1 or value > 168:
-            await message.answer("Параметр publish должен быть от 1 до 168 часов.")
-            return
-        old = cfg.get("publish")
-        cfg["publish"] = value
-        save_config(cfg)
-        _log_event({"event": "config_update", "field": "publish", "old": old, "new": value})
-        await message.answer(f"Период publish обновлён: {value} ч.")
-        return
-
-    if sub == "on":
-        old = bool(cfg.get("status"))
-        cfg["status"] = True
-        save_config(cfg)
-        _log_event({"event": "config_update", "field": "status", "old": old, "new": True})
-        await message.answer("Планировщик включен.")
-        return
-
-    if sub == "off":
-        old = bool(cfg.get("status"))
-        cfg["status"] = False
-        save_config(cfg)
-        _log_event({"event": "config_update", "field": "status", "old": old, "new": False})
-        await message.answer("Планировщик выключен.")
-        return
-
-    await message.answer(
-        "Неизвестная подкоманда для /scheduler. Доступно: "
-        "/scheduler, /scheduler period XXX, /scheduler publish XXX, /scheduler on, /scheduler off."
-    )
-
 @router.message(Command("market"))
 async def cmd_market(message: types.Message):
     """
@@ -641,6 +556,5 @@ async def cmd_now(message: types.Message):
         await message.answer(f"Обновили {symbols[0]}.")
     else:
         await message.answer(f"Обновили {len(symbols)} пар.")
-
 
 
