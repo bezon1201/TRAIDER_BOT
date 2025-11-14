@@ -105,3 +105,32 @@ def log_grid_rolled(grid: dict, from_grid_id: int) -> None:
         return
 
     _append_event(event)
+
+
+def log_grid_manualy_closed(grid: dict, reason: str = "manual_stop_command") -> None:
+    """Логирует событие ручного закрытия кампании (/dca stop).
+
+    event: grid_manualy_closed
+    """
+    try:
+        symbol = grid.get("symbol")
+        levels = grid.get("current_levels") or []
+        event = {
+            "event": "grid_manualy_closed",
+            "symbol": symbol,
+            "ts": int(time.time()),
+            "grid_id": grid.get("current_grid_id", 1),
+            "market_mode": grid.get("current_market_mode"),
+            "anchor_price": grid.get("current_anchor_price"),
+            "atr_tf1": grid.get("current_atr_tf1"),
+            "depth_cycle": grid.get("current_depth_cycle"),
+            "levels": len(levels),
+            "filled_levels": grid.get("filled_levels"),
+            "remaining_levels": grid.get("remaining_levels"),
+            "spent_usdc": grid.get("spent_usdc"),
+            "reason": reason,
+        }
+    except Exception:
+        return
+
+    _append_event(event)
