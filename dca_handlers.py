@@ -28,6 +28,194 @@ def get_symbol_min_notional(symbol: str) -> float:
     """
     Получить minNotional для символа из локального файла SYMBOL.json.
 
+
+# -----------------------------
+# DCA grid settings (2.7)
+# -----------------------------
+try:
+    GRID_DEPTH_UP = int(os.environ.get("GRID_DEPTH_UP", "2"))
+except ValueError:
+    GRID_DEPTH_UP = 2
+
+try:
+    GRID_DEPTH_RANGE = int(os.environ.get("GRID_DEPTH_RANGE", "3"))
+except ValueError:
+    GRID_DEPTH_RANGE = 3
+
+try:
+    GRID_DEPTH_DOWN = int(os.environ.get("GRID_DEPTH_DOWN", "6"))
+except ValueError:
+    GRID_DEPTH_DOWN = 6
+
+GRID_ANCHOR = os.environ.get("GRID_ANCHOR", "MA").upper()  # MA | PRICE
+
+
+def _grid_path(symbol: str) -> Path:
+    return STORAGE_PATH / f"{symbol}_grid.json"
+
+
+def _load_state_for_symbol(symbol: str) -> dict:
+    """Загружает SYMBOLstate.json, если он есть."""
+    symbol = (symbol or "").upper()
+    path = STORAGE_PATH / f"{symbol}state.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _get_last_price_from_raw(symbol: str) -> float:
+    """Пытается взять текущую цену из SYMBOL.json (trading_params)."""
+    symbol = (symbol or "").upper()
+    path = _symbol_raw_path(symbol)
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        return 0.0
+
+    tp = data.get("trading_params") or {}
+    # Возможные варианты названия поля
+    candidates = [
+        tp.get("last_price_f"),
+        tp.get("last_price"),
+        tp.get("lastPrice"),
+    ]
+    for val in candidates:
+        try:
+            if val is None:
+                continue
+            return float(val)
+        except Exception:
+            continue
+    return 0.0
+
+
+def _select_anchor_price(symbol: str, state: dict) -> float:
+    """Выбор якоря сетки по GRID_ANCHOR (MA или PRICE)."""
+    anchor_mode = (GRID_ANCHOR or "MA").upper()
+    ma = 0.0
+    try:
+        ma = float(state.get("MA30") or 0.0)
+    except Exception:
+        ma = 0.0
+
+    if anchor_mode == "PRICE":
+        price = _get_last_price_from_raw(symbol)
+        if price > 0:
+            return price
+        # fallback на MA, если цену не удалось получить
+        if ma > 0:
+            return ma
+        return 0.0
+
+    # По умолчанию и для GRID_ANCHOR == "MA"
+    if ma > 0:
+        return ma
+
+    # Если MA невалидна — пробуем цену как запасной вариант
+    price = _get_last_price_from_raw(symbol)
+    if price > 0:
+        return price
+
+    return 0.0
+
+
+def _depth_multiplier_for_mode(market_mode: str) -> int:
+    mode = (market_mode or "RANGE").upper()
+    if mode == "UP":
+        return GRID_DEPTH_UP
+    if mode == "DOWN":
+        return GRID_DEPTH_DOWN
+    return GRID_DEPTH_RANGE
+
+
+def _build_grid_for_symbol(symbol: str, cfg: DCAConfigPerSymbol, state: dict) -> dict:
+    """Строит структуру <SYMBOL>_grid.json на основе state и DCA-конфига."""
+    symbol = (symbol or "").upper()
+    now_ts = int(time.time())
+
+    tf1 = str(state.get("tf1") or os.environ.get("TF1", "12"))
+    tf2 = str(state.get("tf2") or os.environ.get("TF2", "6"))
+    market_mode = str(state.get("market_mode") or "RANGE").upper()
+
+    try:
+        atr = float(state.get("ATR14") or 0.0)
+    except Exception:
+        atr = 0.0
+
+    anchor_price = _select_anchor_price(symbol, state)
+
+    if atr <= 0 or anchor_price <= 0:
+        raise ValueError("ATR или anchor_price не заданы или некорректны.")
+
+    depth_mult = _depth_multiplier_for_mode(market_mode)
+    depth = float(depth_mult) * atr
+
+    levels = int(getattr(cfg, "levels_count", 0) or 0)
+    budget = float(getattr(cfg, "budget_usdc", 0.0) or 0.0)
+
+    if levels <= 0 or budget <= 0:
+        raise ValueError("Неверные параметры конфига DCA (budget или levels).")
+
+    if levels == 1:
+        step = 0.0
+    else:
+        step = depth / (levels - 1) if depth > 0 else 0.0
+
+    notional_per_level = budget / levels
+
+    current_levels = []
+    for idx in range(levels):
+        price = anchor_price - idx * step
+        if price <= 0:
+            price = anchor_price
+        qty = notional_per_level / price if price > 0 else 0.0
+        current_levels.append(
+            {
+                "level_index": idx + 1,
+                "grid_id": 1,
+                "price": round(price, 8),
+                "qty": round(qty, 8),
+                "notional": round(notional_per_level, 2),
+                "filled": False,
+                "filled_ts": None,
+            }
+        )
+
+    created_ts = int(getattr(cfg, "created_ts", now_ts) or now_ts)
+    updated_ts = int(getattr(cfg, "updated_ts", now_ts) or now_ts)
+
+    grid = {
+        "symbol": symbol,
+        "tf1": tf1,
+        "tf2": tf2,
+        "campaign_start_ts": now_ts,
+        "campaign_end_ts": None,
+        "config": {
+            "symbol": cfg.symbol,
+            "enabled": bool(getattr(cfg, "enabled", False)),
+            "budget_usdc": budget,
+            "levels_count": levels,
+            "base_tf": getattr(cfg, "base_tf", None),
+            "created_ts": created_ts,
+            "updated_ts": updated_ts,
+        },
+        "total_levels": levels,
+        "filled_levels": 0,
+        "spent_usdc": 0.0,
+        "current_grid_id": 1,
+        "current_market_mode": market_mode,
+        "current_anchor_price": anchor_price,
+        "current_atr_tf1": atr,
+        "current_depth_cycle": depth,
+        "current_levels": current_levels,
+        "created_ts": now_ts,
+        "updated_ts": now_ts,
+    }
+    return grid
+
     Используем данные, которые уже сохраняет команда /now:
     - trading_params.symbol_info.min_notional (float)
     - либо filters.NOTIONAL.minNotional (строка), если нужно.
@@ -171,6 +359,125 @@ async def cmd_dca(message: types.Message) -> None:
         await message.answer("\n".join(details))
         return
 
+
+    # /dca start <symbol> — построить виртуальную сетку и сохранить <SYMBOL>_grid.json
+    if cmd == "start":
+        if len(parts) < 3:
+            await message.answer("Использование: /dca start <symbol>")
+            return
+
+        symbol = parts[2].upper()
+        cfg = get_symbol_config(symbol)
+        if cfg is None:
+            await message.answer(f"DCA: конфиг для {symbol} не найден. Сначала задайте его через /dca set.")
+            return
+
+        state = _load_state_for_symbol(symbol)
+        if not state:
+            await message.answer(
+                f"DCA: state для {symbol} не найден. Сначала выполните /now и /market для этой пары."
+            )
+            return
+
+        try:
+            grid = _build_grid_for_symbol(symbol, cfg, state)
+        except ValueError as e:
+            await message.answer(f"DCA: не удалось построить сетку для {symbol}: {e}")
+            return
+
+        gpath = _grid_path(symbol)
+        try:
+            gpath.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            with gpath.open("w", encoding="utf-8") as f:
+                json.dump(grid, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            await message.answer(f"DCA: не удалось сохранить файл сетки для {symbol}: {e}")
+            return
+
+        await message.answer(
+            "DCA start выполнен. Сетка создана.\n"
+            f"symbol: {grid.get('symbol')}\n"
+            f"market_mode: {grid.get('current_market_mode')}\n"
+            f"anchor_price: {grid.get('current_anchor_price')}\n"
+            f"ATR(TF1): {grid.get('current_atr_tf1')}\n"
+            f"depth: {grid.get('current_depth_cycle')}\n"
+            f"levels: {grid.get('total_levels')}\n"
+            f"budget_usdc: {grid.get('config', {}).get('budget_usdc')}"
+        )
+        return
+
+    # /dca status <symbol> — показать статус текущей/последней сетки
+    if cmd == "status":
+        if len(parts) < 3:
+            await message.answer("Использование: /dca status <symbol>")
+            return
+
+        symbol = parts[2].upper()
+        gpath = _grid_path(symbol)
+        try:
+            raw = gpath.read_text(encoding="utf-8")
+            grid = json.loads(raw)
+        except Exception:
+            await message.answer(f"DCA: сетка для {symbol} не найдена.")
+            return
+
+        campaign_start = grid.get("campaign_start_ts")
+        campaign_end = grid.get("campaign_end_ts")
+        status = "active" if not campaign_end else "stopped"
+
+        msg_lines = [
+            f"DCA status для {symbol}:",
+            f"  status: {status}",
+            f"  campaign_start_ts: {campaign_start}",
+            f"  campaign_end_ts: {campaign_end}",
+            f"  market_mode: {grid.get('current_market_mode')}",
+            f"  tf1/tf2: {grid.get('tf1')}/{grid.get('tf2')}",
+            f"  anchor_price: {grid.get('current_anchor_price')}",
+            f"  ATR(TF1): {grid.get('current_atr_tf1')}",
+            f"  depth: {grid.get('current_depth_cycle')}",
+            f"  total_levels: {grid.get('total_levels')}",
+            f"  filled_levels: {grid.get('filled_levels')}",
+            f"  spent_usdc: {grid.get('spent_usdc')}",
+        ]
+        await message.answer("\n".join(msg_lines))
+        return
+
+    # /dca stop <symbol> — пометить кампанию как завершённую
+    if cmd == "stop":
+        if len(parts) < 3:
+            await message.answer("Использование: /dca stop <symbol>")
+            return
+
+        symbol = parts[2].upper()
+        gpath = _grid_path(symbol)
+        try:
+            raw = gpath.read_text(encoding="utf-8")
+            grid = json.loads(raw)
+        except Exception:
+            await message.answer(f"DCA: сетка для {symbol} не найдена.")
+            return
+
+        if grid.get("campaign_end_ts"):
+            await message.answer(f"DCA: кампания для {symbol} уже завершена.")
+            return
+
+        now_ts = int(time.time())
+        grid["campaign_end_ts"] = now_ts
+        grid["updated_ts"] = now_ts
+
+        try:
+            with gpath.open("w", encoding="utf-8") as f:
+                json.dump(grid, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            await message.answer(f"DCA: не удалось обновить файл сетки для {symbol}: {e}")
+            return
+
+        await message.answer(f"DCA: кампания для {symbol} остановлена.")
+        return
+
     # /dca set <symbol> budget <USDC> | /dca set <symbol> levels <N>
     if cmd == "set":
         if len(parts) < 5:
@@ -264,4 +571,3 @@ async def cmd_dca(message: types.Message) -> None:
         "/dca on <symbol>\n"
         "/dca off <symbol>"
     )
-
