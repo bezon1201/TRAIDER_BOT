@@ -9,6 +9,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Update
 
 from metrics import router as metrics_router
+from dca_handlers import router as dca_router
 from data import router as data_router
 from scheduler import start_scheduler
 
@@ -28,6 +29,7 @@ WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 dp.include_router(metrics_router)
+dp.include_router(dca_router)
 dp.include_router(data_router)
 
 # --- FastAPI-приложение ---
@@ -37,7 +39,7 @@ app = FastAPI(title="Trader Bot 2.6")
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Простейший хэндлер /start, чтобы проверить, что бот жив.""" 
-    await message.answer("Бот онлайн. Версия 2.7")
+    await message.answer("Бот онлайн. Версия 2.6.2")
 
 
 @app.on_event("startup")
@@ -52,7 +54,7 @@ async def on_startup():
     try:
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text="Бот запущен. Версия 2.7",
+            text="Бот запущен. Версия 2.6.2",
         )
         logger.info("Стартовое сообщение админу отправлено")
     except Exception:
