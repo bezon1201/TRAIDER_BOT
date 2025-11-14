@@ -11,6 +11,7 @@ import aiohttp
 from aiogram import Bot
 
 from coin_state import MARKET_PUBLISH, recalc_state_for_symbol, _state_path
+from grid_roll import roll_grid_for_symbol
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
@@ -151,6 +152,10 @@ async def _step2_market_force_all(bot: "Bot", admin_chat_id: int, logger: loggin
         total += 1
         old_mode = _load_old_market_mode(sym_up)
         state = recalc_state_for_symbol(sym_up, now_ts=now_ts)
+        try:
+            roll_grid_for_symbol(sym_up)
+        except Exception:
+            pass
         new_mode = str(state.get("market_mode", "RANGE")).upper()
 
         if old_mode != new_mode:

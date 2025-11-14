@@ -77,3 +77,31 @@ def log_grid_created(grid: dict) -> None:
         return
 
     _append_event(event)
+
+
+def log_grid_rolled(grid: dict, from_grid_id: int) -> None:
+    """Логирует событие перестроения сетки (grid_rolled).
+
+    Используется при привязке сетки к /market force и publish планировщика.
+    """
+    try:
+        symbol = grid.get("symbol")
+        levels = grid.get("current_levels") or []
+        event = {
+            "event": "grid_rolled",
+            "symbol": symbol,
+            "ts": int(time.time()),
+            "from_grid_id": from_grid_id,
+            "to_grid_id": grid.get("current_grid_id", 1),
+            "market_mode": grid.get("current_market_mode"),
+            "anchor_price": grid.get("current_anchor_price"),
+            "atr_tf1": grid.get("current_atr_tf1"),
+            "depth_cycle": grid.get("current_depth_cycle"),
+            "levels": len(levels),
+            "filled_levels": grid.get("filled_levels"),
+            "remaining_levels": grid.get("remaining_levels"),
+        }
+    except Exception:
+        return
+
+    _append_event(event)

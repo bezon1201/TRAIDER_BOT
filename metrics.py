@@ -13,6 +13,7 @@ from coin_state import (
     calc_market_mode_for_symbol,
     recalc_state_for_symbol,
 )
+from grid_roll import roll_grid_for_symbol
 
 
 router = Router()
@@ -510,6 +511,10 @@ async def cmd_market(message: types.Message):
     updated = 0
     for sym in symbols:
         state = recalc_state_for_symbol(sym, now_ts=now_ts)
+        try:
+            roll_grid_for_symbol(sym)
+        except Exception:
+            pass
         mode = str(state.get("market_mode", "RANGE")).upper()
         lines.append(f"{sym}: {mode}")
         updated += 1
