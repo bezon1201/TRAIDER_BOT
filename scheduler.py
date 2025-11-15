@@ -85,7 +85,8 @@ async def _step1_collect_raw(logger: logging.Logger) -> int:
     Возвращает количество обновлённых пар.
     """
     # Ленивая загрузка функций из metrics, чтобы избежать циклического импорта
-    from metrics import load_symbols, update_symbol_raw, append_raw_market_line
+    from metrics import load_symbols, update_symbol_raw, append_raw_market_line, _load_last_tf1_candle
+    from grid_sim import simulate_bar_for_symbol
 
     symbols = load_symbols()
     if not symbols:
@@ -94,6 +95,7 @@ async def _step1_collect_raw(logger: logging.Logger) -> int:
         return 0
 
     updated = 0
+
     async with aiohttp.ClientSession() as session:
         for sym in symbols:
             try:
@@ -101,12 +103,23 @@ async def _step1_collect_raw(logger: logging.Logger) -> int:
                 append_raw_market_line(sym, info)
                 updated += 1
             except Exception:
-                logger.exception("[scheduler] Ошибка обновления сырья для %s", sym)
-                _log_event({"event": "error_step1_symbol", "symbol": sym})
+                logger.exception("[scheduler] step1: ошибка обновления данных для %s", sym)
+                _log_event({"event": "error_step1_update", "symbol": sym})
+                continue
+
+            # Онлайн-симуляция исполнения DCA-сетки по последней свече TF1 (только SIM)
+            try:
+                bar = _load_last_tf1_candle(sym)
+                if bar is not None:
+                    simulate_bar_for_symbol(sym, bar)
+            except Exception:
+                logger.exception("[scheduler] step1: ошибка симуляции для %s", sym)
+                _log_event({"event": "error_step1_sim", "symbol": sym})
 
     _log_event({"event": "step1_now_all", "symbols": updated})
-    logger.info("[scheduler] step1: обновили сырьё для %s пар.", updated)
+    logger.info("[scheduler] step1: обновлено пар: %s", updated)
     return updated
+
 
 
 def _load_old_market_mode(symbol: str) -> str:

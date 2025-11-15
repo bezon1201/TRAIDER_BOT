@@ -90,9 +90,12 @@ def _symbol_raw_path(symbol: str) -> Path:
     return STORAGE_PATH / f"{symbol}.json"
 
 
+def _raw_market_path(symbol: str) -> Path:
+    return STORAGE_PATH / f"{symbol}raw_market.jsonl"
+
+
 def _load_last_tf1_candle(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    Прочитать последнюю свечу TF1 из STORAGE_DIR/<SYMBOL>.json.
+    """Прочитать последнюю свечу TF1 из STORAGE_DIR/<SYMBOL>.json.
 
     Возвращает dict свечи в том формате, в каком её пишет update_symbol_raw,
     или None, если данных нет или данные повреждены.
@@ -106,7 +109,7 @@ def _load_last_tf1_candle(symbol: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-    tf1 = data.get("tf1") or TF1
+    tf1 = data.get("tf1") or os.environ.get("TF1") or ""
     raw = data.get("raw") or {}
     tf_block = raw.get(tf1)
     if not isinstance(tf_block, dict):
@@ -119,11 +122,6 @@ def _load_last_tf1_candle(symbol: str) -> Optional[Dict[str, Any]]:
     if not isinstance(last, dict):
         return None
     return last
-
-
-def _raw_market_path(symbol: str) -> Path:
-    return STORAGE_PATH / f"{symbol}raw_market.jsonl"
-
 
 def tf_to_interval(tf: str) -> str:
     # По умолчанию считаем, что tf — число часов.
