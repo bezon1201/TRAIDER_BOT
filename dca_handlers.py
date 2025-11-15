@@ -105,6 +105,51 @@ def _format_money(value, digits: int = 2) -> str:
 
 
 
+
+def _build_status_lines_from_grid(grid: dict) -> list[str]:
+    symbol = str(grid.get("symbol") or "UNKNOWN").upper()
+
+    campaign_start = grid.get("campaign_start_ts")
+    campaign_end = grid.get("campaign_end_ts")
+
+    status = "active" if not campaign_end else "stopped"
+    grid_id = grid.get("current_grid_id", 1)
+
+    start_str = _format_ts_date(campaign_start)
+    if campaign_end:
+        stop_str = f"Stop: {_format_ts_date(campaign_end)} Manual stop"
+    else:
+        stop_str = "Stop: -- (active)"
+
+    market_mode = str(grid.get("current_market_mode") or "RANGE").upper()
+    tf1 = grid.get("tf1")
+    tf2 = grid.get("tf2")
+
+    anchor_price = grid.get("current_anchor_price")
+    atr_tf1 = grid.get("current_atr_tf1")
+    depth_cycle = grid.get("current_depth_cycle")
+
+    total_levels = grid.get("total_levels")
+    filled_levels = grid.get("filled_levels")
+    spent_usdc = grid.get("spent_usdc")
+
+    cfg = grid.get("config") or {}
+    budget_usdc = cfg.get("budget_usdc")
+
+    lines = [
+        f"{symbol} {status} Grid id: {grid_id}",
+        f"Start: {start_str}",
+        stop_str,
+        f"Market: {market_mode} tf1/tf2: {tf1}/{tf2}",
+        f"Anchor: {_format_money(anchor_price)} ATR: {_format_money(atr_tf1)} Depth: {_format_money(depth_cycle)}",
+        f"Total levels: {total_levels} Filled levels: {filled_levels}",
+        f"Budget: {_format_money(budget_usdc)}",
+        f"Spent: {_format_money(spent_usdc)}",
+    ]
+    return lines
+
+
+
 def _load_state_for_symbol(symbol: str) -> dict:
     """Загружает SYMBOLstate.json, если он есть."""
     symbol = (symbol or "").upper()
@@ -435,10 +480,56 @@ async def cmd_dca(message: types.Message) -> None:
     # /dca status <symbol> — показать статус текущей/последней сетки
     if cmd == "status":
         if len(parts) < 3:
-            await message.answer("Использование: /dca status <symbol>")
+            await message.answer("Использование: /dca status <symbol|active|all>")
             return
 
-        symbol = parts[2].upper()
+        arg = parts[2].upper()
+
+        # /dca status active — все активные кампании
+        if arg == "ACTIVE":
+            from pathlib import Path as _Path
+
+            storage = STORAGE_PATH
+            count = 0
+            for path in sorted(storage.glob("*_grid.json")):
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                    grid = json.loads(raw)
+                except Exception:
+                    continue
+                if grid.get("campaign_end_ts"):
+                    # уже завершена — пропускаем
+                    continue
+                lines = _build_status_lines_from_grid(grid)
+                await message.answer("\n".join(lines))
+                count += 1
+
+            if count == 0:
+                await message.answer("DCA: активных кампаний не найдено.")
+            return
+
+        # /dca status all — все кампании, для которых есть сетка
+        if arg == "ALL":
+            from pathlib import Path as _Path
+
+            storage = STORAGE_PATH
+            count = 0
+            for path in sorted(storage.glob("*_grid.json")):
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                    grid = json.loads(raw)
+                except Exception:
+                    continue
+                lines = _build_status_lines_from_grid(grid)
+                await message.answer("\n".join(lines))
+                count += 1
+
+            if count == 0:
+                await message.answer("DCA: кампаний (сеток) не найдено.")
+            return
+
+        # /dca status <symbol>
+        symbol = arg
         gpath = _grid_path(symbol)
         try:
             raw = gpath.read_text(encoding="utf-8")
@@ -447,45 +538,10 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer(f"DCA: сетка для {symbol} не найдена.")
             return
 
-        campaign_start = grid.get("campaign_start_ts")
-        campaign_end = grid.get("campaign_end_ts")
-
-        status = "active" if not campaign_end else "stopped"
-        grid_id = grid.get("current_grid_id", 1)
-
-        start_str = _format_ts_date(campaign_start)
-        if campaign_end:
-            stop_str = f"Stop: {_format_ts_date(campaign_end)} Manual stop"
-        else:
-            stop_str = "Stop: -- (active)"
-
-        market_mode = str(grid.get("current_market_mode") or "RANGE").upper()
-        tf1 = grid.get("tf1")
-        tf2 = grid.get("tf2")
-
-        anchor_price = grid.get("current_anchor_price")
-        atr_tf1 = grid.get("current_atr_tf1")
-        depth_cycle = grid.get("current_depth_cycle")
-
-        total_levels = grid.get("total_levels")
-        filled_levels = grid.get("filled_levels")
-        spent_usdc = grid.get("spent_usdc")
-
-        cfg = grid.get("config") or {}
-        budget_usdc = cfg.get("budget_usdc")
-
-        msg_lines = [
-            f"{symbol} {status} Grid id: {grid_id}",
-            f"Start: {start_str}",
-            stop_str,
-            f"Market: {market_mode} tf1/tf2: {tf1}/{tf2}",
-            f"Anchor: {_format_money(anchor_price)} ATR: {_format_money(atr_tf1)} Depth: {_format_money(depth_cycle)}",
-            f"Total levels: {total_levels} Filled levels: {filled_levels}",
-            f"Budget: {_format_money(budget_usdc)}",
-            f"Spent: {_format_money(spent_usdc)}",
-        ]
+        msg_lines = _build_status_lines_from_grid(grid)
         await message.answer("\n".join(msg_lines))
         return
+
 
 
     # /dca stop <symbol> — пометить кампанию как завершённую
