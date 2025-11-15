@@ -37,18 +37,18 @@ dp.include_router(scheduler_router)
 dp.include_router(data_router)
 
 # --- FastAPI-приложение ---
-app = FastAPI(title="Trader Bot 3.5")
+app = FastAPI(title="Trader Bot 3.6")
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    """Простейший хэндлер /start, чтобы проверить, что бот жив."""
-    await message.answer("Бот онлайн. Версия 3.5")
+    """Простейший хэндлер /start, чтобы проверить, что бот жив.""" 
+    await message.answer("Бот онлайн. Версия 3.6")
 
 
 @app.on_event("startup")
 async def on_startup():
-    """Настройка вебхука и уведомление админа при старте сервиса."""
+    """Настройка вебхука и уведомление админа при старте сервиса.""" 
     try:
         await bot.set_webhook(WEBHOOK_URL)
         logger.info("Webhook set to %s", WEBHOOK_URL)
@@ -58,7 +58,7 @@ async def on_startup():
     try:
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text="Бот запущен. Версия 3.5",
+            text="Бот запущен. Версия 3.6",
         )
         logger.info("Стартовое сообщение админу отправлено")
     except Exception:
@@ -73,7 +73,7 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    """Чистое выключение: удаляем webhook и закрываем сессию бота."""
+    """Чистое выключение: удаляем webhook и закрываем сессию бота.""" 
     try:
         await bot.delete_webhook(drop_pending_updates=False)
     except Exception:
@@ -84,7 +84,7 @@ async def on_shutdown():
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    """Точка входа для Telegram webhook."""
+    """Точка входа для Telegram webhook.""" 
     data = await request.json()
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
@@ -94,12 +94,12 @@ async def telegram_webhook(request: Request):
 
 @app.get("/health")
 async def health_get():
-    """Health-check для Render по GET."""
+    """Health-check для Render по GET.""" 
     return PlainTextResponse("ok")
 
 
 @app.head("/health")
 async def health_head():
-    """Health-check для Render по HEAD (как в ТЗ)."""
+    """Health-check для Render по HEAD (как в ТЗ).""" 
     # Тело можно не возвращать, важен статус 200
     return PlainTextResponse("")
