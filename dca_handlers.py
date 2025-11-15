@@ -414,12 +414,11 @@ async def cmd_dca(message: types.Message) -> None:
             return
         symbol = parts[2].upper()
 
-            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
-        if _has_active_campaign(symbol):
-            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        cfg = get_symbol_config(symbol)
+        if cfg is None:
+            await message.answer(f"DCA: конфиг для {symbol} не найден.")
             return
 
-        cfg = get_symbol_config(symbol)
         if cfg is None:
             await message.answer(f"DCA: конфиг для {symbol} не найден.")
             return
@@ -457,11 +456,6 @@ async def cmd_dca(message: types.Message) -> None:
             return
 
         symbol = parts[2].upper()
-
-            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
-        if _has_active_campaign(symbol):
-            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
-            return
 
         cfg = get_symbol_config(symbol)
         if cfg is None:
@@ -637,7 +631,7 @@ async def cmd_dca(message: types.Message) -> None:
         field = parts[3].lower()
         value = parts[4]
 
-            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        # Запрещаем менять конфиг, если есть активная кампания
         if _has_active_campaign(symbol):
             await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
             return
@@ -665,7 +659,7 @@ async def cmd_dca(message: types.Message) -> None:
                 return
             cfg.levels_count = lv
         else:
-            await message.answer("Поддерживаются только поля budget и levels.")
+            await message.answer("Неизвестное поле, ожидается budget или levels.")
             return
 
         upsert_symbol_config(cfg)
@@ -700,7 +694,7 @@ async def cmd_dca(message: types.Message) -> None:
             return
         symbol = parts[2].upper()
 
-            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        # Запрещаем менять enabled, если есть активная кампания
         if _has_active_campaign(symbol):
             await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
             return
