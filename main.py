@@ -8,10 +8,13 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.types import Update
 
+BOT_VERSION = "3.1"
+
 from metrics import router as metrics_router
 from dca_handlers import router as dca_router
 from scheduler_handlers import router as scheduler_router
 from data import router as data_router
+from trade_mode_handlers import router as trade_mode_router
 from scheduler import start_scheduler
 
 logging.basicConfig(level=logging.INFO)
