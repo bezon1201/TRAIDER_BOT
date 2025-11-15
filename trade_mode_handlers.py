@@ -9,27 +9,85 @@ router = Router()
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 
-# Для личного бота достаточно хранить ожидание PIN по chat_id.
+# Для личного бота достаточно отслеживать ожидание PIN по chat_id.
 _pending_mode_by_chat: Dict[int, str] = {}
 
 
 @router.message()
-async def cmd_trade_mode(message: types.Message) -> None:
-    """Обработчик команд /trade mode, /trade mode sim, /trade mode live."""
+async def handle_trade(message: types.Message) -> None:
+    """Обработка команд /trade mode и ввода PIN.
+
+    Реализует:
+    - /trade mode
+    - /trade mode sim
+    - /trade mode live
+    - ожидание PIN и его проверку
+    - отмену перехода по любой команде.
+    """
     if not message.text:
         return
 
     text = message.text.strip()
-    # Обрабатываем только сообщения, начинающиеся с /trade
+    chat_id = message.chat.id
+
+    # Если уже ждём PIN для этого чата — обрабатываем сначала этот сценарий.
+    if chat_id in _pending_mode_by_chat:
+        # Любая команда (начинается с /) отменяет переход.
+        if text.startswith("/"):
+            _pending_mode_by_chat.pop(chat_id, None)
+            await message.answer("Запрос смены режима торговли отменён.")
+            # Если это не /trade, дальше ничего не делаем — команду обработают другие хендлеры.
+            if not text.startswith("/trade"):
+                return
+            # Если это /trade ..., продолжаем ниже как с обычной командой.
+        else:
+            # Считаем это попыткой ввода PIN.
+            requested = _pending_mode_by_chat.pop(chat_id, None)
+            if requested is None:
+                return
+
+            if not ADMIN_KEY:
+                await message.answer(
+                    "Смена режима торговли недоступна: переменная окружения ADMIN_KEY не задана."
+                )
+                return
+
+            if text != ADMIN_KEY:
+                await message.answer("Неверный PIN, режим торговли не изменён.")
+                return
+
+            old_mode = get_trade_mode()
+            try:
+                set_trade_mode(requested)
+            except Exception:
+                await message.answer("Ошибка при смене режима торговли. Попробуйте ещё раз.")
+                return
+
+            if old_mode == "live":
+                descr_old = "live (боевой режим)"
+            else:
+                descr_old = "sim (симуляция)"
+
+            if requested == "live":
+                descr_new = "live (боевой режим)"
+            else:
+                descr_new = "sim (симуляция)"
+
+            await message.answer(
+                f"Режим торговли изменён: **{descr_old} → {descr_new}**.\n\n"
+                f"Текущий режим: **{descr_new}**."
+            )
+            return
+
+    # На этом этапе либо нет ожидания PIN, либо мы его только что отменили.
     if not text.startswith("/trade"):
         return
 
     parts = text.split()
 
-    # Ожидаем минимум: /trade mode
+    # Ждём минимум: /trade mode
     if len(parts) < 2 or parts[1].lower() != "mode":
         await message.answer(
-            "Неизвестная команда /trade.\n"
             "Использование:\n"
             "/trade mode — показать текущий режим торговли.\n"
             "/trade mode sim — запросить режим симуляции (через PIN).\n"
@@ -37,7 +95,7 @@ async def cmd_trade_mode(message: types.Message) -> None:
         )
         return
 
-    # /trade mode — показать текущий режим
+    # /trade mode — просто показать текущий режим
     if len(parts) == 2:
         current = get_trade_mode()
         if current == "sim":
@@ -54,7 +112,7 @@ async def cmd_trade_mode(message: types.Message) -> None:
             )
         return
 
-    # /trade mode <something>
+    # /trade mode <режим>
     requested = parts[2].lower()
 
     if requested not in {"sim", "live"}:
@@ -85,7 +143,7 @@ async def cmd_trade_mode(message: types.Message) -> None:
         )
         return
 
-    chat_id = message.chat.id
+    # Запоминаем, что для этого чата ждём PIN.
     _pending_mode_by_chat[chat_id] = requested
 
     if requested == "live":
@@ -98,54 +156,4 @@ async def cmd_trade_mode(message: types.Message) -> None:
         f"Вы запросили переключение в режим **{requested_text}**.\n\n"
         "Для подтверждения введите админский PIN одним сообщением.\n"
         "Без правильного PIN режим торговли не изменится."
-    )
-
-
-@router.message()
-async def handle_trade_mode_pin(message: types.Message) -> None:
-    """Обработка ввода PIN или отмены смены режима."""
-    if not message.text:
-        return
-
-    chat_id = message.chat.id
-    if chat_id not in _pending_mode_by_chat:
-        return
-
-    text = message.text.strip()
-
-    # Любая команда (начинается с /) отменяет переход, запрос забываем.
-    if text.startswith("/"):
-        _pending_mode_by_chat.pop(chat_id, None)
-        await message.answer("Запрос смены режима торговли отменён.")
-        return
-
-    # Считаем это попыткой ввода PIN
-    requested = _pending_mode_by_chat.pop(chat_id, None)
-    if requested is None:
-        return
-
-    if text != ADMIN_KEY:
-        await message.answer("Неверный PIN, режим торговли не изменён.")
-        return
-
-    old_mode = get_trade_mode()
-    try:
-        set_trade_mode(requested)
-    except Exception:
-        await message.answer("Ошибка при смене режима торговли. Попробуйте ещё раз.")
-        return
-
-    if requested == "live":
-        descr_new = "live (боевой режим)"
-    else:
-        descr_new = "sim (симуляция)"
-
-    if old_mode == "live":
-        descr_old = "live (боевой режим)"
-    else:
-        descr_old = "sim (симуляция)"
-
-    await message.answer(
-        f"Режим торговли изменён: **{descr_old} → {descr_new}**.\n\n"
-        f"Текущий режим: **{descr_new}**."
     )
