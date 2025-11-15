@@ -5,10 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
 from aiogram.types import Update
-
-BOT_VERSION = "3.1"
 
 from metrics import router as metrics_router
 from dca_handlers import router as dca_router
@@ -17,90 +14,97 @@ from data import router as data_router
 from trade_mode_handlers import router as trade_mode_router
 from scheduler import start_scheduler
 
+BOT_VERSION = "3.2"
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("main")
 
-# --- ENV переменные ---
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-ADMIN_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"])
-WEBHOOK_BASE = os.environ["WEBHOOK_BASE"].rstrip("/")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
+WEBHOOK_BASE = os.environ.get("WEBHOOK_BASE", "").rstrip("/")
 
-# путь вебхука (уникальный на основе токена)
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}"
+if not BOT_TOKEN:
+    logger.error("BOT_TOKEN is not set. Bot will not work correctly.")
 
-# --- Telegram / Aiogram ---
-bot = Bot(token=BOT_TOKEN)
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}" if BOT_TOKEN else "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}" if WEBHOOK_BASE and BOT_TOKEN else None
+
+bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
+
+# Подключаем все роутеры
 dp.include_router(metrics_router)
 dp.include_router(dca_router)
 dp.include_router(scheduler_router)
 dp.include_router(data_router)
+dp.include_router(trade_mode_router)
 
-# --- FastAPI-приложение ---
-app = FastAPI(title="Trader Bot 2.7")
-
-
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    """Простейший хэндлер /start, чтобы проверить, что бот жив.""" 
-    await message.answer("Бот онлайн. Версия 2.7")
+app = FastAPI()
 
 
 @app.on_event("startup")
-async def on_startup():
-    """Настройка вебхука и уведомление админа при старте сервиса.""" 
+async def on_startup() -> None:
+    """Инициализация бота, вебхука и планировщика."""
+    if not bot or not BOT_TOKEN:
+        logger.error("BOT_TOKEN is not configured, skipping bot startup.")
+        return
+
+    # Настройка вебхука
     try:
-        await bot.set_webhook(WEBHOOK_URL)
-        logger.info("Webhook set to %s", WEBHOOK_URL)
+        if WEBHOOK_URL:
+            await bot.set_webhook(WEBHOOK_URL)
+            logger.info("Webhook set to %s", WEBHOOK_URL)
+        else:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook removed (no WEBHOOK_BASE set).")
     except Exception:
-        logger.exception("Не удалось установить webhook")
+        logger.exception("Failed to set webhook")
 
-    try:
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text="Бот запущен. Версия 2.7",
-        )
-        logger.info("Стартовое сообщение админу отправлено")
-    except Exception:
-        logger.exception("Не удалось отправить сообщение админу")
+    # Стартовое сообщение админу
+    if ADMIN_CHAT_ID:
+        try:
+            admin_chat_id_int = int(ADMIN_CHAT_ID)
+        except ValueError:
+            logger.error("ADMIN_CHAT_ID is not a valid integer: %r", ADMIN_CHAT_ID)
+        else:
+            try:
+                await bot.send_message(admin_chat_id_int, f"Бот запущен. Версия {BOT_VERSION}")
+                logger.info("Стартовое сообщение админу отправлено")
+            except Exception:
+                logger.exception("Не удалось отправить стартовое сообщение админу")
 
-    # Запускаем фоновый планировщик
-    try:
-        start_scheduler(bot, ADMIN_CHAT_ID, logger)
-    except Exception:
-        logger.exception("Не удалось запустить планировщик")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    """Чистое выключение: удаляем webhook и закрываем сессию бота.""" 
-    try:
-        await bot.delete_webhook(drop_pending_updates=False)
-    except Exception:
-        logger.exception("Не удалось удалить webhook")
-
-    await bot.session.close()
+            # Запуск планировщика
+            try:
+                start_scheduler(bot, admin_chat_id_int, logger)
+                logger.info("[scheduler] Планировщик запущен.")
+            except Exception:
+                logger.exception("Не удалось запустить планировщик")
+    else:
+        logger.warning("ADMIN_CHAT_ID is not set; стартовое сообщение и планировщик не будут привязаны к админ-чату.")
 
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    """Точка входа для Telegram webhook.""" 
+    """Основной webhook-обработчик от Telegram."""
+    if not bot:
+        return JSONResponse({"ok": False, "error": "BOT_TOKEN not configured"}, status_code=500)
+
     data = await request.json()
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
+
     # Telegram ожидает любой 200-ответ
     return JSONResponse({"ok": True})
 
 
 @app.get("/health")
 async def health_get():
-    """Health-check для Render по GET.""" 
+    """Health-check для Render по GET."""
     return PlainTextResponse("ok")
 
 
 @app.head("/health")
 async def health_head():
-    """Health-check для Render по HEAD (как в ТЗ).""" 
+    """Health-check для Render по HEAD."""
     # Тело можно не возвращать, важен статус 200
     return PlainTextResponse("")
