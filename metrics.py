@@ -14,6 +14,7 @@ from coin_state import (
     recalc_state_for_symbol,
 )
 from grid_roll import roll_grid_for_symbol
+from grid_sim import simulate_bar_for_symbol
 
 
 router = Router()
@@ -87,6 +88,37 @@ def _has_any_active_campaign() -> bool:
 
 def _symbol_raw_path(symbol: str) -> Path:
     return STORAGE_PATH / f"{symbol}.json"
+
+
+def _load_last_tf1_candle(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    Прочитать последнюю свечу TF1 из STORAGE_DIR/<SYMBOL>.json.
+
+    Возвращает dict свечи в том формате, в каком её пишет update_symbol_raw,
+    или None, если данных нет или данные повреждены.
+    """
+    path = _symbol_raw_path(symbol)
+    if not path.exists():
+        return None
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+    except Exception:
+        return None
+
+    tf1 = data.get("tf1") or TF1
+    raw = data.get("raw") or {}
+    tf_block = raw.get(tf1)
+    if not isinstance(tf_block, dict):
+        return None
+    candles = tf_block.get("candles")
+    if not isinstance(candles, list) or not candles:
+        return None
+
+    last = candles[-1]
+    if not isinstance(last, dict):
+        return None
+    return last
 
 
 def _raw_market_path(symbol: str) -> Path:
@@ -589,6 +621,15 @@ async def cmd_now(message: types.Message):
             info = await update_symbol_raw(session, sym)
             append_raw_market_line(sym, info)
             updated += 1
+
+            # Онлайн-симуляция исполнения DCA-сетки по последней свече TF1 (только SIM)
+            try:
+                bar = _load_last_tf1_candle(sym)
+                if bar is not None:
+                    simulate_bar_for_symbol(sym, bar)
+            except Exception:
+                # Не блокируем /now из-за ошибок симуляции
+                pass
 
     if len(symbols) == 1:
         await message.answer(f"Обновили {symbols[0]}.")
