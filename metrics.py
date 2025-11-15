@@ -61,6 +61,30 @@ def save_symbols(symbols: List[str]) -> None:
         json.dump({"symbols": symbols}, f, ensure_ascii=False, indent=2)
 
 
+
+
+def _has_any_active_campaign() -> bool:
+    """
+    Проверяет, есть ли хотя бы одна активная DCA-кампания
+    (любой *_grid.json с campaign_end_ts == None/0 в STORAGE_DIR).
+    """
+    storage = STORAGE_PATH
+    try:
+        grid_files = list(storage.glob("*_grid.json"))
+    except Exception:
+        return False
+
+    for path in grid_files:
+        try:
+            raw = path.read_text(encoding="utf-8")
+            grid = json.loads(raw)
+        except Exception:
+            continue
+        if not grid.get("campaign_end_ts"):
+            return True
+    return False
+
+
 def _symbol_raw_path(symbol: str) -> Path:
     return STORAGE_PATH / f"{symbol}.json"
 
@@ -407,6 +431,15 @@ async def cmd_symbols(message: types.Message):
         return
 
     args = parts[1]
+
+    # Запрещаем изменять список монет, если есть активные DCA-кампании
+    if _has_any_active_campaign():
+        await message.answer(
+            "Symbols: есть активные DCA-кампании. "
+            "Сначала остановите их через /dca stop <symbol> для всех активных, затем меняйте список через /symbols ..."
+        )
+        return
+
     raw_items = args.split(",")
     symbols: List[str] = []
     for item in raw_items:
@@ -561,5 +594,4 @@ async def cmd_now(message: types.Message):
         await message.answer(f"Обновили {symbols[0]}.")
     else:
         await message.answer(f"Обновили {len(symbols)} пар.")
-
 
