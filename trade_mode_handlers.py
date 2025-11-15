@@ -2,7 +2,6 @@ import os
 from typing import Dict
 
 from aiogram import Router, types
-from aiogram.filters import Command
 
 from trade_mode import get_trade_mode, set_trade_mode
 
@@ -14,10 +13,17 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 _pending_mode_by_chat: Dict[int, str] = {}
 
 
-@router.message(Command("trade"))
+@router.message()
 async def cmd_trade_mode(message: types.Message) -> None:
     """Обработчик команд /trade mode, /trade mode sim, /trade mode live."""
-    text = (message.text or "").strip()
+    if not message.text:
+        return
+
+    text = message.text.strip()
+    # Обрабатываем только сообщения, начинающиеся с /trade
+    if not text.startswith("/trade"):
+        return
+
     parts = text.split()
 
     # Ожидаем минимум: /trade mode
@@ -110,7 +116,6 @@ async def handle_trade_mode_pin(message: types.Message) -> None:
     # Любая команда (начинается с /) отменяет переход, запрос забываем.
     if text.startswith("/"):
         _pending_mode_by_chat.pop(chat_id, None)
-        # Коротко сообщаем об отмене и позволяем другим хендлерам обработать команду.
         await message.answer("Запрос смены режима торговли отменён.")
         return
 
