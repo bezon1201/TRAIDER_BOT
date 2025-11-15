@@ -80,7 +80,8 @@ def log_grid_created(grid: dict) -> None:
 
 
 def log_grid_rolled(grid: dict, from_grid_id: int) -> None:
-    """Логирует событие перестроения сетки (grid_rolled).
+    """
+    Логирует событие перестроения сетки (grid_rolled).
 
     Используется при привязке сетки к /market force и publish планировщика.
     """
@@ -108,7 +109,8 @@ def log_grid_rolled(grid: dict, from_grid_id: int) -> None:
 
 
 def log_grid_manualy_closed(grid: dict, reason: str = "manual_stop_command") -> None:
-    """Логирует событие ручного закрытия кампании (/dca stop).
+    """
+    Логирует событие ручного закрытия кампании (/dca stop).
 
     event: grid_manualy_closed
     """

@@ -15,7 +15,7 @@ from dca_config import (
     zero_symbol_budget,
 )
 from dca_models import DCAConfigPerSymbol
-from grid_log import log_grid_created, log_grid_manualy_closed
+from grid_log import log_grid_created, log_grid_rolled, log_grid_manualy_closed
 
 router = Router()
 
@@ -80,6 +80,29 @@ GRID_ANCHOR = os.environ.get("GRID_ANCHOR", "MA").upper()  # MA | PRICE
 
 def _grid_path(symbol: str) -> Path:
     return STORAGE_PATH / f"{symbol}_grid.json"
+
+
+
+def _format_ts_date(ts: int | None) -> str:
+    try:
+        if not ts:
+            return "--"
+        ts_int = int(ts)
+        if ts_int <= 0:
+            return "--"
+        dt = time.localtime(ts_int)
+        return f"{dt.tm_mday:02d}-{dt.tm_mon:02d}-{dt.tm_year}"
+    except Exception:
+        return "--"
+
+
+def _format_money(value, digits: int = 2) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        v = 0.0
+    return f"{v:.{digits}f}$"
+
 
 
 def _load_state_for_symbol(symbol: str) -> dict:
@@ -426,24 +449,44 @@ async def cmd_dca(message: types.Message) -> None:
 
         campaign_start = grid.get("campaign_start_ts")
         campaign_end = grid.get("campaign_end_ts")
+
         status = "active" if not campaign_end else "stopped"
+        grid_id = grid.get("current_grid_id", 1)
+
+        start_str = _format_ts_date(campaign_start)
+        if campaign_end:
+            stop_str = f"Stop: {_format_ts_date(campaign_end)} Manual stop"
+        else:
+            stop_str = "Stop: -- (active)"
+
+        market_mode = str(grid.get("current_market_mode") or "RANGE").upper()
+        tf1 = grid.get("tf1")
+        tf2 = grid.get("tf2")
+
+        anchor_price = grid.get("current_anchor_price")
+        atr_tf1 = grid.get("current_atr_tf1")
+        depth_cycle = grid.get("current_depth_cycle")
+
+        total_levels = grid.get("total_levels")
+        filled_levels = grid.get("filled_levels")
+        spent_usdc = grid.get("spent_usdc")
+
+        cfg = grid.get("config") or {}
+        budget_usdc = cfg.get("budget_usdc")
 
         msg_lines = [
-            f"DCA status для {symbol}:",
-            f"  status: {status}",
-            f"  campaign_start_ts: {campaign_start}",
-            f"  campaign_end_ts: {campaign_end}",
-            f"  market_mode: {grid.get('current_market_mode')}",
-            f"  tf1/tf2: {grid.get('tf1')}/{grid.get('tf2')}",
-            f"  anchor_price: {grid.get('current_anchor_price')}",
-            f"  ATR(TF1): {grid.get('current_atr_tf1')}",
-            f"  depth: {grid.get('current_depth_cycle')}",
-            f"  total_levels: {grid.get('total_levels')}",
-            f"  filled_levels: {grid.get('filled_levels')}",
-            f"  spent_usdc: {grid.get('spent_usdc')}",
+            f"{symbol} {status} Grid id: {grid_id}",
+            f"Start: {start_str}",
+            stop_str,
+            f"Market: {market_mode} tf1/tf2: {tf1}/{tf2}",
+            f"Anchor: {_format_money(anchor_price)} ATR: {_format_money(atr_tf1)} Depth: {_format_money(depth_cycle)}",
+            f"Total levels: {total_levels} Filled levels: {filled_levels}",
+            f"Budget: {_format_money(budget_usdc)}",
+            f"Spent: {_format_money(spent_usdc)}",
         ]
         await message.answer("\n".join(msg_lines))
         return
+
 
     # /dca stop <symbol> — пометить кампанию как завершённую
     if cmd == "stop":
@@ -489,7 +532,6 @@ async def cmd_dca(message: types.Message) -> None:
 
         await message.answer(f"DCA: кампания для {symbol} остановлена.")
         return
-
 
 
     # /dca set <symbol> budget <USDC> | /dca set <symbol> levels <N>
