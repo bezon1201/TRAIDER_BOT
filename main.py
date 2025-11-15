@@ -8,11 +8,11 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.types import Update
 
+from trade_mode import router as trade_router
 from metrics import router as metrics_router
 from dca_handlers import router as dca_router
 from scheduler_handlers import router as scheduler_router
 from data import router as data_router
-from trade_mode import router as trade_router
 from scheduler import start_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -30,11 +30,11 @@ WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}"
 # --- Telegram / Aiogram ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+dp.include_router(trade_router)
 dp.include_router(metrics_router)
 dp.include_router(dca_router)
 dp.include_router(scheduler_router)
 dp.include_router(data_router)
-dp.include_router(trade_router)
 
 # --- FastAPI-приложение ---
 app = FastAPI(title="Trader Bot 3.1")
