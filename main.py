@@ -12,8 +12,8 @@ from metrics import router as metrics_router
 from dca_handlers import router as dca_router
 from scheduler_handlers import router as scheduler_router
 from data import router as data_router
-from scheduler import start_scheduler
 from trade_mode import router as trade_router
+from scheduler import start_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

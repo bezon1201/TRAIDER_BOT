@@ -1,11 +1,13 @@
+
 import os
 import json
 from pathlib import Path
+from typing import Optional
 
 from aiogram import Router, types
 from aiogram.filters import Command
 
-# --- Файл режима торговли ---
+# --- Файловое хранилище режима торговли ---
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
@@ -13,20 +15,19 @@ TRADE_MODE_PATH = STORAGE_PATH / "trade_mode.json"
 
 VALID_TRADE_MODES = {"sim", "live"}
 
-# Админский PIN из переменной окружения
+# --- ENV: админский PIN ---
+
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 
-# Временное состояние для ожидаемой смены режима (один пользователь/бот)
-_PENDING_TRADE_MODE: str | None = None
-
-router = Router()
+# --- Публичные функции работы с trade_mode.json ---
 
 
 def get_trade_mode() -> str:
-    """Вернуть текущий режим торговли: 'sim' или 'live'.
+    """
+    Вернуть текущий режим торговли: 'sim' или 'live'.
 
-    Если файл отсутствует, битый или содержит неожиданное значение,
-    тихо возвращает 'sim'.
+    Если файл отсутствует, битый или содержит неожиданные данные,
+    возвращаем 'sim' без выброса исключений.
     """
     if not TRADE_MODE_PATH.exists():
         return "sim"
@@ -34,20 +35,21 @@ def get_trade_mode() -> str:
     try:
         raw = TRADE_MODE_PATH.read_text(encoding="utf-8")
         data = json.loads(raw)
+        value = str(data.get("trade_mode", "")).lower()
+        if value in VALID_TRADE_MODES:
+            return value
     except Exception:
-        return "sim"
+        # Любые ошибки чтения/десериализации приводят к дефолту.
+        pass
 
-    mode = str(data.get("trade_mode", "sim")).lower()
-    if mode not in VALID_TRADE_MODES:
-        return "sim"
-    return mode
+    return "sim"
 
 
 def set_trade_mode(mode: str) -> None:
-    """Сохранить режим торговли в trade_mode.json.
+    """
+    Сохранить режим торговли в trade_mode.json.
 
-    Принимает только 'sim' или 'live'. При других значениях
-    поднимает ValueError.
+    Принимает только 'sim' или 'live', иначе поднимает ValueError.
     """
     mode = str(mode).lower()
     if mode not in VALID_TRADE_MODES:
@@ -61,150 +63,117 @@ def set_trade_mode(mode: str) -> None:
     )
 
 
-def _human_mode(mode: str) -> str:
-    """Короткое текстовое описание режима для сообщений пользователю."""
+# --- Telegram-хэндлеры команды /trade (исключение для этого модуля) ---
+
+router = Router()
+
+# Ожидаемый новый режим во время запроса смены (если None — ничего не ждём).
+_pending_mode: Optional[str] = None
+
+
+def _format_mode_human(mode: str) -> str:
     if mode == "live":
-        return "боевой режим"
-    return "симуляция"
+        return "live (боевой режим)"
+    return "sim (симуляция)"
 
 
 @router.message(Command("trade"))
 async def cmd_trade(message: types.Message) -> None:
-    """Команда /trade: показ и смена режима торговли.
-
-    Форматы:
-    /trade
-        — показать текущий режим.
-    /trade mode
-        — показать текущий режим с пояснением.
-    /trade mode sim|live
-        — запросить смену режима (нужен PIN).
     """
-    global _PENDING_TRADE_MODE
+    /trade                — показать текущий режим.
+    /trade mode           — то же самое.
+    /trade mode sim|live  — запросить смену режима (через PIN).
+    """
+    global _pending_mode
 
     text = (message.text or "").strip()
     parts = text.split()
 
-    # /trade — просто показать режим
-    if len(parts) == 1:
+    # Нет аргументов или только "mode" -> просто выводим текущий режим.
+    if len(parts) == 1 or (len(parts) == 2 and parts[1].lower() == "mode"):
         current = get_trade_mode()
-        await message.answer(
-            f"Текущий режим торговли: {current} ({_human_mode(current)})"
-        )
-        _PENDING_TRADE_MODE = None
+        await message.answer(f"Текущий режим торговли: {_format_mode_human(current)}")
         return
 
-    # дальше интересует только подкоманда mode
-    if len(parts) >= 2 and parts[1].lower() == "mode":
-        # /trade mode — тоже просто показать режим
-        if len(parts) == 2:
-            current = get_trade_mode()
-            await message.answer(
-                f"Текущий режим торговли: {current} ({_human_mode(current)})"
-            )
-            _PENDING_TRADE_MODE = None
-            return
-
-        # /trade mode <mode>
+    # Ожидаем синтаксис: /trade mode sim|live
+    if len(parts) >= 3 and parts[1].lower() == "mode":
         requested = parts[2].lower()
         if requested not in VALID_TRADE_MODES:
             await message.answer(
-                "Некорректный режим. Используйте: /trade mode sim или /trade mode live"
+                "Некорректный режим.\n"
+                "Используйте: /trade mode sim или /trade mode live."
             )
-            _PENDING_TRADE_MODE = None
             return
 
         current = get_trade_mode()
         if requested == current:
             await message.answer(
-                f"Режим торговли уже установлен как {current} ({_human_mode(current)})"
+                f"Режим торговли уже установлен как {_format_mode_human(current)}."
             )
-            _PENDING_TRADE_MODE = None
+            _pending_mode = None
             return
 
         if not ADMIN_KEY:
             await message.answer(
-                "Смена режима торговли недоступна: ADMIN_KEY не задан."
+                "Смена режима торговли недоступна: ADMIN_KEY не задан.\n"
+                "Настройте переменную окружения ADMIN_KEY на сервере."
             )
-            _PENDING_TRADE_MODE = None
+            _pending_mode = None
             return
 
-        _PENDING_TRADE_MODE = requested
+        # Запрашиваем PIN и запоминаем, какой режим хотим установить.
+        _pending_mode = requested
         await message.answer(
-            "Запрошено изменение режима торговли:
-"
-            f"{current} ({_human_mode(current)}) → "
-            f"{requested} ({_human_mode(requested)})
-
-"
+            f"Запрошено изменение режима торговли: "
+            f"{_format_mode_human(current)} → {_format_mode_human(requested)}.\n"
             "Для подтверждения введите админ PIN."
         )
         return
 
-    # неизвестная подкоманда
+    # Любой другой синтаксис — маленькая подсказка по команде.
     await message.answer(
-        "Неизвестная команда /trade.
-"
-        "Используйте:
-"
-        "/trade — показать текущий режим
-"
-        "/trade mode sim|live — сменить режим"
+        "Использование команды /trade:\n"
+        "/trade — показать текущий режим торговли.\n"
+        "/trade mode — показать текущий режим торговли.\n"
+        "/trade mode sim — запросить переключение в режим симуляции (нужен PIN).\n"
+        "/trade mode live — запросить переключение в боевой режим (нужен PIN)."
     )
-    _PENDING_TRADE_MODE = None
 
 
 @router.message()
-async def trade_mode_pin_handler(message: types.Message) -> None:
-    """Обработка PIN для смены режима торговли.
-
-    Работает только если ранее была запрошена смена режима через /trade mode.
-    Любая команда (сообщение, начинающееся с '/') сбрасывает ожидание PIN.
+async def handle_trade_pin(message: types.Message) -> None:
     """
-    global _PENDING_TRADE_MODE
+    Обработка PIN для смены режима торговли.
 
-    # Если смена режима не запрошена — просто выходим
-    if _PENDING_TRADE_MODE is None:
+    Работает только если `_pending_mode` не None.
+    Любая команда (начинающаяся с `/`) отменяет ожидание PIN.
+    """
+    global _pending_mode
+
+    if _pending_mode is None:
+        # Ничего не ждём — передаём сообщение дальше другим хэндлерам.
         return
 
-    text = (message.text or "").strip() if message.text is not None else ""
+    text = (message.text or "").strip()
 
-    # Любая новая команда отменяет ожидание PIN
-    if text.startswith("/"):
-        _PENDING_TRADE_MODE = None
+    # Команда пользователем — отменяем запрос и не трогаем режим.
+    if not text or text.startswith("/"):
+        _pending_mode = None
         return
 
-    # Пустые/нетекстовые сообщения игнорируем, оставляя ожидание PIN
-    if not text:
-        return
-
-    if not ADMIN_KEY:
-        await message.answer(
-            "Смена режима торговли недоступна: ADMIN_KEY не задан."
-        )
-        _PENDING_TRADE_MODE = None
-        return
-
-    # Проверка PIN
+    # Здесь считаем, что пользователь ввёл PIN.
     if text == ADMIN_KEY:
         old_mode = get_trade_mode()
-        requested = _PENDING_TRADE_MODE
+        new_mode = _pending_mode
         try:
-            set_trade_mode(requested)
-        except Exception:
-            _PENDING_TRADE_MODE = None
-            await message.answer(
-                "Не удалось изменить режим торговли из-за внутренней ошибки."
-            )
-            return
+            set_trade_mode(new_mode)
+        finally:
+            _pending_mode = None
 
-        _PENDING_TRADE_MODE = None
         await message.answer(
-            "Режим торговли изменён:
-"
-            f"{old_mode} ({_human_mode(old_mode)}) → "
-            f"{requested} ({_human_mode(requested)})"
+            f"Режим торговли изменён: "
+            f"{_format_mode_human(old_mode)} → {_format_mode_human(new_mode)}."
         )
     else:
-        _PENDING_TRADE_MODE = None
+        _pending_mode = None
         await message.answer("Неверный PIN, режим торговли не изменён.")
