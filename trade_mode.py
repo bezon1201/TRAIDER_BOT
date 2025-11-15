@@ -56,6 +56,16 @@ def set_trade_mode(mode: str) -> None:
         json.dump({"mode": mode}, f, ensure_ascii=False)
 
 
+
+def is_sim_mode() -> bool:
+    """Проверить, что глобальный режим торговли — sim (симуляция)."""
+    return get_trade_mode() == "sim"
+
+
+def is_live_mode() -> bool:
+    """Проверить, что глобальный режим торговли — live (боевой режим)."""
+    return get_trade_mode() == "live"
+
 def _format_mode(mode: str) -> str:
     if mode == "sim":
         return "sim (симуляция)"
