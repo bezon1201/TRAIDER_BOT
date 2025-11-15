@@ -410,6 +410,190 @@ async def cmd_dca(message: types.Message) -> None:
         await message.answer("\n".join(lines))
         return
 
+
+    # /dca simulate <symbol> [bars]
+    if cmd in {"simulate", "sim"}:
+        if len(parts) < 3:
+            await message.answer("Использование: /dca simulate <symbol> [bars]")
+            return
+
+        symbol = parts[2].upper()
+        # bars по умолчанию
+        bars_requested = 100
+        if len(parts) >= 4:
+            try:
+                bars_requested = int(parts[3])
+            except ValueError:
+                await message.answer("DCA simulate: bars должен быть целым числом > 0.")
+                return
+        if bars_requested <= 0:
+            await message.answer("DCA simulate: bars должен быть > 0.")
+            return
+
+        # ограничиваем сверху, чтобы не улететь по нагрузке
+        MAX_SIM_BARS = 1000
+        if bars_requested > MAX_SIM_BARS:
+            bars_requested = MAX_SIM_BARS
+
+        # Команда доступна только в SIM-режиме
+        if not is_sim_mode():
+            mode = get_trade_mode()
+            mode_str = mode or "unknown"
+            await message.answer(
+                f"DCA simulate доступна только в режиме SIM. Текущий режим: {mode_str}."
+            )
+            return
+
+        # Проверяем наличие активной кампании и файла сетки
+        gpath = _grid_path(symbol)
+        try:
+            raw_grid = gpath.read_text(encoding="utf-8")
+            grid = json.loads(raw_grid)
+        except FileNotFoundError:
+            await message.answer(f"DCA simulate: для {symbol} нет файла сетки (<SYMBOL>_grid.json).")
+            return
+        except Exception:
+            await message.answer(f"DCA simulate: не удалось прочитать сетку для {symbol}.")
+            return
+
+        if grid.get("campaign_end_ts"):
+            await message.answer(
+                f"DCA simulate: активная DCA-кампания для {symbol} не найдена (кампания уже завершена)."
+            )
+            return
+
+        # Загружаем сырые данные по свечам TF1 из <SYMBOL>.json
+        rpath = _symbol_raw_path(symbol)
+        try:
+            raw_data = rpath.read_text(encoding="utf-8")
+            data = json.loads(raw_data)
+        except FileNotFoundError:
+            await message.answer(
+                f"DCA simulate: нет файла сырых данных для {symbol} ({symbol}.json). "
+                "Сначала выполните /now для этой пары."
+            )
+            return
+        except Exception:
+            await message.answer(f"DCA simulate: не удалось прочитать сырые данные для {symbol}.")
+            return
+
+        raw = data.get("raw") or {}
+        tf1_key = str(grid.get("tf1") or data.get("tf1") or "").strip()
+        tf1_block = (raw.get(tf1_key) or {}) if tf1_key else {}
+        candles = tf1_block.get("candles") or []
+
+        if not isinstance(candles, list) or not candles:
+            await message.answer(
+                f"DCA simulate: нет свечей TF1 для {symbol} (ключ TF1='{tf1_key}' пуст или без candles)."
+            )
+            return
+
+        # фильтруем свечи по времени старта кампании
+        start_ts = int(grid.get("campaign_start_ts") or 0)
+        if start_ts > 0:
+            filtered = [c for c in candles if int(c.get("ts", 0)) >= start_ts]
+        else:
+            filtered = list(candles)
+
+        if not filtered:
+            await message.answer(
+                f"DCA simulate: нет свечей TF1 для {symbol} после старта кампании."
+            )
+            return
+
+        # Берём хвост по количеству, не больше доступного
+        total_available = len(filtered)
+        bars_to_use = min(bars_requested, total_available)
+        bars_for_sim = filtered[-bars_to_use:]
+
+        # Снимок состояния до симуляции
+        def _safe_int(v):
+            try:
+                return int(v)
+            except Exception:
+                return 0
+
+        def _safe_float(v):
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+
+        init_filled = _safe_int(grid.get("filled_levels"))
+        init_total = _safe_int(grid.get("total_levels"))
+        init_spent = _safe_float(grid.get("spent_usdc"))
+        init_avg = grid.get("avg_price")
+        init_end_ts = grid.get("campaign_end_ts")
+
+        # Запускаем движок симуляции по одной свече
+        try:
+            from grid_sim import simulate_bar_for_symbol  # локальный импорт во избежание циклов
+        except Exception:
+            await message.answer("DCA simulate: внутренняя ошибка при импорте движка симуляции.")
+            return
+
+        applied = 0
+        for bar in bars_for_sim:
+            try:
+                simulate_bar_for_symbol(symbol, bar)
+                applied += 1
+            except Exception:
+                # не падаем из-за одной неудачной свечи
+                continue
+
+        # перечитываем актуальный grid после симуляции
+        try:
+            raw_grid2 = gpath.read_text(encoding="utf-8")
+            grid2 = json.loads(raw_grid2)
+        except Exception:
+            grid2 = grid  # fallback — используем старую версию
+
+        final_filled = _safe_int(grid2.get("filled_levels"))
+        final_total = _safe_int(grid2.get("total_levels"))
+        final_spent = _safe_float(grid2.get("spent_usdc"))
+        final_avg = grid2.get("avg_price")
+        final_end_ts = grid2.get("campaign_end_ts")
+
+        cfg = grid2.get("config") or {}
+        budget_usdc = _safe_float(cfg.get("budget_usdc"))
+
+        status = "active"
+        if final_end_ts:
+            closed_by_levels = final_total > 0 and final_filled >= final_total
+            closed_by_budget = budget_usdc > 0 and final_spent >= budget_usdc
+            if closed_by_levels and closed_by_budget:
+                status = "closed_by_budget_and_levels"
+            elif closed_by_budget:
+                status = "closed_by_budget"
+            elif closed_by_levels:
+                status = "closed_by_levels"
+            else:
+                status = "closed"
+
+        lines = []
+        lines.append(
+            f"DCA simulate для {symbol} завершена. "
+            f"Свечей TF1 обработано: {applied} (запрошено: {bars_requested}, доступно: {total_available})."
+        )
+        lines.append(
+            f"Filled levels: {init_filled} → {final_filled} из {final_total or 'unknown'}."
+        )
+        lines.append(
+            f"Spent: {init_spent:.2f}$ → {final_spent:.2f}$."
+        )
+        if final_avg is not None:
+            try:
+                avg_val = float(final_avg)
+                lines.append(f"Avg price: {avg_val:.8f}")
+            except Exception:
+                lines.append(f"Avg price: {final_avg}")
+        else:
+            lines.append("Avg price: --")
+        lines.append(f"Campaign status: {status}")
+
+        await message.answer("\n".join(lines))
+        return
+
     # /dca cfg <symbol>
     if cmd in {"cfg", "config"}:
         if len(parts) < 3:
