@@ -7,6 +7,7 @@ from typing import Optional
 from dca_config import get_symbol_config
 from dca_models import DCAConfigPerSymbol
 from dca_handlers import _load_state_for_symbol, _build_grid_for_symbol
+from trade_mode import get_trade_mode, is_sim_mode, is_live_mode
 from grid_log import log_grid_rolled
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
@@ -65,7 +66,16 @@ def roll_grid_for_symbol(symbol: str) -> bool:
         # Если не удалось построить новую сетку — не трогаем старую.
         return False
 
-    # Переносим "жизнь кампании" и агрегированные поля.
+        # SIM/LIVE: на этом уровне далее будет различаться работа с ордерами
+    mode = get_trade_mode()
+    if is_sim_mode():
+        # TODO (Шаг 2): пересчёт сетки и обновление виртуальных ордеров в файлах (без Binance).
+        pass
+    elif is_live_mode():
+        # TODO (Шаг 3–4): пересоздание реальных ордеров на бирже под новую сетку.
+        pass
+
+# Переносим "жизнь кампании" и агрегированные поля.
     now_ts = int(time.time())
     new_grid["campaign_start_ts"] = grid.get("campaign_start_ts", new_grid.get("campaign_start_ts", now_ts))
     new_grid["campaign_end_ts"] = grid.get("campaign_end_ts")

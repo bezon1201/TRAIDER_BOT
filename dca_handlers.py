@@ -14,6 +14,7 @@ from dca_config import (
     validate_budget_vs_min_notional,
     zero_symbol_budget,
 )
+from trade_mode import get_trade_mode, is_sim_mode, is_live_mode
 from dca_models import DCAConfigPerSymbol
 from grid_log import log_grid_created, log_grid_rolled, log_grid_manualy_closed
 
@@ -456,6 +457,15 @@ async def cmd_dca(message: types.Message) -> None:
             return
 
         symbol = parts[2].upper()
+        # Режим торговли (SIM/LIVE) на момент старта кампании
+        mode = get_trade_mode()
+        if is_sim_mode():
+            # TODO (Шаг 2): симуляция исполнения DCA-сетки без реальных ордеров Binance.
+            pass
+        elif is_live_mode():
+            # TODO (Шаг 3–4): боевой режим, постановка реальных ордеров Binance по сетке.
+            pass
+
 
         cfg = get_symbol_config(symbol)
         if cfg is None:
