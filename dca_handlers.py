@@ -82,6 +82,28 @@ def _grid_path(symbol: str) -> Path:
     return STORAGE_PATH / f"{symbol}_grid.json"
 
 
+def _has_active_campaign(symbol: str) -> bool:
+    """
+    Проверяет, есть ли для symbol активная DCA-кампания
+    (файл <SYMBOL>_grid.json с campaign_end_ts == None/0).
+    """
+    symbol = (symbol or "").upper()
+    if not symbol:
+        return False
+    gpath = _grid_path(symbol)
+    if not gpath.exists():
+        return False
+    try:
+        raw = gpath.read_text(encoding="utf-8")
+        grid = json.loads(raw)
+    except Exception:
+        return False
+    if grid.get("campaign_end_ts"):
+        return False
+    return True
+
+
+
 
 def _format_ts_date(ts: int | None) -> str:
     try:
@@ -391,6 +413,12 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer("Использование: /dca cfg <symbol>")
             return
         symbol = parts[2].upper()
+
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        if _has_active_campaign(symbol):
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+            return
+
         cfg = get_symbol_config(symbol)
         if cfg is None:
             await message.answer(f"DCA: конфиг для {symbol} не найден.")
@@ -429,6 +457,12 @@ async def cmd_dca(message: types.Message) -> None:
             return
 
         symbol = parts[2].upper()
+
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        if _has_active_campaign(symbol):
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+            return
+
         cfg = get_symbol_config(symbol)
         if cfg is None:
             await message.answer(f"DCA: конфиг для {symbol} не найден. Сначала задайте его через /dca set.")
@@ -603,6 +637,11 @@ async def cmd_dca(message: types.Message) -> None:
         field = parts[3].lower()
         value = parts[4]
 
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        if _has_active_campaign(symbol):
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+            return
+
         cfg = get_symbol_config(symbol)
         now_ts = int(time.time())
         if cfg is None:
@@ -660,6 +699,12 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer(f"Использование: /dca {cmd} <symbol>")
             return
         symbol = parts[2].upper()
+
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+        if _has_active_campaign(symbol):
+            await message.answer(f"DCA: для {symbol} есть активная кампания. Сначала /dca stop {symbol}, затем меняйте конфиг.")
+            return
+
         cfg = get_symbol_config(symbol)
         if cfg is None:
             # если конфига нет, создадим заготовку с нулевыми значениями
