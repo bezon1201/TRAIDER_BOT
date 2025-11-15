@@ -17,7 +17,7 @@ _pending_mode_by_chat: Dict[int, str] = {}
 logger = logging.getLogger("main")
 
 
-@router.message(Command("trade"))
+@router.message(F.text.startswith("/trade"))
 async def cmd_trade_mode(message: types.Message) -> None:
     """Обработчик команд /trade mode, /trade mode sim, /trade mode live."""
     text = (message.text or "").strip()

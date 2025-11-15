@@ -15,7 +15,7 @@ from data import router as data_router
 from trade_mode_handlers import router as trade_mode_router
 from scheduler import start_scheduler
 
-BOT_VERSION = "3.8"
+BOT_VERSION = "3.9"
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
