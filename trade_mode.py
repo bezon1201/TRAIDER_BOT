@@ -177,14 +177,14 @@ async def cmd_trade(message: types.Message) -> None:
 
 
 @router.message()
+@router.message()
+@router.message()
 async def handle_trade_pin(message: types.Message) -> None:
-    \"\"\"Обработка PIN для смены режима торговли.
+    """Обработка PIN для смены режима торговли.
 
     Работает только если ранее был запрос /trade mode sim|live
     и в _pending_mode сохранён целевой режим.
-    \"\"\"
-    global _pending_mode
-
+    """
     # Если смена режима не запрошена — не перехватываем апдейт
     if _pending_mode is None:
         raise SkipHandler()
