@@ -113,7 +113,7 @@ async def handle_any_document(message: types.Message) -> None:
     filename = message.document.file_name or "file.bin"
 
     # Защита от обхода путей
-    if "/" in filename or "\" in filename:
+    if "/" in filename or "\\" in filename:
         await message.answer("Некорректное имя файла.")
         return
 
