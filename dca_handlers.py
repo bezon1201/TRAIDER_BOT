@@ -140,7 +140,17 @@ def _build_status_lines_from_grid(grid: dict) -> list[str]:
 
     start_str = _format_ts_date(campaign_start)
     if campaign_end:
-        stop_str = f"Stop: {_format_ts_date(campaign_end)} Manual stop"
+        reason = str(grid.get("closed_reason") or "").lower()
+        if reason == "budget":
+            reason_text = "Budget close"
+        elif reason == "levels":
+            reason_text = "Level close"
+        elif reason == "manual":
+            reason_text = "Manual stop"
+        else:
+            # Для старых кампаний без поля closed_reason сохраняем старое поведение
+            reason_text = "Manual stop"
+        stop_str = f"Stop: {_format_ts_date(campaign_end)} {reason_text}"
     else:
         stop_str = "Stop: -- (active)"
 
@@ -790,6 +800,7 @@ async def cmd_dca(message: types.Message) -> None:
         now_ts = int(time.time())
         grid["campaign_end_ts"] = now_ts
         grid["updated_ts"] = now_ts
+        grid["closed_reason"] = "manual"
 
         try:
             with gpath.open("w", encoding="utf-8") as f:

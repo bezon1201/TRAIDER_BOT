@@ -207,10 +207,19 @@ def simulate_bar_for_symbol(symbol: str, bar: Dict[str, Any]) -> Optional[dict]:
 
     # 6. Проверяем автозакрытие кампании по бюджету/уровням
     closed_by_budget = False
-    if filled_levels >= total_levels or (budget_usdc > 0 and spent_usdc >= budget_usdc):
-        if grid.get("campaign_end_ts") in (None, 0):
-            grid["campaign_end_ts"] = now_ts
-            closed_by_budget = True
+    close_reason = None
+
+    # Приоритет: если выполнены все уровни — считаем, что кампания закрыта по уровням.
+    # Если уровни ещё остаются, но бюджет исчерпан — закрытие по бюджету.
+    if filled_levels >= total_levels:
+        close_reason = "levels"
+    elif budget_usdc > 0 and spent_usdc >= budget_usdc:
+        close_reason = "budget"
+
+    if close_reason and grid.get("campaign_end_ts") in (None, 0):
+        grid["campaign_end_ts"] = now_ts
+        grid["closed_reason"] = close_reason
+        closed_by_budget = True
 
     # Сохраняем обновлённую сетку на диск
     try:
@@ -257,6 +266,7 @@ def simulate_bar_for_symbol(symbol: str, bar: Dict[str, Any]) -> Optional[dict]:
                 "total_levels": total_levels,
                 "spent_usdc": spent_usdc,
                 "avg_price": grid.get("avg_price"),
+                "reason": grid.get("closed_reason") or "auto",
             }
             _append_grid_event(event)
         except Exception as e:  # pragma: no cover
