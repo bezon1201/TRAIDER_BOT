@@ -35,7 +35,7 @@ def build_files_keyboard() -> InlineKeyboardMarkup | None:
         except OSError:
             size = 0
         text = f"{p.name} ({size} байт)"
-        # callback_data ограничен 64 байтами, но имена у нас короткие
+        # callback_data ограничен 64 байтами, имена у нас короткие
         rows.append(
             [InlineKeyboardButton(text=text, callback_data=f"data_export:{p.name}")]
         )
@@ -63,24 +63,14 @@ async def cmd_data(message: types.Message) -> None:
         await message.answer("Команда /data.")
         return
 
-    # Без аргументов: показать список файлов + кнопки
+    # Без аргументов: показать только заголовок + кнопки со списком файлов
     if len(parts) == 1:
-        files = list_storage_files()
-        if not files:
+        kb = build_files_keyboard()
+        if kb is None:
             await message.answer("В STORAGE_DIR пока нет файлов.")
             return
 
-        lines = []
-        for p in files:
-            try:
-                size = p.stat().st_size
-            except OSError:
-                size = 0
-            lines.append(f"{p.name} ({size} байт)")
-
-        kb = build_files_keyboard()
-        text_resp = "Файлы в STORAGE_DIR:\n" + "\n".join(lines)
-        await message.answer(text_resp, reply_markup=kb)
+        await message.answer("Файлы в STORAGE_DIR:", reply_markup=kb)
         return
 
     subcmd = parts[1].lower()
@@ -199,6 +189,33 @@ async def cmd_data(message: types.Message) -> None:
         "Неизвестная подкоманда для /data.\n"
         "Доступно: export, delete, либо просто /data для списка файлов."
     )
+
+
+@router.callback_query(F.data.startswith("data_export:"))
+async def on_data_export_callback(callback: types.CallbackQuery) -> None:
+    """Отправить файл по нажатию на inline-кнопку из /data."""
+    data = callback.data or ""
+    _, _, name = data.partition(":")
+    name = name.strip()
+    if not name:
+        await callback.answer("Неизвестный файл.", show_alert=True)
+        return
+
+    if "/" in name or "\\" in name:
+        await callback.answer("Некорректное имя файла.", show_alert=True)
+        return
+
+    path = STORAGE_PATH / name
+    if not path.exists() or not path.is_file():
+        await callback.answer("Файл не найден.", show_alert=True)
+        return
+
+    try:
+        doc = FSInputFile(path)
+        await callback.message.answer_document(doc)
+        await callback.answer()  # просто закрываем "часики"
+    except Exception:
+        await callback.answer("Не удалось отправить файл.", show_alert=True)
 
 
 @router.message(F.document)
