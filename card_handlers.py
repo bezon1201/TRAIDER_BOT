@@ -13,6 +13,17 @@ router = Router()
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
 
+# Маппинг стикеров на символы.
+# Используем file_unique_id, чтобы привязка была стабильной.
+STICKER_UNIQUE_ID_TO_SYMBOL: dict[str, str] = {
+    # BNBUSDC
+    "AQADJocAAka7YUhy": "BNBUSDC",
+    # ETHUSDC
+    "AQADxokAAv_wWEhy": "ETHUSDC",
+    # BTCUSDC
+    "AQADJogAAtfnYUhy": "BTCUSDC",
+}
+
 
 def _load_symbols_list() -> list[str] | None:
     """
@@ -22,6 +33,9 @@ def _load_symbols_list() -> list[str] | None:
     {
       "symbols": ["BNBUSDC", "BTCUSDC", ...]
     }
+
+    Либо просто список строк:
+    ["BNBUSDC", "BTCUSDC", ...]
 
     Возвращает список символов в верхнем регистре без дубликатов.
     Если файл отсутствует или повреждён — возвращает None.
@@ -85,6 +99,36 @@ async def cmd_card(message: types.Message) -> None:
     if symbols is not None and symbols and symbol not in symbols:
         await message.answer(f"Символ {symbol} отсутствует в symbols_list.json.")
         return
+
+    text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
+    keyboard = build_symbol_card_keyboard(symbol)
+
+    await message.answer(
+        f"<pre>{text_block}</pre>",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+@router.message(F.sticker)
+async def on_card_sticker(message: types.Message) -> None:
+    """
+    Привязка стикеров к карточкам.
+
+    Если пришёл один из наших стикеров, показываем соответствующую /card <symbol>.
+    Остальные стикеры игнорируем (не мешаем другим хэндлерам).
+    """
+    sticker = message.sticker
+    if not sticker:
+        return
+
+    unique_id = sticker.file_unique_id
+    symbol = STICKER_UNIQUE_ID_TO_SYMBOL.get(unique_id)
+    if not symbol:
+        # Не наш стикер — молча выходим.
+        return
+
+    symbol = symbol.upper()
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
     keyboard = build_symbol_card_keyboard(symbol)
