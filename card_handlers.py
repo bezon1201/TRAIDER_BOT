@@ -440,9 +440,8 @@ async def on_text_for_budget(message: types.Message) -> None:
     if _has_active_campaign(symbol):
         _WAITING_BUDGET.pop(chat_id, None)
         await message.answer(
-            f"Нельзя менять BUDGET для {symbol} при активной кампании.
-"
-            f"Сначала остановите кампанию."
+            f"Нельзя менять BUDGET для {symbol} при активной кампании.\n"
+            "Сначала остановите кампанию.",
         )
         return
 
