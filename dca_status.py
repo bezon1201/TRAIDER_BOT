@@ -237,6 +237,20 @@ def build_dca_status_text(symbol: str, storage_dir: str | None = None) -> str:
     budget_value = config.get("budget_usdc")
     spent_value = grid.get("spent_usdc")
 
+    # Если кампания уже завершена, используем актуальный DCA-budget
+    # из конфига, а не старое значение, зашитое в последнюю сетку.
+    if grid.get("campaign_end_ts"):
+        try:
+            from dca_config import get_symbol_config
+            cfg = get_symbol_config(symbol)
+        except Exception:
+            cfg = None
+
+        if cfg is not None:
+            bv = getattr(cfg, "budget_usdc", None)
+            if bv is not None:
+                budget_value = bv
+
     budget_str = _format_int_usd(budget_value)
     spent_str = _format_int_usd(spent_value)
 
