@@ -13,7 +13,8 @@ router = Router()
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
 
-# Маппинг стикеров на символы (по file_unique_id).
+# Маппинг стикеров на символы.
+# Делаем по двум ключам: file_unique_id и file_id, чтобы наверняка.
 STICKER_UNIQUE_ID_TO_SYMBOL: dict[str, str] = {
     # BNBUSDC
     "AQADJocAAka7YUhy": "BNBUSDC",
@@ -21,6 +22,15 @@ STICKER_UNIQUE_ID_TO_SYMBOL: dict[str, str] = {
     "AQADxokAAv_wWEhy": "ETHUSDC",
     # BTCUSDC
     "AQADJogAAtfnYUhy": "BTCUSDC",
+}
+
+STICKER_FILE_ID_TO_SYMBOL: dict[str, str] = {
+    # BNBUSDC
+    "AAMCAgADGQEAAT12O2kMPzjYeKJtvg5ayyl7lCBi9CyDAAImhwACRrthSKN6bagE7UBrAQAHbQADNgQ": "BNBUSDC",
+    # ETHUSDC
+    "AAMCAgADGQEAAT112GkMLI5y5jygSPT-Y978TXNsRr6iAALGiQAC__BYSKvy5SwSqCS8AQAHbQADNgQ": "ETHUSDC",
+    # BTCUSDC
+    "AAMCAgADGQEAAT10-2kMCdj-PvmbnmHxy0-DDMs_h_LyAAImiAAC1-dhSKItH-lXJZk9AQAHbQADNgQ": "BTCUSDC",
 }
 
 
@@ -122,7 +132,12 @@ async def on_card_sticker(message: types.Message) -> None:
         return
 
     unique_id = sticker.file_unique_id
+    file_id = sticker.file_id
+
     symbol = STICKER_UNIQUE_ID_TO_SYMBOL.get(unique_id)
+    if not symbol:
+        symbol = STICKER_FILE_ID_TO_SYMBOL.get(file_id)
+
     if not symbol:
         # Не наш стикер — выходим.
         return
