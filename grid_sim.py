@@ -2,10 +2,13 @@ import json
 import logging
 import os
 import time
+import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+from aiogram import Bot
 from trade_mode import is_sim_mode
+from dca_status import build_dca_status_text
 from dca_handlers import _grid_path, _has_active_campaign
 
 logger = logging.getLogger(__name__)
@@ -70,6 +73,70 @@ def _append_grid_event(event: Dict[str, Any]) -> None:
             f.write(line + "\n")
     except Exception as e:  # pragma: no cover - логирование не критично
         logger.warning("Failed to append grid event: %s", e)
+
+
+
+
+async def _notify_campaign_closed(symbol: str) -> None:
+    """Отправляем в админ‑чат уведомление о завершении кампании и её статусе."""
+    token = os.environ.get("BOT_TOKEN")
+    chat_id_raw = os.environ.get("ADMIN_CHAT_ID")
+    if not token or not chat_id_raw:
+        return
+    try:
+        chat_id = int(chat_id_raw)
+    except (TypeError, ValueError):
+        return
+
+    try:
+        bot = Bot(token=token)
+    except Exception:
+        return
+
+    storage_dir = os.environ.get("STORAGE_DIR", ".")
+
+    # Короткое уведомление
+    try:
+        await bot.send_message(chat_id, f"Компания по {symbol} завершена")
+    except Exception:
+        logger.exception("notify_campaign_closed: failed to send short message for %s", symbol)
+
+    # Статус кампании в формате /dca status <symbol>
+    text_block = None
+    try:
+        text_block = build_dca_status_text(symbol, storage_dir=storage_dir)
+    except Exception:
+        logger.exception("notify_campaign_closed: failed to build status for %s", symbol)
+
+    if text_block:
+        try:
+            await bot.send_message(chat_id, f"<pre>{text_block}</pre>", parse_mode="HTML")
+        except Exception:
+            logger.exception("notify_campaign_closed: failed to send status for %s", symbol)
+
+    try:
+        await bot.session.close()
+    except Exception:
+        pass
+
+
+def _schedule_notify_closed(symbol: str) -> None:
+    """Пытаемся асинхронно отправить уведомления админу, не блокируя симуляцию."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        try:
+            loop.create_task(_notify_campaign_closed(symbol))
+        except Exception as e:
+            logger.warning("simulate_bar_for_symbol: failed to schedule notify for %s: %s", symbol, e)
+    else:
+        try:
+            asyncio.run(_notify_campaign_closed(symbol))
+        except Exception as e:
+            logger.warning("simulate_bar_for_symbol: failed to run notify for %s: %s", symbol, e)
 
 
 def simulate_bar_for_symbol(symbol: str, bar: Dict[str, Any]) -> Optional[dict]:
@@ -271,5 +338,8 @@ def simulate_bar_for_symbol(symbol: str, bar: Dict[str, Any]) -> Optional[dict]:
             _append_grid_event(event)
         except Exception as e:  # pragma: no cover
             logger.warning("simulate_bar_for_symbol: failed to log grid_budget_closed: %s", e)
+
+        # Уведомляем админа о завершении кампании
+        _schedule_notify_closed(symbol)
 
     return grid
