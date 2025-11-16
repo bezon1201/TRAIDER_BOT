@@ -1,11 +1,14 @@
 import json
 import os
+import time
 from pathlib import Path
 
 from aiogram import Router, types, F
 from aiogram.filters import Command
 
 from card_format import build_symbol_card_text, build_symbol_card_keyboard
+from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config
+from dca_models import DCAConfigPerSymbol
 
 
 router = Router()
@@ -33,6 +36,11 @@ STICKER_ID_TO_SYMBOL: dict[str, str] = {
     "AAMCAgADGQEAAT10-2kMCdj-PvmbnmHxy0-DDMs_h_LyAAImiAAC1-dhSKItH-lXJZk9AQAHbQADNgQ": "BTCUSDC",
     "AQADJogAAtfnYUhy": "BTCUSDC",
 }
+
+
+# Простое состояние ожидания ввода бюджета по чату.
+# Ключ: chat_id, значение: словарь с symbol.
+_WAITING_BUDGET: dict[int, dict] = {}
 
 
 def _load_symbols_list() -> list[str] | None:
@@ -104,6 +112,30 @@ def _extract_sticker_ids(sticker: types.Sticker) -> set[str]:
                 ids.add(val)
 
     return ids
+
+
+def _grid_path(symbol: str) -> Path:
+    return STORAGE_PATH / f"{symbol}_grid.json"
+
+
+def _has_active_campaign(symbol: str) -> bool:
+    """
+    Проверить, есть ли активная кампания для символа.
+
+    Активная кампания = есть файл SYMBOL_grid.json и в нём нет campaign_end_ts.
+    """
+    symbol = (symbol or "").upper()
+    path = _grid_path(symbol)
+    if not path.exists():
+        return False
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        return False
+
+    return not bool(data.get("campaign_end_ts"))
 
 
 @router.message(Command("card"))
@@ -196,7 +228,7 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
       - "card:back_root:<symbol>"   → ↩️ назад на верхний уровень
 
     Подменю CONFIG:
-      - "card:dca_cfg_budget:<symbol>"  → BUDGET (заглушка)
+      - "card:dca_cfg_budget:<symbol>"  → BUDGET
       - "card:dca_cfg_levels:<symbol>"  → LEVELS (заглушка)
       - "card:dca_cfg_list:<symbol>"    → LIST (заглушка)
       - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
@@ -217,6 +249,8 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
     symbol = parts[2] if len(parts) > 2 else ""
     symbol = (symbol or "").upper()
     action = action.lower()
+
+    chat_id = callback.message.chat.id if callback.message else None
 
     # ---------- Верхний уровень ----------
     if action == "dca":
@@ -288,10 +322,27 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # ---------- Подменю CONFIG ----------
     if action == "dca_cfg_budget":
-        await callback.answer(
-            f"CONFIG/BUDGET для {symbol} будет добавлен позже.",
-            show_alert=False,
+        # Нельзя менять бюджет при активной кампании.
+        if _has_active_campaign(symbol):
+            await callback.answer(
+                f"Нельзя менять BUDGET для {symbol} при активной кампании.
+Сначала остановите кампанию.",
+                show_alert=True,
+            )
+            return
+
+        # Готовимся принять число от пользователя.
+        if chat_id is not None:
+            _WAITING_BUDGET[chat_id] = {"symbol": symbol}
+
+        cfg = get_symbol_config(symbol)
+        current_budget = cfg.budget_usdc if cfg else 0
+        await callback.message.answer(
+            f"Введи новый BUDGET для {symbol} в USDC.
+"
+            f"Текущий бюджет: {current_budget}",
         )
+        await callback.answer()
         return
 
     if action == "dca_cfg_levels":
@@ -350,3 +401,77 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # На всякий случай — дефолт
     await callback.answer("Неизвестное действие карточки.", show_alert=False)
+
+
+@router.message(F.text)
+async def on_text_for_budget(message: types.Message) -> None:
+    """
+    Обработка текстового ввода после нажатия CONFIG → BUDGET.
+
+    Ждём число, обновляем budget_usdc в конфиге и перевыдаём карточку
+    на том же уровне меню (CONFIG).
+    """
+    chat_id = message.chat.id
+    ctx = _WAITING_BUDGET.get(chat_id)
+    if not ctx:
+        # Ничего не ждём — пропускаем сообщение дальше по цепочке хэндлеров.
+        return
+
+    symbol = (ctx.get("symbol") or "").upper()
+    if not symbol:
+        _WAITING_BUDGET.pop(chat_id, None)
+        return
+
+    text = (message.text or "").strip()
+
+    # Пытаемся распарсить число.
+    try:
+        new_budget = float(text.replace(",", "."))
+    except Exception:
+        await message.answer(
+            "Некорректное значение бюджета. Введи число, например 300 или 150.5."
+        )
+        return
+
+    if new_budget <= 0:
+        await message.answer("Бюджет должен быть больше нуля.")
+        return
+
+    # На всякий случай ещё раз проверим активную кампанию.
+    if _has_active_campaign(symbol):
+        _WAITING_BUDGET.pop(chat_id, None)
+        await message.answer(
+            f"Нельзя менять BUDGET для {symbol} при активной кампании.
+"
+            f"Сначала остановите кампанию."
+        )
+        return
+
+    # Обновляем конфиг так же, как в /dca set <symbol> budget <B>.
+    cfg = get_symbol_config(symbol)
+    if not cfg:
+        cfg = DCAConfigPerSymbol(
+            symbol=symbol,
+            budget_usdc=new_budget,
+            levels=0,
+            enabled=True,
+        )
+    else:
+        cfg.budget_usdc = new_budget
+
+    cfg.updated_ts = int(time.time())
+    upsert_symbol_config(cfg)
+    save_dca_config(load_dca_config())
+
+    # Выходим из режима ожидания.
+    _WAITING_BUDGET.pop(chat_id, None)
+
+    # Перевыдаём карточку символа с обновлённым бюджетом.
+    text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
+    keyboard = build_symbol_card_keyboard(symbol, menu="dca_config")
+
+    await message.answer(
+        f"<pre>{text_block}</pre>",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
