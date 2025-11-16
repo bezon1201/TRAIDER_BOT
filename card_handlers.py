@@ -132,7 +132,7 @@ async def cmd_card(message: types.Message) -> None:
         return
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol, menu="root")  # верхний уровень
+    keyboard = build_symbol_card_keyboard(symbol, menu="root")
 
     await message.answer(
         f"<pre>{text_block}</pre>",
@@ -167,7 +167,7 @@ async def on_card_sticker(message: types.Message) -> None:
     symbol = symbol.upper()
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol, menu="root")  # верхний уровень
+    keyboard = build_symbol_card_keyboard(symbol, menu="root")
 
     await message.answer(
         f"<pre>{text_block}</pre>",
@@ -189,11 +189,27 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
       - "card:logs:<symbol>"     → заглушка (пока)
       - "card:menu:<symbol>"     → заглушка (пока)
 
-    Подменю DCA:
-      - "card:dca_cfg:<symbol>"    → CONFIG (заглушка)
-      - "card:dca_run:<symbol>"    → RUN (заглушка)
-      - "card:dca_status:<symbol>" → STATUS (заглушка)
-      - "card:back_root:<symbol>"  → ↩️ вернуться на верхний уровень
+    Подменю DCA (уровень 1):
+      - "card:dca_cfg:<symbol>"     → открыть CONFIG-меню
+      - "card:dca_run:<symbol>"     → открыть RUN-меню
+      - "card:dca_status:<symbol>"  → открыть STATUS-меню
+      - "card:back_root:<symbol>"   → ↩️ назад на верхний уровень
+
+    Подменю CONFIG:
+      - "card:dca_cfg_budget:<symbol>"  → BUDGET (заглушка)
+      - "card:dca_cfg_levels:<symbol>"  → LEVELS (заглушка)
+      - "card:dca_cfg_list:<symbol>"    → LIST (заглушка)
+      - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
+
+    Подменю RUN:
+      - "card:dca_run_start:<symbol>"   → START (заглушка)
+      - "card:dca_run_stop:<symbol>"    → STOP (заглушка)
+      - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
+
+    Подменю STATUS:
+      - "card:dca_status_all:<symbol>"    → ALL (заглушка)
+      - "card:dca_status_active:<symbol>" → ACTIVE (заглушка)
+      - "card:back_dca:<symbol>"          → ↩️ назад в DCA-меню
     """
     data = callback.data or ""
     parts = data.split(":", 2)
@@ -202,7 +218,7 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
     symbol = (symbol or "").upper()
     action = action.lower()
 
-    # DCA → открыть подменю (CONFIG / RUN / STATUS / ↩️)
+    # ---------- Верхний уровень ----------
     if action == "dca":
         kb = build_symbol_card_keyboard(symbol, menu="dca")
         try:
@@ -212,39 +228,6 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         await callback.answer()
         return
 
-    # Подменю DCA — заглушки действий
-    if action == "dca_cfg":
-        await callback.answer(
-            f"CONFIG для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
-        return
-
-    if action == "dca_run":
-        await callback.answer(
-            f"RUN для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
-        return
-
-    if action == "dca_status":
-        await callback.answer(
-            f"STATUS для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
-        return
-
-    # ↩️ — вернуться на верхний уровень меню
-    if action == "back_root":
-        kb = build_symbol_card_keyboard(symbol, menu="root")
-        try:
-            await callback.message.edit_reply_markup(reply_markup=kb)
-        except Exception:
-            pass
-        await callback.answer()
-        return
-
-    # Остальные верхнеуровневые кнопки пока как заглушки
     if action == "order":
         await callback.answer(
             f"Модуль ордеров для {symbol} ещё в разработке.",
@@ -264,6 +247,105 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             "Меню карточки будет расширено на следующих шагах.",
             show_alert=False,
         )
+        return
+
+    # ---------- Подменю DCA, уровень 1 ----------
+    if action == "dca_cfg":
+        kb = build_symbol_card_keyboard(symbol, menu="dca_config")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action == "dca_run":
+        kb = build_symbol_card_keyboard(symbol, menu="dca_run")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action == "dca_status":
+        kb = build_symbol_card_keyboard(symbol, menu="dca_status")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action == "back_root":
+        kb = build_symbol_card_keyboard(symbol, menu="root")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    # ---------- Подменю CONFIG ----------
+    if action == "dca_cfg_budget":
+        await callback.answer(
+            f"CONFIG/BUDGET для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "dca_cfg_levels":
+        await callback.answer(
+            f"CONFIG/LEVELS для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "dca_cfg_list":
+        await callback.answer(
+            f"CONFIG/LIST для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    # ---------- Подменю RUN ----------
+    if action == "dca_run_start":
+        await callback.answer(
+            f"RUN/START для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "dca_run_stop":
+        await callback.answer(
+            f"RUN/STOP для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    # ---------- Подменю STATUS ----------
+    if action == "dca_status_all":
+        await callback.answer(
+            f"STATUS/ALL для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "dca_status_active":
+        await callback.answer(
+            f"STATUS/ACTIVE для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    # ---------- Возврат в DCA-меню из подменю ----------
+    if action == "back_dca":
+        kb = build_symbol_card_keyboard(symbol, menu="dca")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
         return
 
     # На всякий случай — дефолт

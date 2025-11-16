@@ -55,11 +55,9 @@ def _build_root_keyboard(symbol: str) -> InlineKeyboardMarkup:
 
 def _build_dca_keyboard(symbol: str) -> InlineKeyboardMarkup:
     """
-    Подменю для DCA:
+    Подменю для DCA (уровень 1):
     [CONFIG] [RUN] [STATUS]
-    [↩️]
-
-    ↩️ возвращает на предыдущий уровень (в нашем случае — на корневое меню).
+    [↩️]  — назад к верхнему уровню.
     """
     symbol = (symbol or "").upper()
 
@@ -89,14 +87,117 @@ def _build_dca_keyboard(symbol: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+def _build_dca_config_keyboard(symbol: str) -> InlineKeyboardMarkup:
+    """
+    Подменю CONFIG:
+    [BUDGET] [LEVELS] [LIST]
+    [↩️]  — назад в DCA-меню.
+    """
+    symbol = (symbol or "").upper()
+
+    row1 = [
+        InlineKeyboardButton(
+            text="BUDGET",
+            callback_data=f"card:dca_cfg_budget:{symbol}",
+        ),
+        InlineKeyboardButton(
+            text="LEVELS",
+            callback_data=f"card:dca_cfg_levels:{symbol}",
+        ),
+        InlineKeyboardButton(
+            text="LIST",
+            callback_data=f"card:dca_cfg_list:{symbol}",
+        ),
+    ]
+
+    row2 = [
+        InlineKeyboardButton(
+            text="↩️",
+            callback_data=f"card:back_dca:{symbol}",
+        )
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+    return keyboard
+
+
+def _build_dca_run_keyboard(symbol: str) -> InlineKeyboardMarkup:
+    """
+    Подменю RUN:
+    [START] [STOP]
+    [↩️]  — назад в DCA-меню.
+    """
+    symbol = (symbol or "").upper()
+
+    row1 = [
+        InlineKeyboardButton(
+            text="START",
+            callback_data=f"card:dca_run_start:{symbol}",
+        ),
+        InlineKeyboardButton(
+            text="STOP",
+            callback_data=f"card:dca_run_stop:{symbol}",
+        ),
+    ]
+
+    row2 = [
+        InlineKeyboardButton(
+            text="↩️",
+            callback_data=f"card:back_dca:{symbol}",
+        )
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+    return keyboard
+
+
+def _build_dca_status_keyboard(symbol: str) -> InlineKeyboardMarkup:
+    """
+    Подменю STATUS:
+    [ALL] [ACTIVE]
+    [↩️]  — назад в DCA-меню.
+    """
+    symbol = (symbol or "").upper()
+
+    row1 = [
+        InlineKeyboardButton(
+            text="ALL",
+            callback_data=f"card:dca_status_all:{symbol}",
+        ),
+        InlineKeyboardButton(
+            text="ACTIVE",
+            callback_data=f"card:dca_status_active:{symbol}",
+        ),
+    ]
+
+    row2 = [
+        InlineKeyboardButton(
+            text="↩️",
+            callback_data=f"card:back_dca:{symbol}",
+        )
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+    return keyboard
+
+
 def build_symbol_card_keyboard(symbol: str, menu: str = "root") -> InlineKeyboardMarkup:
     """
     Построить клавиатуру для карточки с учётом уровня меню.
 
     menu:
-      - "root" — верхний уровень (DCA / ORDER / LOGS / MENU)
-      - "dca"  — подменю DCA (CONFIG / RUN / STATUS / ↩️)
+      - "root"        — верхний уровень (DCA / ORDER / LOGS / MENU)
+      - "dca"         — подменю DCA (CONFIG / RUN / STATUS / ↩️)
+      - "dca_config"  — CONFIG (BUDGET / LEVELS / LIST / ↩️)
+      - "dca_run"     — RUN (START / STOP / ↩️)
+      - "dca_status"  — STATUS (ALL / ACTIVE / ↩️)
     """
     if menu == "dca":
         return _build_dca_keyboard(symbol)
+    if menu == "dca_config":
+        return _build_dca_config_keyboard(symbol)
+    if menu == "dca_run":
+        return _build_dca_run_keyboard(symbol)
+    if menu == "dca_status":
+        return _build_dca_status_keyboard(symbol)
     return _build_root_keyboard(symbol)
