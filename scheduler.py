@@ -194,21 +194,61 @@ async def _step2_market_force_all(bot: "Bot", admin_chat_id: int, logger: loggin
         changed_count,
     )
 
-    # Уведомляем админа
-    if changed_count == 0:
-        text = "Рынок пересчитан. Изменений нет."
-    else:
-        lines = ["Рынок пересчитан. Изменения:"]
-        for ch in changes:
-            lines.append(f"{ch['symbol']}: {ch['old']} -> {ch['new']}")
-        text = "\n".join(lines)
-
+    # Вместо короткого сообщения о пересчёте рынка
+    # отправляем админу статусы всех активных DCA-кампаний
     try:
-        await bot.send_message(chat_id=admin_chat_id, text=text)
+        from dca_status import build_dca_status_text
     except Exception:
-        logger.exception("[scheduler] Не удалось отправить уведомление админу.")
+        build_dca_status_text = None
+
+    if build_dca_status_text is not None:
+        try:
+            storage = Path(STORAGE_DIR)
+            active_count = 0
+            for path in sorted(storage.glob("*_grid.json")):
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                    grid = json.loads(raw)
+                except Exception:
+                    continue
+
+                # активная кампания: нет campaign_end_ts
+                if grid.get("campaign_end_ts"):
+                    continue
+
+                symbol = str(grid.get("symbol") or path.name.replace("_grid.json", "")).upper()
+
+                try:
+                    text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
+                except Exception:
+                    logger.exception("[scheduler] Ошибка при формировании статуса DCA для %s", symbol)
+                    continue
+
+                if not text_block:
+                    continue
+
+                try:
+                    await bot.send_message(
+                        chat_id=admin_chat_id,
+                        text=f"<pre>{text_block}</pre>",
+                        parse_mode="HTML",
+                    )
+                    active_count += 1
+                except Exception:
+                    logger.exception("[scheduler] Не удалось отправить статус DCA админу для %s", symbol)
+
+            if active_count == 0:
+                try:
+                    await bot.send_message(chat_id=admin_chat_id, text="DCA: активных кампаний не найдено.")
+                except Exception:
+                    logger.exception("[scheduler] Не удалось отправить сообщение об отсутствии активных кампаний.")
+        except Exception:
+            logger.exception("[scheduler] Ошибка при отправке статусов активных DCA кампаний админу.")
+    else:
+        logger.warning("[scheduler] dca_status.build_dca_status_text недоступен, уведомление админа пропущено.")
 
     return {"symbols": total, "changes": changed_count}
+
 
 
 async def _scheduler_loop(bot: "Bot", admin_chat_id: int, logger: logging.Logger) -> None:
