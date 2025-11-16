@@ -7,6 +7,9 @@ from typing import Optional
 from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.dispatcher.event.bases import SkipHandler
+from dca_config import zero_symbol_budget
+from grid_log import log_grid_manualy_closed
+from dca_status import build_dca_status_text
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
@@ -223,7 +226,7 @@ async def handle_trade_pin(message: types.Message) -> None:
         await message.answer("Неверный PIN, режим торговли не изменён.")
         return
 
-    # PIN корректный — меняем режим и логируем
+    # PIN корректный — сначала останавливаем все активные кампании, затем меняем режим и логируем
     old_mode = get_trade_mode()
     new_mode = _pending_mode or old_mode
     _pending_mode = None
@@ -234,6 +237,61 @@ async def handle_trade_pin(message: types.Message) -> None:
             "Режим не изменён."
         )
         return
+
+    # Массово останавливаем все активные кампании перед сменой режима
+    try:
+        stopped = 0
+        for path in STORAGE_PATH.glob("*_grid.json"):
+            try:
+                raw = path.read_text(encoding="utf-8")
+                grid = json.loads(raw)
+            except Exception:
+                continue
+
+            # Пропускаем уже завершённые кампании
+            if grid.get("campaign_end_ts"):
+                continue
+
+            symbol = str(grid.get("symbol") or path.name.replace("_grid.json", "")).upper()
+            now_ts = int(time.time())
+            grid["campaign_end_ts"] = now_ts
+            grid["updated_ts"] = now_ts
+            grid["closed_reason"] = "manual"
+
+            try:
+                with path.open("w", encoding="utf-8") as f:
+                    json.dump(grid, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                try:
+                    await message.answer(f"DCA: не удалось остановить кампанию для {symbol}: {e}")
+                except Exception:
+                    pass
+                continue
+
+            # Обнуляем бюджет в конфиге для безопасности
+            try:
+                zero_symbol_budget(symbol)
+            except Exception:
+                pass
+
+            # Логируем ручное закрытие кампании
+            try:
+                log_grid_manualy_closed(grid)
+            except Exception:
+                pass
+
+            # Сообщаем в активный чат, как при /dca stop <symbol>
+            try:
+                await message.answer(f"DCA: кампания для {symbol} остановлена.")
+                text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
+                await message.answer(f"<pre>{text_block}</pre>", parse_mode="HTML")
+            except Exception:
+                pass
+
+            stopped += 1
+    except Exception:
+        # В случае любой неожиданной ошибки не блокируем смену режима
+        pass
 
     set_trade_mode(new_mode)
     _log_trade_mode_change(old_mode, new_mode)
