@@ -777,11 +777,9 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer(f"DCA: сетка для {symbol} не найдена.")
             return
 
-        text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
-        await message.answer(f"<pre>{text_block}</pre>", parse_mode="HTML")
+        msg_lines = _build_status_lines_from_grid(grid)
+        await message.answer("\n".join(msg_lines))
         return
-
-
 
     # /dca stop <symbol> — пометить кампанию как завершённую
     if cmd == "stop":
@@ -827,8 +825,11 @@ async def cmd_dca(message: types.Message) -> None:
             pass
 
         await message.answer(f"DCA: кампания для {symbol} остановлена.")
-        return
 
+        # Сразу показываем финальный статус кампании в том же чате
+        text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
+        await message.answer(f"<pre>{text_block}</pre>", parse_mode="HTML")
+        return
 
     # /dca set <symbol> budget <USDC> | /dca set <symbol> levels <N>
     if cmd == "set":
