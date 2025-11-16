@@ -14,105 +14,167 @@ STORAGE_PATH = Path(STORAGE_DIR)
 
 
 def list_storage_files() -> List[Path]:
-    """
-    Вернуть список файлов в STORAGE_DIR (только файлы первого уровня).
-    """
     if not STORAGE_PATH.exists():
         return []
-    items: List[Path] = []
-    try:
-        for p in STORAGE_PATH.iterdir():
-            if p.is_file():
-                items.append(p)
-    except Exception:
+    if not STORAGE_PATH.is_dir():
         return []
-    return sorted(items, key=lambda p: p.name.lower())
+    files: List[Path] = []
+    for item in STORAGE_PATH.iterdir():
+        if item.is_file():
+            files.append(item)
+    files.sort(key=lambda p: p.name.lower())
+    return files
 
 
-@router.message(Command("data"))
-async def cmd_data(message: types.Message) -> None:
+def safe_names_from_args(args: str) -> list[str]:
+    """
+    Разобрать список имён файлов из аргументов команды, отфильтровав
+    заведомо некорректные варианты (с / или \\).
+    """
+    result: list[str] = []
+    for item in args.split(","):
+        name = item.strip()
+        if not name:
+            continue
+        if "/" in name or "\\" in name:
+            # Защита от путей
+            continue
+        if name not in result:
+            result.append(name)
+    return result
+
+
+@router.message(Command("data"), ~F.document)
+async def cmd_data(message: types.Message):
     """
     Управление файлами в STORAGE_DIR.
 
     /data                      — показать список файлов.
-    /data export <name>        — отправить файл из STORAGE_DIR.
-    /data delete <name>        — удалить файл из STORAGE_DIR.
+    /data export all           — отправить все файлы.
+    /data export <FILES>       — отправить указанные файлы.
+    /data delete all           — удалить все файлы.
+    /data delete <FILES>       — удалить указанные файлы.
     """
-    text = message.text or ""
-    parts = text.split()
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Не указаны аргументы для /data.")
+        return
+
+    parts = text.split(maxsplit=2)
     if not parts:
         await message.answer("Не указаны аргументы для /data.")
         return
 
-    # parts[0] == /data или /data@bot
+    # Только "/data" без аргументов — показать список файлов
     if len(parts) == 1:
-        # просто список файлов
         files = list_storage_files()
         if not files:
-            await message.answer("В STORAGE_DIR пока нет файлов.")
+            await message.answer("В STORAGE_DIR нет файлов.")
             return
-        lines = ["Файлы в STORAGE_DIR:"]
-        for p in files:
-            try:
-                size = p.stat().st_size
-            except Exception:
-                size = 0
-            lines.append(f"- {p.name} ({size} байт)")
-        await message.answer("\n".join(lines))
+        names = ", ".join(p.name for p in files)
+        await message.answer(names)
+        return
+
+    if len(parts) < 2:
+        await message.answer("Не указаны аргументы для /data.")
         return
 
     subcmd = parts[1].lower()
 
-    # Для export/delete нам нужны аргументы
+    # Для export/delete нам обязательно нужны аргументы
     if subcmd in {"export", "delete"} and len(parts) < 3:
         await message.answer("Не указаны аргументы для /data.")
         return
 
+    args = parts[2] if len(parts) >= 3 else ""
+
     if subcmd == "export":
-        name = parts[2]
-        path = STORAGE_PATH / name
-        if not path.exists() or not path.is_file():
-            await message.answer(f"Файл {name} не найден в STORAGE_DIR.")
+        # /data export all
+        if args.strip().lower() == "all":
+            files = list_storage_files()
+            if not files:
+                await message.answer("В STORAGE_DIR нет файлов для экспорта.")
+                return
+            for path in files:
+                try:
+                    doc = FSInputFile(path)
+                    await message.answer_document(doc)
+                except Exception:
+                    # Пропускаем файлы, которые не удалось отправить
+                    continue
             return
-        try:
-            doc = FSInputFile(path)
-            await message.answer_document(doc)
-        except Exception:
-            await message.answer("Не удалось отправить файл.")
+
+        # /data export <FILES>
+        names = safe_names_from_args(args)
+        if not names:
+            await message.answer("Не удалось распознать ни одного файла для экспорта.")
+            return
+
+        for name in names:
+            path = STORAGE_PATH / name
+            if not path.is_file():
+                await message.answer(f"Файл {name} не найден в STORAGE_DIR.")
+                continue
+            try:
+                doc = FSInputFile(path)
+                await message.answer_document(doc)
+            except Exception:
+                await message.answer(f"Не удалось отправить файл {name}.")
         return
 
     if subcmd == "delete":
-        name = parts[2]
-        path = STORAGE_PATH / name
-        if not path.exists() or not path.is_file():
-            await message.answer(f"Файл {name} не найден в STORAGE_DIR.")
+        # /data delete all
+        if args.strip().lower() == "all":
+            files = list_storage_files()
+            if not files:
+                await message.answer("В STORAGE_DIR нет файлов для удаления.")
+                return
+            deleted = 0
+            for path in files:
+                try:
+                    path.unlink()
+                    deleted += 1
+                except Exception:
+                    continue
+            await message.answer(f"Удалено файлов: {deleted}.")
             return
-        try:
-            path.unlink()
-            await message.answer(f"Файл {name} удалён из STORAGE_DIR.")
-        except Exception:
-            await message.answer("Не удалось удалить файл.")
+
+        # /data delete <FILES>
+        names = safe_names_from_args(args)
+        if not names:
+            await message.answer("Не удалось распознать ни одного файла для удаления.")
+            return
+
+        deleted = 0
+        for name in names:
+            path = STORAGE_PATH / name
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except Exception:
+                continue
+
+        if deleted == 0:
+            await message.answer("Ни один файл не был удалён.")
+        else:
+            await message.answer(f"Удалено файлов: {deleted}.")
         return
 
     await message.answer("Неизвестная подкоманда для /data.")
-    return
 
 
 @router.message(F.document)
 async def handle_any_document(message: types.Message) -> None:
     """
-    Автоимпорт: любой отправленный в чат файл-документ сохраняется в STORAGE_DIR.
-    Команда /data import больше не нужна.
-
-    Если файл с таким именем уже существует, он будет перезаписан.
+    Любой файл, отправленный боту как документ, автоматически сохраняется
+    в STORAGE_DIR. Если файл с таким именем уже существует — перезаписываем.
     """
-    if not message.document:
-        return
-
     STORAGE_PATH.mkdir(parents=True, exist_ok=True)
     filename = message.document.file_name or "file.bin"
 
-    # Защита от обхода путей
+    # Простая защита от путей
     if "/" in filename or "\\" in filename:
         await message.answer("Некорректное имя файла.")
         return
