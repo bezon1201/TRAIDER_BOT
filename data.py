@@ -4,7 +4,7 @@ from typing import List
 
 from aiogram import Router, F, types
 from aiogram.filters import Command
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Хранилище файлов
 STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")
@@ -22,12 +22,32 @@ def list_storage_files() -> List[Path]:
     return files
 
 
+def build_files_keyboard() -> InlineKeyboardMarkup | None:
+    """Построить inline-клавиатуру с файлами для экспорта."""
+    files = list_storage_files()
+    if not files:
+        return None
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in files:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        text = f"{p.name} ({size} байт)"
+        # callback_data ограничен 64 байтами, но имена у нас короткие
+        rows.append(
+            [InlineKeyboardButton(text=text, callback_data=f"data_export:{p.name}")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.message(Command("data"), ~F.document)
 async def cmd_data(message: types.Message) -> None:
     """
     Управление файлами в STORAGE_DIR.
 
-    /data                  — список файлов
+    /data                  — список файлов (кнопки для быстрого экспорта)
     /data export all       — отправить все файлы
     /data export <names>   — отправить указанные файлы (через запятую)
     /data delete all       — удалить все файлы
@@ -43,7 +63,7 @@ async def cmd_data(message: types.Message) -> None:
         await message.answer("Команда /data.")
         return
 
-    # Без аргументов: показать список файлов
+    # Без аргументов: показать список файлов + кнопки
     if len(parts) == 1:
         files = list_storage_files()
         if not files:
@@ -58,7 +78,9 @@ async def cmd_data(message: types.Message) -> None:
                 size = 0
             lines.append(f"{p.name} ({size} байт)")
 
-        await message.answer("Файлы в STORAGE_DIR:\n" + "\n".join(lines))
+        kb = build_files_keyboard()
+        text_resp = "Файлы в STORAGE_DIR:\n" + "\n".join(lines)
+        await message.answer(text_resp, reply_markup=kb)
         return
 
     subcmd = parts[1].lower()
