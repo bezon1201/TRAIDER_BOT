@@ -338,8 +338,7 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         cfg = get_symbol_config(symbol)
         current_budget = cfg.budget_usdc if cfg else 0
         await callback.message.answer(
-            f"Введи новый BUDGET для {symbol} в USDC.
-"
+            f"Введи новый BUDGET для {symbol} в USDC.\n"
             f"Текущий бюджет: {current_budget}",
         )
         await callback.answer()
