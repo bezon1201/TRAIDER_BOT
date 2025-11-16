@@ -13,8 +13,7 @@ router = Router()
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
 
-# Маппинг стикеров на символы.
-# Используем file_unique_id, чтобы привязка была стабильной.
+# Маппинг стикеров на символы (по file_unique_id).
 STICKER_UNIQUE_ID_TO_SYMBOL: dict[str, str] = {
     # BNBUSDC
     "AQADJocAAka7YUhy": "BNBUSDC",
@@ -80,8 +79,8 @@ async def cmd_card(message: types.Message) -> None:
     """
     Карточка по символу: /card <symbol>.
 
-    Пока показывает тот же текст, что и /dca status <symbol>,
-    но в табличном формате + inline-клавиатура.
+    Показывает тот же текст, что и /dca status <symbol>,
+    но в табличном формате + inline-клавиатура (верхний уровень).
     """
     text = (message.text or "").strip()
     parts = text.split(maxsplit=1)
@@ -101,7 +100,7 @@ async def cmd_card(message: types.Message) -> None:
         return
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol)
+    keyboard = build_symbol_card_keyboard(symbol, menu="root")
 
     await message.answer(
         f"<pre>{text_block}</pre>",
@@ -125,13 +124,13 @@ async def on_card_sticker(message: types.Message) -> None:
     unique_id = sticker.file_unique_id
     symbol = STICKER_UNIQUE_ID_TO_SYMBOL.get(unique_id)
     if not symbol:
-        # Не наш стикер — молча выходим.
+        # Не наш стикер — выходим.
         return
 
     symbol = symbol.upper()
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol)
+    keyboard = build_symbol_card_keyboard(symbol, menu="root")
 
     await message.answer(
         f"<pre>{text_block}</pre>",
@@ -146,33 +145,89 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
     Обработка нажатий на кнопки карточки /card.
 
     Формат callback_data: "card:<action>:<symbol>"
-    где <action> ∈ {dca, order, logs, menu}.
+
+    Верхний уровень:
+      - "card:dca:<symbol>"      → открыть подменю DCA
+      - "card:order:<symbol>"    → заглушка (пока)
+      - "card:logs:<symbol>"     → заглушка (пока)
+      - "card:menu:<symbol>"     → заглушка (пока)
+
+    Подменю DCA:
+      - "card:dca_cfg:<symbol>"    → CONFIG (заглушка)
+      - "card:dca_run:<symbol>"    → RUN (заглушка)
+      - "card:dca_status:<symbol>" → STATUS (заглушка)
+      - "card:back_root:<symbol>"  → ↩️ вернуться на верхний уровень
     """
     data = callback.data or ""
     parts = data.split(":", 2)
     action = parts[1] if len(parts) > 1 else ""
     symbol = parts[2] if len(parts) > 2 else ""
+    symbol = (symbol or "").upper()
     action = action.lower()
 
+    # DCA → открыть подменю (CONFIG / RUN / STATUS / ↩️)
     if action == "dca":
+        kb = build_symbol_card_keyboard(symbol, menu="dca")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    # Подменю DCA — заглушки действий
+    if action == "dca_cfg":
         await callback.answer(
-            f"DCA-настройки для {symbol} будут добавлены позже.",
+            f"CONFIG для {symbol} будет добавлен позже.",
             show_alert=False,
         )
-    elif action == "order":
+        return
+
+    if action == "dca_run":
+        await callback.answer(
+            f"RUN для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "dca_status":
+        await callback.answer(
+            f"STATUS для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    # ↩️ — вернуться на верхний уровень меню
+    if action == "back_root":
+        kb = build_symbol_card_keyboard(symbol, menu="root")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    # Остальные верхнеуровневые кнопки пока как заглушки
+    if action == "order":
         await callback.answer(
             f"Модуль ордеров для {symbol} ещё в разработке.",
             show_alert=False,
         )
-    elif action == "logs":
+        return
+
+    if action == "logs":
         await callback.answer(
             f"Просмотр логов для {symbol} появится на следующих шагах.",
             show_alert=False,
         )
-    elif action == "menu":
+        return
+
+    if action == "menu":
         await callback.answer(
             "Меню карточки будет расширено на следующих шагах.",
             show_alert=False,
         )
-    else:
-        await callback.answer("Неизвестное действие карточки.", show_alert=False)
+        return
+
+    # На всякий случай — дефолт
+    await callback.answer("Неизвестное действие карточки.", show_alert=False)
