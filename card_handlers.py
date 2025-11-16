@@ -13,24 +13,25 @@ router = Router()
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
 STORAGE_PATH = Path(STORAGE_DIR)
 
-# Маппинг стикеров на символы.
-# Делаем по двум ключам: file_unique_id и file_id, чтобы наверняка.
-STICKER_UNIQUE_ID_TO_SYMBOL: dict[str, str] = {
+# Маппинг всех известных ID стикеров (основные файлы + превью) на символ.
+STICKER_ID_TO_SYMBOL: dict[str, str] = {
     # BNBUSDC
-    "AQADJocAAka7YUhy": "BNBUSDC",
-    # ETHUSDC
-    "AQADxokAAv_wWEhy": "ETHUSDC",
-    # BTCUSDC
-    "AQADJogAAtfnYUhy": "BTCUSDC",
-}
-
-STICKER_FILE_ID_TO_SYMBOL: dict[str, str] = {
-    # BNBUSDC
+    "CAACAgIAAxkBAAE9djtpDD842Hiibb4OWsspe5QgYvQsgwACJocAAka7YUijem2oBO1AazYE": "BNBUSDC",
+    "AgADJocAAka7YUg": "BNBUSDC",
     "AAMCAgADGQEAAT12O2kMPzjYeKJtvg5ayyl7lCBi9CyDAAImhwACRrthSKN6bagE7UBrAQAHbQADNgQ": "BNBUSDC",
+    "AQADJocAAka7YUhy": "BNBUSDC",
+
     # ETHUSDC
+    "CAACAgIAAxkBAAE9ddhpDCyOcuY8oEj0_mPe_E1zbEa-ogACxokAAv_wWEir8uUsEqgkvDYE": "ETHUSDC",
+    "AgADxokAAv_wWEg": "ETHUSDC",
     "AAMCAgADGQEAAT112GkMLI5y5jygSPT-Y978TXNsRr6iAALGiQAC__BYSKvy5SwSqCS8AQAHbQADNgQ": "ETHUSDC",
+    "AQADxokAAv_wWEhy": "ETHUSDC",
+
     # BTCUSDC
+    "CAACAgIAAxkBAAE9dPtpDAnY_j75m55h8ctPgwzLP4fy8gACJogAAtfnYUiiLR_pVyWZPTYE": "BTCUSDC",
+    "AgADJogAAtfnYUg": "BTCUSDC",
     "AAMCAgADGQEAAT10-2kMCdj-PvmbnmHxy0-DDMs_h_LyAAImiAAC1-dhSKItH-lXJZk9AQAHbQADNgQ": "BTCUSDC",
+    "AQADJogAAtfnYUhy": "BTCUSDC",
 }
 
 
@@ -84,6 +85,27 @@ def _load_symbols_list() -> list[str] | None:
     return symbols
 
 
+def _extract_sticker_ids(sticker: types.Sticker) -> set[str]:
+    """Собрать все доступные ID стикера и его превью (file_id и file_unique_id)."""
+    ids: set[str] = set()
+
+    for attr in ("file_id", "file_unique_id"):
+        val = getattr(sticker, attr, None)
+        if val:
+            ids.add(val)
+
+    for sub_name in ("thumb", "thumbnail"):
+        sub = getattr(sticker, sub_name, None)
+        if not sub:
+            continue
+        for attr in ("file_id", "file_unique_id"):
+            val = getattr(sub, attr, None)
+            if val:
+                ids.add(val)
+
+    return ids
+
+
 @router.message(Command("card"))
 async def cmd_card(message: types.Message) -> None:
     """
@@ -110,7 +132,7 @@ async def cmd_card(message: types.Message) -> None:
         return
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol, menu="root")
+    keyboard = build_symbol_card_keyboard(symbol, menu="root")  # верхний уровень
 
     await message.answer(
         f"<pre>{text_block}</pre>",
@@ -131,12 +153,12 @@ async def on_card_sticker(message: types.Message) -> None:
     if not sticker:
         return
 
-    unique_id = sticker.file_unique_id
-    file_id = sticker.file_id
-
-    symbol = STICKER_UNIQUE_ID_TO_SYMBOL.get(unique_id)
-    if not symbol:
-        symbol = STICKER_FILE_ID_TO_SYMBOL.get(file_id)
+    all_ids = _extract_sticker_ids(sticker)
+    symbol: str | None = None
+    for sid in all_ids:
+        symbol = STICKER_ID_TO_SYMBOL.get(sid)
+        if symbol:
+            break
 
     if not symbol:
         # Не наш стикер — выходим.
@@ -145,7 +167,7 @@ async def on_card_sticker(message: types.Message) -> None:
     symbol = symbol.upper()
 
     text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol, menu="root")
+    keyboard = build_symbol_card_keyboard(symbol, menu="root")  # верхний уровень
 
     await message.answer(
         f"<pre>{text_block}</pre>",
