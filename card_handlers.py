@@ -325,8 +325,8 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         # Нельзя менять бюджет при активной кампании.
         if _has_active_campaign(symbol):
             await callback.answer(
-                f"Нельзя менять BUDGET для {symbol} при активной кампании.
-Сначала остановите кампанию.",
+                f"Нельзя менять BUDGET для {symbol} при активной кампании.\n"
+                "Сначала остановите кампанию.",
                 show_alert=True,
             )
             return
