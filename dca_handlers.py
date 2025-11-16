@@ -17,6 +17,7 @@ from dca_config import (
 from trade_mode import get_trade_mode, is_sim_mode, is_live_mode
 from dca_models import DCAConfigPerSymbol
 from grid_log import log_grid_created, log_grid_rolled, log_grid_manualy_closed
+from dca_status import build_dca_status_text
 
 router = Router()
 
@@ -734,8 +735,10 @@ async def cmd_dca(message: types.Message) -> None:
                 if grid.get("campaign_end_ts"):
                     # уже завершена — пропускаем
                     continue
-                lines = _build_status_lines_from_grid(grid)
-                await message.answer("\n".join(lines))
+
+                symbol = str(grid.get("symbol") or path.name.replace("_grid.json", "")).upper()
+                text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
+                await message.answer(f"<pre>{text_block}</pre>", parse_mode="HTML")
                 count += 1
 
             if count == 0:
@@ -754,8 +757,10 @@ async def cmd_dca(message: types.Message) -> None:
                     grid = json.loads(raw)
                 except Exception:
                     continue
-                lines = _build_status_lines_from_grid(grid)
-                await message.answer("\n".join(lines))
+
+                symbol = str(grid.get("symbol") or path.name.replace("_grid.json", "")).upper()
+                text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
+                await message.answer(f"<pre>{text_block}</pre>", parse_mode="HTML")
                 count += 1
 
             if count == 0:
@@ -772,8 +777,8 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer(f"DCA: сетка для {symbol} не найдена.")
             return
 
-        msg_lines = _build_status_lines_from_grid(grid)
-        await message.answer("\n".join(msg_lines))
+        text_block = build_dca_status_text(symbol, storage_dir=STORAGE_DIR)
+        await message.answer(f"<pre>{text_block}</pre>", parse_mode="HTML")
         return
 
 
