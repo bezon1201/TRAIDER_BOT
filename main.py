@@ -11,6 +11,7 @@ from aiogram.types import Update
 from trade_mode import router as trade_router
 from metrics import router as metrics_router
 from dca_handlers import router as dca_router
+from card_handlers import router as card_router
 from scheduler_handlers import router as scheduler_router
 from data import router as data_router
 from scheduler import start_scheduler
@@ -33,6 +34,7 @@ dp = Dispatcher()
 dp.include_router(trade_router)
 dp.include_router(metrics_router)
 dp.include_router(dca_router)
+dp.include_router(card_router)
 dp.include_router(scheduler_router)
 dp.include_router(data_router)
 
