@@ -3,12 +3,28 @@ import math
 import os
 from datetime import datetime, timezone
 
-try:
-    from trade_mode import get_trade_mode
-except ImportError:
-    # fallback: если нет модуля trade_mode, считаем что режим SIM
-    def get_trade_mode() -> str:
+
+def _get_trade_mode() -> str:
+    """Прочитать текущий режим торговли из trade_mode.json.
+
+    Если файл отсутствует или повреждён — вернуть "sim".
+    """
+    storage_dir = os.environ.get("STORAGE_DIR", ".")
+    path = os.path.join(storage_dir, "trade_mode.json")
+    if not os.path.exists(path):
         return "sim"
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mode = (data.get("mode") or "sim").lower()
+        if mode in ("sim", "live"):
+            return mode
+    except Exception:
+        # На любых ошибках не падаем, а используем sim
+        pass
+
+    return "sim"
 
 
 def _load_json(path: str):
@@ -144,7 +160,7 @@ def build_dca_status_text(symbol: str, storage_dir: str | None = None) -> str:
         return f"{symbol}\tSIM ❌\tGrid ?\nNo grid data"
 
     # 1. Шапка
-    mode_raw = (get_trade_mode() or "sim").lower()
+    mode_raw = (_get_trade_mode() or "sim").lower()
     if mode_raw == "live":
         mode_text = "LIVE ✅"
     else:
