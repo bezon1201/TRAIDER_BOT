@@ -241,6 +241,14 @@ def simulate_bar_for_symbol(symbol: str, bar: Dict[str, Any]) -> Optional[dict]:
     filled_levels = sum(1 for lvl in levels if lvl.get("filled"))
     grid["filled_levels"] = filled_levels
 
+    # Дополнительно явно храним индексы уже FILLED‑уровней,
+    # чтобы состояние сетки однозначно отражало, какие уровни были исполнены.
+    grid["filled_level_indices"] = [
+        int(lvl.get("level_index"))
+        for lvl in levels
+        if lvl.get("filled") and lvl.get("level_index") is not None
+    ]
+
     remaining_levels = total_levels - filled_levels
     if remaining_levels < 0:
         remaining_levels = 0
