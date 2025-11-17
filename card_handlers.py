@@ -17,6 +17,9 @@ from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config,
 from dca_models import DCAConfigPerSymbol
 from grid_log import log_grid_created, log_grid_manualy_closed
 from metrics import _has_any_active_campaign, load_symbols, now_for_symbols
+from coin_state import recalc_state_for_symbol
+from grid_roll import roll_grid_for_symbol
+
 
 
 router = Router()
@@ -243,9 +246,10 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
       - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
 
     Подменю RUN:
-      - "card:dca_run_start:<symbol>"   → START (заглушка)
-      - "card:dca_run_stop:<symbol>"    → STOP (заглушка)
-      - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
+      - "card:dca_run_start:<symbol>"     → START
+      - "card:dca_run_stop:<symbol>"      → STOP
+      - "card:dca_run_rollover:<symbol>"  → ROLLOVER (аналог /market force)
+      - "card:back_dca:<symbol>"          → ↩️ назад в DCA-меню
 
     Подменю MENU:
       - "card:menu_mode:<symbol>"      → открыть подменю MODE (LIVE / SIM / ↩️)
@@ -630,6 +634,70 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             f"MENU/MODE SIM для {symbol} будет добавлен позже.",
             show_alert=False,
         )
+        return
+
+
+    if action == "dca_run_rollover":
+        # Нажатие кнопки ROLLOVER в подменю RUN.
+        # Поведение:
+        # - запускаем аналог /market force (для всех пар из symbols_list.json)
+        # - в чат ничего не шлём
+        # - даём короткий toast
+        # - перевыдаём карточку и остаёмся в подменю RUN.
+        symbols = _load_symbols_list()
+        if not symbols:
+            await callback.answer(
+                "ROLLOVER: файл symbols_list.json пуст или не найден.",
+                show_alert=True,
+            )
+            return
+
+        now_ts = int(time.time())
+        updated = 0
+        lines: list[str] = []
+
+        for sym in symbols:
+            try:
+                state = recalc_state_for_symbol(sym, now_ts=now_ts)
+            except Exception:
+                # Если по какой-то паре не удалось пересчитать state — просто пропускаем.
+                continue
+
+            try:
+                roll_grid_for_symbol(sym)
+            except Exception:
+                # Ошибки ролла сетки не роняют весь процесс.
+                pass
+
+            mode = str(state.get("market_mode", "RANGE")).upper()
+            lines.append(f"{sym}:{mode}")
+            updated += 1
+
+        body = ", ".join(lines) if lines else "нет данных"
+        msg = f"ROLLOVER: обновили state/сетки для {updated} пар. {body}"
+        if len(msg) > 180:
+            msg = msg[:177] + "..."
+
+        # Короткое уведомление (toast) — без отдельного сообщения в чат.
+        await callback.answer(msg, show_alert=False)
+
+        # Перевыдаём карточку и остаёмся в подменю RUN.
+        if callback.message:
+            text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
+            keyboard = build_symbol_card_keyboard(symbol, menu="dca_run")
+            try:
+                await callback.message.edit_text(
+                    f"<pre>{text_block}</pre>",
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                # Fallback: если не получилось отредактировать старое сообщение — шлём новое.
+                await callback.message.answer(
+                    f"<pre>{text_block}</pre>",
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
         return
 
     # ---------- Подменю MENU/PAIR ----------

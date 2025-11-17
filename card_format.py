@@ -124,7 +124,7 @@ def _build_dca_config_keyboard(symbol: str) -> InlineKeyboardMarkup:
 def _build_dca_run_keyboard(symbol: str) -> InlineKeyboardMarkup:
     """
     Подменю RUN:
-    [START] [STOP]
+    [START] [STOP] [ROLLOVER]
     [↩️]  — назад в DCA-меню.
     """
     symbol = (symbol or "").upper()
@@ -138,6 +138,10 @@ def _build_dca_run_keyboard(symbol: str) -> InlineKeyboardMarkup:
             text="STOP",
             callback_data=f"card:dca_run_stop:{symbol}",
         ),
+        InlineKeyboardButton(
+            text="ROLLOVER",
+            callback_data=f"card:dca_run_rollover:{symbol}",
+        ),
     ]
 
     row2 = [
@@ -149,6 +153,7 @@ def _build_dca_run_keyboard(symbol: str) -> InlineKeyboardMarkup:
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[row1, row2])
     return keyboard
+
 
 
 
