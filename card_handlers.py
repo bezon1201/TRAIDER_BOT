@@ -8,7 +8,7 @@ from aiogram.filters import Command
 
 from card_format import build_symbol_card_text, build_symbol_card_keyboard
 from dca_handlers import get_symbol_min_notional
-from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config
+from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config, validate_budget_vs_min_notional
 from dca_models import DCAConfigPerSymbol
 
 
