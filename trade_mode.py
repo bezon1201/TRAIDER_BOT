@@ -210,7 +210,7 @@ async def _notify_trade_mode_changed(message: types.Message, old_mode: str, new_
         await message.answer(_format_changed(old_mode, new_mode))
         return
 
-    # Есть связанный callback от карточки — шлём toast и обновляем карточку.
+    # Есть связанный callback от карточки — шлём toast и создаём новую карточку внизу.
     try:
         # Toast по callback_query_id
         await message.bot.answer_callback_query(
@@ -222,19 +222,18 @@ async def _notify_trade_mode_changed(message: types.Message, old_mode: str, new_
         # Toast — это лишь косметика, не блокируем обновление карточки
         pass
 
-    # Пересобираем карточку для символа из подменю MODE.
+    # Новая карточка внизу чата (центр управления остаётся под рукой).
     try:
         text_block = build_symbol_card_text(pending.symbol, storage_dir=STORAGE_DIR)
         keyboard = build_symbol_card_keyboard(pending.symbol, menu="menu_mode")
-        await message.bot.edit_message_text(
+        await message.bot.send_message(
             chat_id=pending.message_chat_id,
-            message_id=pending.message_id,
             text=f"<pre>{text_block}</pre>",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
     except Exception:
-        # Если не получилось отредактировать — просто игнорируем.
+        # Если не получилось отправить — просто игнорируем.
         pass
 
 
