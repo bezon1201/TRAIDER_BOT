@@ -19,6 +19,8 @@ from grid_log import log_grid_created, log_grid_manualy_closed
 from metrics import _has_any_active_campaign, load_symbols, now_for_symbols
 from coin_state import recalc_state_for_symbol
 from grid_roll import roll_grid_for_symbol
+from trade_mode import cmd_trade
+
 
 
 
@@ -623,15 +625,48 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # ---------- Подменю MENU/MODE ----------
     if action == "menu_mode_live":
+        # Нажатие кнопки LIVE в подменю MENU/MODE.
+        # Поведение:
+        # - эквивалент команды /trade mode live;
+        # - все проверки и PIN — через существующую логику trade_mode;
+        # - пользователю показываем toast и сообщение с запросом PIN.
+        if not callback.message:
+            await callback.answer("Не удалось обработать запрос MENU/MODE LIVE.", show_alert=True)
+            return
+
+        # Эмулируем команду /trade mode live на том же сообщении.
+        msg = callback.message
+        old_text = msg.text
+        try:
+            msg.text = "/trade mode live"
+            await cmd_trade(msg)
+        finally:
+            msg.text = old_text
+
+        # Короткое уведомление (toast), что запрос принят.
         await callback.answer(
-            f"MENU/MODE LIVE для {symbol} будет добавлен позже.",
+            "Запрос смены режима на LIVE отправлен.\nВведите PIN одним сообщением.",
             show_alert=False,
         )
         return
 
     if action == "menu_mode_sim":
+        # Нажатие кнопки SIM в подменю MENU/MODE.
+        # Поведение аналогично /trade mode sim.
+        if not callback.message:
+            await callback.answer("Не удалось обработать запрос MENU/MODE SIM.", show_alert=True)
+            return
+
+        msg = callback.message
+        old_text = msg.text
+        try:
+            msg.text = "/trade mode sim"
+            await cmd_trade(msg)
+        finally:
+            msg.text = old_text
+
         await callback.answer(
-            f"MENU/MODE SIM для {symbol} будет добавлен позже.",
+            "Запрос смены режима на SIM отправлен.\nВведите PIN одним сообщением.",
             show_alert=False,
         )
         return
