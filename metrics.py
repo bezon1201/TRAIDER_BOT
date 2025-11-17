@@ -489,6 +489,55 @@ async def cmd_symbols(message: types.Message):
     await message.answer(f"Список торговых пар обновлён:\n{body}")
 
 
+
+@router.message()
+async def handle_symbols_reply_from_menu(message: types.Message):
+    """
+    Обработка ответа на запрос списка торговых пар из меню
+    (кнопка MENU → PAIR → COINS).
+    Ожидаем, что пользователь ответит на специальное сообщение-приглашение.
+    """
+    if not message.reply_to_message:
+        return
+
+    reply_text = message.reply_to_message.text or ""
+    # Узкий маркер, чтобы не ловить лишние ответы
+    if "Текущий список будет полностью заменён." not in reply_text:
+        return
+
+    args = (message.text or "").strip()
+    if not args:
+        await message.answer("Не удалось распознать ни одной торговой пары.")
+        return
+
+    # Повторяем ту же защиту, что и в /symbols:
+    # запрещаем менять список монет при активных DCA-кампаниях.
+    if _has_any_active_campaign():
+        await message.answer(
+            "Symbols: есть активные DCA-кампании. "
+            "Сначала остановите их через /dca stop <symbol> для всех активных, затем меняйте список через /symbols ..."
+        )
+        return
+
+    raw_items = args.split(",")
+    symbols: List[str] = []
+    for item in raw_items:
+        s = item.strip()
+        if not s:
+            continue
+        s_up = s.upper()
+        if s_up not in symbols:
+            symbols.append(s_up)
+
+    if not symbols:
+        await message.answer("Не удалось распознать ни одной торговой пары.")
+        return
+
+    save_symbols(symbols)
+    body = "\n".join(symbols)
+    await message.answer(f"Список торговых пар обновлён:\n{body}")
+
+
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
     try:

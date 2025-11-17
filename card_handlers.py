@@ -16,6 +16,7 @@ from dca_handlers import (
 from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config, validate_budget_vs_min_notional, zero_symbol_budget
 from dca_models import DCAConfigPerSymbol
 from grid_log import log_grid_created, log_grid_manualy_closed
+from metrics import _has_any_active_campaign
 
 
 router = Router()
@@ -633,10 +634,30 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # ---------- Подменю MENU/PAIR ----------
     if action == "menu_pair_coins":
-        await callback.answer(
-            f"MENU/PAIR COINS для {symbol} будет добавлен позже.",
-            show_alert=False,
+        # Из подменю MENU/PAIR: запросить новый список торговых пар.
+        # 1) Запрещаем изменения, если есть активные DCA-кампании.
+        if _has_any_active_campaign():
+            await callback.answer(
+                "Symbols: есть активные DCA-кампании. "
+                "Сначала остановите их через /dca stop <symbol> для всех активных, затем меняйте список через /symbols ...",
+                show_alert=True,
+            )
+            return
+
+        # 2) Просим пользователя ввести список пар через запятую.
+        prompt = (
+            "Введите список торговых пар через запятую,\n"
+            "например: BTCUSDT,ETHUSDT,BNBUSDT.\n"
+            "Текущий список будет полностью заменён."
         )
+        if callback.message:
+            await callback.message.answer(
+                prompt,
+                reply_markup=types.ForceReply(selective=False),
+            )
+
+        # Краткий toast, чтобы закрыть «часики» на кнопке.
+        await callback.answer("Ожидаю новый список пар…", show_alert=False)
         return
 
     if action == "menu_pair_refresh":
