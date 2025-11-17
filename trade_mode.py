@@ -9,6 +9,8 @@ from aiogram.filters import Command
 from aiogram.dispatcher.event.bases import SkipHandler
 from dca_config import zero_symbol_budget
 from grid_log import log_grid_manualy_closed
+from card_format import build_symbol_card_text, build_symbol_card_keyboard
+from trade_mode_ui import pop_pending_for_chat
 from dca_status import build_dca_status_text
 
 STORAGE_DIR = os.environ.get("STORAGE_DIR", ".")
@@ -190,6 +192,52 @@ async def cmd_trade(message: types.Message) -> None:
     )
 
 
+
+
+async def _notify_trade_mode_changed(message: types.Message, old_mode: str, new_mode: str) -> None:
+    """
+    Унифицированное уведомление об успешной смене режима торговли.
+
+    Если смена режима была инициирована кнопкой в карточке (MENU/MODE),
+    показываем короткий toast и пересобираем карточку для соответствующего
+    символа. В противном случае — отправляем обычное сообщение в чат.
+    """
+    chat_id = message.chat.id
+    pending = pop_pending_for_chat(chat_id)
+
+    if not pending:
+        # Обычное поведение для текстовой команды /trade: сообщение в чат.
+        await message.answer(_format_changed(old_mode, new_mode))
+        return
+
+    # Есть связанный callback от карточки — шлём toast и обновляем карточку.
+    try:
+        # Toast по callback_query_id
+        await message.bot.answer_callback_query(
+            callback_query_id=pending.callback_query_id,
+            text=_format_changed(old_mode, new_mode),
+            show_alert=False,
+        )
+    except Exception:
+        # Toast — это лишь косметика, не блокируем обновление карточки
+        pass
+
+    # Пересобираем карточку для символа из подменю MODE.
+    try:
+        text_block = build_symbol_card_text(pending.symbol, storage_dir=STORAGE_DIR)
+        keyboard = build_symbol_card_keyboard(pending.symbol, menu="menu_mode")
+        await message.bot.edit_message_text(
+            chat_id=pending.message_chat_id,
+            message_id=pending.message_id,
+            text=f"<pre>{text_block}</pre>",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    except Exception:
+        # Если не получилось отредактировать — просто игнорируем.
+        pass
+
+
 @router.message()
 async def handle_trade_pin(message: types.Message) -> None:
     """Обработка PIN для смены режима торговли.
@@ -295,4 +343,4 @@ async def handle_trade_pin(message: types.Message) -> None:
 
     set_trade_mode(new_mode)
     _log_trade_mode_change(old_mode, new_mode)
-    await message.answer(_format_changed(old_mode, new_mode))
+    await _notify_trade_mode_changed(message, old_mode, new_mode)

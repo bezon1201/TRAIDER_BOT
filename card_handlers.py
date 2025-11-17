@@ -20,6 +20,7 @@ from metrics import _has_any_active_campaign, load_symbols, now_for_symbols
 from coin_state import recalc_state_for_symbol
 from grid_roll import roll_grid_for_symbol
 from trade_mode import cmd_trade
+from trade_mode_ui import set_pending_from_card
 
 
 
@@ -653,6 +654,16 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             await callback.answer("Не удалось обработать запрос MENU/MODE LIVE.", show_alert=True)
             return
 
+        # Сохраняем контекст для последующего toast + обновления карточки после PIN.
+        chat_id = callback.from_user.id if callback.from_user else callback.message.chat.id
+        set_pending_from_card(
+            chat_id=chat_id,
+            callback_query_id=callback.id,
+            symbol=symbol,
+            message_chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+        )
+
         # Эмулируем команду /trade mode live через адаптер _CardFakeMessage.
         fake_message = _CardFakeMessage(callback.message, "/trade mode live")
         await cmd_trade(fake_message)
@@ -671,6 +682,15 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             await callback.answer("Не удалось обработать запрос MENU/MODE SIM.", show_alert=True)
             return
 
+        chat_id = callback.from_user.id if callback.from_user else callback.message.chat.id
+        set_pending_from_card(
+            chat_id=chat_id,
+            callback_query_id=callback.id,
+            symbol=symbol,
+            message_chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+        )
+
         fake_message = _CardFakeMessage(callback.message, "/trade mode sim")
         await cmd_trade(fake_message)
 
@@ -679,6 +699,7 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             show_alert=False,
         )
         return
+
 
 
     if action == "dca_run_rollover":
