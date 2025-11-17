@@ -420,7 +420,7 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
 
 
-@router.message(F.text, ~Command())
+@router.message(F.text, ~F.text.startswith("/"))
 async def on_text_for_config_inputs(message: types.Message) -> None:
     """
     Обработка текстового ввода после нажатия CONFIG → BUDGET или CONFIG → LEVELS.
