@@ -41,6 +41,7 @@ STICKER_ID_TO_SYMBOL: dict[str, str] = {
 # Простое состояние ожидания ввода бюджета по чату.
 # Ключ: chat_id, значение: словарь с symbol.
 _WAITING_BUDGET: dict[int, dict] = {}
+_WAITING_LEVELS: dict[int, dict] = {}
 
 
 def _load_symbols_list() -> list[str] | None:
@@ -345,10 +346,26 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         return
 
     if action == "dca_cfg_levels":
-        await callback.answer(
-            f"CONFIG/LEVELS для {symbol} будет добавлен позже.",
-            show_alert=False,
+        # Нельзя менять levels при активной кампании.
+        if _has_active_campaign(symbol):
+            await callback.answer(
+                f"Нельзя менять LEVELS для {symbol} при активной кампании.\n"
+                "Сначала остановите кампанию.",
+                show_alert=True,
+            )
+            return
+
+        # Готовимся принять число от пользователя.
+        if chat_id is not None:
+            _WAITING_LEVELS[chat_id] = {"symbol": symbol}
+
+        cfg = get_symbol_config(symbol)
+        current_levels = int(getattr(cfg, "levels_count", 0) or 0) if cfg else 0
+        await callback.message.answer(
+            f"Введи новое количество LEVELS для {symbol}.\n"
+            f"Текущее значение: {current_levels}",
         )
+        await callback.answer()
         return
 
     if action == "dca_cfg_list":
@@ -402,74 +419,137 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
     await callback.answer("Неизвестное действие карточки.", show_alert=False)
 
 
-@router.message(F.text)
-async def on_text_for_budget(message: types.Message) -> None:
-    """
-    Обработка текстового ввода после нажатия CONFIG → BUDGET.
 
-    Ждём число, обновляем budget_usdc в конфиге и перевыдаём карточку
-    на том же уровне меню (CONFIG).
+@router.message(F.text)
+async def on_text_for_config_inputs(message: types.Message) -> None:
+    """
+    Обработка текстового ввода после нажатия CONFIG → BUDGET или CONFIG → LEVELS.
+
+    Если мы не ждём никакого ввода, сообщение просто передаётся дальше.
     """
     chat_id = message.chat.id
-    ctx = _WAITING_BUDGET.get(chat_id)
-    if not ctx:
-        # Ничего не ждём — пропускаем сообщение дальше по цепочке хэндлеров.
-        return
 
-    symbol = (ctx.get("symbol") or "").upper()
-    if not symbol:
-        _WAITING_BUDGET.pop(chat_id, None)
+    ctx_budget = _WAITING_BUDGET.get(chat_id)
+    ctx_levels = _WAITING_LEVELS.get(chat_id)
+
+    if not ctx_budget and not ctx_levels:
+        # Ничего не ждём — пропускаем сообщение дальше по цепочке хэндлеров.
         return
 
     text = (message.text or "").strip()
 
-    # Пытаемся распарсить число.
-    try:
-        new_budget = float(text.replace(",", "."))
-    except Exception:
-        await message.answer(
-            "Некорректное значение бюджета. Введи число, например 300 или 150.5."
-        )
-        return
+    # ----- Режим ввода BUDGET -----
+    if ctx_budget is not None:
+        symbol = (ctx_budget.get("symbol") or "").upper()
+        if not symbol:
+            _WAITING_BUDGET.pop(chat_id, None)
+            return
 
-    if new_budget <= 0:
-        await message.answer("Бюджет должен быть больше нуля.")
-        return
+        # Пытаемся распарсить число.
+        try:
+            new_budget = float(text.replace(",", "."))
+        except Exception:
+            await message.answer(
+                "Некорректное значение бюджета. Введи число, например 300 или 150.5."
+            )
+            return
 
-    # На всякий случай ещё раз проверим активную кампанию.
-    if _has_active_campaign(symbol):
+        if new_budget <= 0:
+            await message.answer("Бюджет должен быть больше нуля.")
+            return
+
+        # На всякий случай ещё раз проверим активную кампанию.
+        if _has_active_campaign(symbol):
+            _WAITING_BUDGET.pop(chat_id, None)
+            await message.answer(
+                f"Нельзя менять BUDGET для {symbol} при активной кампании.\n"
+                "Сначала остановите кампанию.",
+            )
+            return
+
+        # Обновляем конфиг так же, как в /dca set <symbol> budget <B>.
+        cfg = get_symbol_config(symbol)
+        if not cfg:
+            cfg = DCAConfigPerSymbol(
+                symbol=symbol,
+                budget_usdc=new_budget,
+                levels_count=0,
+                enabled=True,
+            )
+        else:
+            cfg.budget_usdc = new_budget
+
+        cfg.updated_ts = int(time.time())
+        upsert_symbol_config(cfg)
+        save_dca_config(load_dca_config())
+
+        # Выходим из режима ожидания.
         _WAITING_BUDGET.pop(chat_id, None)
+
+        # Перевыдаём карточку символа с обновлённым бюджетом.
+        text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
+        keyboard = build_symbol_card_keyboard(symbol, menu="dca_config")
+
         await message.answer(
-            f"Нельзя менять BUDGET для {symbol} при активной кампании.\n"
-            "Сначала остановите кампанию.",
+            f"<pre>{text_block}</pre>",
+            parse_mode="HTML",
+            reply_markup=keyboard,
         )
         return
 
-    # Обновляем конфиг так же, как в /dca set <symbol> budget <B>.
-    cfg = get_symbol_config(symbol)
-    if not cfg:
-        cfg = DCAConfigPerSymbol(
-            symbol=symbol,
-            budget_usdc=new_budget,
-            levels=0,
-            enabled=True,
+    # ----- Режим ввода LEVELS -----
+    if ctx_levels is not None:
+        symbol = (ctx_levels.get("symbol") or "").upper()
+        if not symbol:
+            _WAITING_LEVELS.pop(chat_id, None)
+            return
+
+        try:
+            new_levels = int(text)
+        except Exception:
+            await message.answer(
+                "Некорректное значение LEVELS. Введи целое число, например 10."
+            )
+            return
+
+        if new_levels <= 0:
+            await message.answer("LEVELS должно быть положительным.")
+            return
+
+        # Проверяем активную кампанию.
+        if _has_active_campaign(symbol):
+            _WAITING_LEVELS.pop(chat_id, None)
+            await message.answer(
+                f"Нельзя менять LEVELS для {symbol} при активной кампании.\n"
+                "Сначала остановите кампанию.",
+            )
+            return
+
+        # Обновляем конфиг так же, как в /dca set <symbol> levels <N>.
+        cfg = get_symbol_config(symbol)
+        if not cfg:
+            cfg = DCAConfigPerSymbol(
+                symbol=symbol,
+                budget_usdc=0.0,
+                levels_count=new_levels,
+                enabled=True,
+            )
+        else:
+            cfg.levels_count = new_levels
+
+        cfg.updated_ts = int(time.time())
+        upsert_symbol_config(cfg)
+        save_dca_config(load_dca_config())
+
+        # Выходим из режима ожидания.
+        _WAITING_LEVELS.pop(chat_id, None)
+
+        # Перевыдаём карточку символа с обновлённым количеством уровней.
+        text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
+        keyboard = build_symbol_card_keyboard(symbol, menu="dca_config")
+
+        await message.answer(
+            f"<pre>{text_block}</pre>",
+            parse_mode="HTML",
+            reply_markup=keyboard,
         )
-    else:
-        cfg.budget_usdc = new_budget
-
-    cfg.updated_ts = int(time.time())
-    upsert_symbol_config(cfg)
-    save_dca_config(load_dca_config())
-
-    # Выходим из режима ожидания.
-    _WAITING_BUDGET.pop(chat_id, None)
-
-    # Перевыдаём карточку символа с обновлённым бюджетом.
-    text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
-    keyboard = build_symbol_card_keyboard(symbol, menu="dca_config")
-
-    await message.answer(
-        f"<pre>{text_block}</pre>",
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )

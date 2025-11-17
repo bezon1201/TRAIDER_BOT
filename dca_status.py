@@ -212,6 +212,20 @@ def build_dca_status_text(symbol: str, storage_dir: str | None = None) -> str:
     filled_levels = grid.get("filled_levels")
     remaining_levels = grid.get("remaining_levels")
 
+    # Если кампания уже завершена, подменяем общее количество уровней
+    # на актуальное значение из DCA-конфига.
+    if grid.get("campaign_end_ts"):
+        try:
+            from dca_config import get_symbol_config
+            cfg = get_symbol_config(symbol)
+        except Exception:
+            cfg = None
+
+        if cfg is not None:
+            lv = getattr(cfg, "levels_count", None)
+            if lv is not None:
+                total_levels = lv
+
     total_str = str(total_levels) if total_levels is not None else "--"
     filled_str = str(filled_levels) if filled_levels is not None else "--"
     remaining_str = str(remaining_levels) if remaining_levels is not None else "--"
