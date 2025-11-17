@@ -232,7 +232,7 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
     Подменю DCA (уровень 1):
       - "card:dca_cfg:<symbol>"     → открыть CONFIG-меню
       - "card:dca_run:<symbol>"     → открыть RUN-меню
-      - "card:dca_status:<symbol>"  → открыть STATUS-меню
+      - "card:menu:<symbol>"        → открыть MENU-меню
       - "card:back_root:<symbol>"   → ↩️ назад на верхний уровень
 
     Подменю CONFIG:
@@ -246,10 +246,11 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
       - "card:dca_run_stop:<symbol>"    → STOP (заглушка)
       - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
 
-    Подменю STATUS:
-      - "card:dca_status_all:<symbol>"    → ALL (заглушка)
-      - "card:dca_status_active:<symbol>" → ACTIVE (заглушка)
-      - "card:back_dca:<symbol>"          → ↩️ назад в DCA-меню
+    Подменю MENU:
+      - "card:menu_mode:<symbol>"      → MODE (заглушка)
+      - "card:menu_pair:<symbol>"      → PAIR (заглушка)
+      - "card:menu_scheduler:<symbol>" → SCHEDULER (заглушка)
+      - "card:back_dca:<symbol>"       → ↩️ назад в DCA-меню
     """
     data = callback.data or ""
     parts = data.split(":", 2)
@@ -285,10 +286,13 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         return
 
     if action == "menu":
-        await callback.answer(
-            "Меню карточки будет расширено на следующих шагах.",
-            show_alert=False,
-        )
+        # Открыть подменю MENU (MODE / PAIR / SCHEDULER / ↩️)
+        kb = build_symbol_card_keyboard(symbol, menu="menu")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
         return
 
     # ---------- Подменю DCA, уровень 1 ----------
@@ -581,17 +585,24 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
                 )
         return
 
-    # ---------- Подменю STATUS ----------
-    if action == "dca_status_all":
+    # ---------- Подменю MENU ----------
+    if action == "menu_mode":
         await callback.answer(
-            f"STATUS/ALL для {symbol} будет добавлен позже.",
+            f"MENU/MODE для {symbol} будет добавлен позже.",
             show_alert=False,
         )
         return
 
-    if action == "dca_status_active":
+    if action == "menu_pair":
         await callback.answer(
-            f"STATUS/ACTIVE для {symbol} будет добавлен позже.",
+            f"MENU/PAIR для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "menu_scheduler":
+        await callback.answer(
+            f"MENU/SCHEDULER для {symbol} будет добавлен позже.",
             show_alert=False,
         )
         return

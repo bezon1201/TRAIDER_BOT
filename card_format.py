@@ -56,7 +56,7 @@ def _build_root_keyboard(symbol: str) -> InlineKeyboardMarkup:
 def _build_dca_keyboard(symbol: str) -> InlineKeyboardMarkup:
     """
     Подменю для DCA (уровень 1):
-    [CONFIG] [RUN] [STATUS]
+    [CONFIG] [RUN] [MENU]
     [↩️]  — назад к верхнему уровню.
     """
     symbol = (symbol or "").upper()
@@ -71,8 +71,8 @@ def _build_dca_keyboard(symbol: str) -> InlineKeyboardMarkup:
             callback_data=f"card:dca_run:{symbol}",
         ),
         InlineKeyboardButton(
-            text="STATUS",
-            callback_data=f"card:dca_status:{symbol}",
+            text="MENU",
+            callback_data=f"card:menu:{symbol}",
         ),
     ]
 
@@ -151,6 +151,41 @@ def _build_dca_run_keyboard(symbol: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+
+def _build_menu_keyboard(symbol: str) -> InlineKeyboardMarkup:
+    """
+    Подменю MENU:
+    [MODE] [PAIR]
+    [SCHEDULER] [↩️] — назад в DCA-меню.
+    """
+    symbol = (symbol or "").upper()
+
+    row1 = [
+        InlineKeyboardButton(
+            text="MODE",
+            callback_data=f"card:menu_mode:{symbol}",
+        ),
+        InlineKeyboardButton(
+            text="PAIR",
+            callback_data=f"card:menu_pair:{symbol}",
+        ),
+    ]
+
+    row2 = [
+        InlineKeyboardButton(
+            text="SCHEDULER",
+            callback_data=f"card:menu_scheduler:{symbol}",
+        ),
+        InlineKeyboardButton(
+            text="↩️",
+            callback_data=f"card:back_dca:{symbol}",
+        ),
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+    return keyboard
+
+
 def _build_dca_status_keyboard(symbol: str) -> InlineKeyboardMarkup:
     """
     Подменю STATUS:
@@ -187,10 +222,10 @@ def build_symbol_card_keyboard(symbol: str, menu: str = "root") -> InlineKeyboar
 
     menu:
       - "root"        — верхний уровень (DCA / ORDER / LOGS / MENU)
-      - "dca"         — подменю DCA (CONFIG / RUN / STATUS / ↩️)
+      - "dca"         — подменю DCA (CONFIG / RUN / MENU / ↩️)
       - "dca_config"  — CONFIG (BUDGET / LEVELS / LIST / ↩️)
       - "dca_run"     — RUN (START / STOP / ↩️)
-      - "dca_status"  — STATUS (ALL / ACTIVE / ↩️)
+      - "menu"        — MENU (MODE / PAIR / SCHEDULER / ↩️)
     """
     if menu == "dca":
         return _build_dca_keyboard(symbol)
@@ -198,6 +233,6 @@ def build_symbol_card_keyboard(symbol: str, menu: str = "root") -> InlineKeyboar
         return _build_dca_config_keyboard(symbol)
     if menu == "dca_run":
         return _build_dca_run_keyboard(symbol)
-    if menu == "dca_status":
-        return _build_dca_status_keyboard(symbol)
+    if menu == "menu":
+        return _build_menu_keyboard(symbol)
     return _build_root_keyboard(symbol)
