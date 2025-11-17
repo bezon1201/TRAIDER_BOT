@@ -4,7 +4,7 @@ import os
 import time
 import asyncio
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from aiogram import Bot
 from trade_mode import is_sim_mode
@@ -14,19 +14,29 @@ from dca_handlers import _grid_path, _has_active_campaign
 logger = logging.getLogger(__name__)
 
 
-def _normalize_price(bar: Dict[str, Any], long_key: str, short_key: str) -> float:
+def _normalize_price(bar: Dict[str, Any], *keys: str) -> float:
     """
-    Достаёт цену из бара, поддерживая оба варианта ключей:
-    - "open" / "high" / "low" / "close"
-    - "o" / "h" / "l" / "c"
-    Бросает исключение, если значение не найдено или некорректно.
+    Достаёт цену из bar по первому найденному ключу.
+    Поддерживает варианты: "open"/"o", "high"/"h", "low"/"l", "close"/"c".
     """
-    value = bar.get(long_key)
-    if value is None:
-        value = bar.get(short_key)
-    if value is None:
-        raise KeyError(long_key)
-    return float(value)
+    last_err: Optional[Exception] = None
+    for key in keys:
+        if key not in bar:
+            continue
+        value = bar.get(key)
+        if value is None:
+            continue
+        try:
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str) and value.strip():
+                return float(value)
+        except (TypeError, ValueError) as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    raise KeyError(f"Price keys {keys} not found in bar")
 
 
 def _extract_bar_ohlc(bar: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -35,6 +45,9 @@ def _extract_bar_ohlc(bar: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     {"ts", "open", "high", "low", "close"}.
     Возвращает None, если что‑то критичное отсутствует.
     """
+    if not isinstance(bar, dict):
+        return None
+
     ts = bar.get("ts") or bar.get("close_time") or bar.get("open_time")
     if ts is None:
         return None
@@ -48,12 +61,17 @@ def _extract_bar_ohlc(bar: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         logger.warning("simulate_bar_for_symbol: invalid bar OHLC: %s; error=%s", bar, e)
         return None
 
+    try:
+        ts_int = int(ts)
+    except Exception:
+        ts_int = int(time.time())
+
     return {
-        "ts": ts,
-        "low": low,
-        "high": high,
-        "open": open_,
-        "close": close,
+        "ts": ts_int,
+        "low": float(low),
+        "high": float(high),
+        "open": float(open_),
+        "close": float(close),
     }
 
 
@@ -75,271 +93,342 @@ def _append_grid_event(event: Dict[str, Any]) -> None:
         logger.warning("Failed to append grid event: %s", e)
 
 
+def _recalc_aggregates(grid: Dict[str, Any]) -> None:
+    """Пересчитать агрегаты filled_levels / remaining_levels / spent_usdc / avg_price."""
+    levels: List[Dict[str, Any]] = grid.get("current_levels") or grid.get("levels") or []
+    if not isinstance(levels, list):
+        levels = []
 
-
-async def _notify_campaign_closed(symbol: str) -> None:
-    """Отправляем в админ‑чат уведомление о завершении кампании и её статусе."""
-    token = os.environ.get("BOT_TOKEN")
-    chat_id_raw = os.environ.get("ADMIN_CHAT_ID")
-    if not token or not chat_id_raw:
-        return
+    total_levels = grid.get("total_levels")
     try:
-        chat_id = int(chat_id_raw)
-    except (TypeError, ValueError):
-        return
-
-    try:
-        bot = Bot(token=token)
+        total_levels_int = int(total_levels)
+        if total_levels_int < 0:
+            raise ValueError
     except Exception:
-        return
+        total_levels_int = len(levels)
 
-    storage_dir = os.environ.get("STORAGE_DIR", ".")
+    filled_levels = 0
+    spent_usdc = 0.0
+    total_qty = 0.0
+    total_px_qty = 0.0
 
-    # Короткое уведомление
-    try:
-        await bot.send_message(chat_id, f"Компания по {symbol} завершена")
-    except Exception:
-        logger.exception("notify_campaign_closed: failed to send short message for %s", symbol)
-
-    # Статус кампании в формате /dca status <symbol>
-    text_block = None
-    try:
-        text_block = build_dca_status_text(symbol, storage_dir=storage_dir)
-    except Exception:
-        logger.exception("notify_campaign_closed: failed to build status for %s", symbol)
-
-    if text_block:
+    for lvl in levels:
         try:
-            await bot.send_message(chat_id, f"<pre>{text_block}</pre>", parse_mode="HTML")
+            filled = bool(lvl.get("filled"))
         except Exception:
-            logger.exception("notify_campaign_closed: failed to send status for %s", symbol)
+            filled = False
+        if not filled:
+            continue
+        filled_levels += 1
+        try:
+            notional = float(lvl.get("notional") or 0.0)
+        except Exception:
+            notional = 0.0
+        spent_usdc += notional
+        try:
+            price = float(lvl.get("price") or 0.0)
+            qty = float(lvl.get("qty") or 0.0)
+        except Exception:
+            price = 0.0
+            qty = 0.0
+        total_qty += max(qty, 0.0)
+        total_px_qty += max(qty, 0.0) * price
+
+    remaining_levels = max(total_levels_int - filled_levels, 0)
+
+    if total_qty > 0:
+        avg_price = total_px_qty / total_qty
+    else:
+        avg_price = None
+
+    grid["total_levels"] = total_levels_int
+    grid["filled_levels"] = filled_levels
+    grid["remaining_levels"] = remaining_levels
+    grid["spent_usdc"] = float(spent_usdc)
+    grid["avg_price"] = avg_price
+
+
+def _apply_initial_prefill(grid: Dict[str, Any], bar_ohlc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Единоразово (per grid) отмечает уровни выше/равные текущей цене как исполненные.
+
+    Это фикс для симуляции: если часть уровней по своей цене уже должна была
+    исполниться в момент старта кампании (уровень >= текущей цены),
+    помечаем их filled до прохода по свечам, чтобы аггрегаторы (budget/levels)
+    работали корректно.
+
+    Возвращает список уровней, которые стали filled именно здесь (для логов).
+    """
+    if not isinstance(grid, dict):
+        return []
+
+    if grid.get("sim_prefill_done"):
+        return []
+
+    levels: List[Dict[str, Any]] = grid.get("current_levels") or grid.get("levels") or []
+    if not isinstance(levels, list) or not levels:
+        grid["sim_prefill_done"] = True
+        return []
 
     try:
-        await bot.session.close()
+        current_price = float(bar_ohlc.get("open"))
     except Exception:
-        pass
+        grid["sim_prefill_done"] = True
+        return []
+
+    ts = int(bar_ohlc.get("ts") or time.time())
+    newly_filled: List[Dict[str, Any]] = []
+
+    for lvl in levels:
+        try:
+            if lvl.get("filled"):
+                continue
+            price = float(lvl.get("price") or 0.0)
+        except Exception:
+            continue
+
+        # BUY‑логика: уровни, цена которых >= текущей, на реальной бирже
+        # были бы исполнены как market / taker‑лимитки.
+        if price >= current_price:
+            lvl["filled"] = True
+            lvl["filled_ts"] = ts
+            newly_filled.append(lvl)
+
+    # Отмечаем, что инициализация выполнена (даже если ничего не изменилось),
+    # чтобы не пытаться повторить её на следующих свечах.
+    grid["sim_prefill_done"] = True
+
+    if newly_filled:
+        _recalc_aggregates(grid)
+        grid.setdefault("updated_ts", int(time.time()))
+        # причину можно пометить для отладки
+        grid.setdefault("closed_reason", grid.get("closed_reason"))
+
+    return newly_filled
 
 
 def _schedule_notify_closed(symbol: str) -> None:
-    """Пытаемся асинхронно отправить уведомления админу, не блокируя симуляцию."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    """Асинхронно уведомляем админа о завершении кампании.
 
-    if loop and loop.is_running():
+    Ошибки логируем, но не пробрасываем.
+    """
+    try:
+        token = os.environ.get("BOT_TOKEN")
+        admin_chat_str = os.environ.get("ADMIN_CHAT_ID") or ""
+        if not token or not admin_chat_str:
+            return
         try:
-            loop.create_task(_notify_campaign_closed(symbol))
-        except Exception as e:
-            logger.warning("simulate_bar_for_symbol: failed to schedule notify for %s: %s", symbol, e)
-    else:
-        try:
-            asyncio.run(_notify_campaign_closed(symbol))
-        except Exception as e:
-            logger.warning("simulate_bar_for_symbol: failed to run notify for %s: %s", symbol, e)
+            admin_chat_id = int(admin_chat_str)
+        except ValueError:
+            return
+
+        loop = asyncio.get_event_loop()
+        # создаём задачу, но не ждём её
+        loop.create_task(_notify_campaign_closed(symbol, token, admin_chat_id))
+    except Exception as e:  # pragma: no cover
+        logger.warning("simulate_bar_for_symbol: failed to schedule notify for %s: %s", symbol, e)
+
+
+async def _notify_campaign_closed(symbol: str, token: str, admin_chat_id: int) -> None:
+    """Отправляем в админ‑чат уведомление о завершении кампании."""
+    try:
+        bot = Bot(token=token)
+        text = build_dca_status_text(symbol)
+        if not text:
+            text = f"DCA-кампания для {symbol} завершена."
+        await bot.send_message(chat_id=admin_chat_id, text=text)
+        await bot.session.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("simulate_bar_for_symbol: failed to run notify for %s: %s", symbol, e)
 
 
 def simulate_bar_for_symbol(symbol: str, bar: Dict[str, Any]) -> Optional[dict]:
-    """
-    Симуляция исполнения DCA‑сетки по одной свече TF1 для символа.
+    """Основной движок симуляции: применяет одну свечу TF1 к DCA‑сетке.
 
-    Алгоритм (Шаг 2.2 + 2.3):
-
-    1) Проверки:
-       - работаем только в режиме SIM;
-       - должна быть активная кампания (campaign_end_ts is null);
-       - должен существовать <SYMBOL>_grid.json.
-
-    2) Нормализуем бар к виду {ts, open, high, low, close}.
-
-    3) Для каждого уровня current_levels[]:
-       если filled == false и bar.low <= level.price → считаем FILLED,
-       ставим filled = true, filled_ts = bar_ts.
-
-    4) После каждого FILLED пересчитываем агрегаты:
-       filled_levels, remaining_levels, spent_usdc, avg_price, updated_ts.
-
-    5) Если filled_levels == total_levels или spent_usdc >= budget_usdc,
-       закрываем кампанию по бюджету/уровням (campaign_end_ts = now)
-       и пишем событие grid_budget_closed.
-
-    6) Все новые FILLED логируем как события level_filled.
+    1. Работает только в SIM‑режиме.
+    2. Требует активной кампании для symbol.
+    3. По первой свече дополнительно выполняет prefill уровней с ценой
+       >= текущей цене (open), чтобы «мгновенные» уровни не висели
+       неисполненными.
+    4. Для каждой свечи отмечает новые filled‑уровни, пересчитывает агрегаты
+       и при необходимости закрывает кампанию по бюджету/уровням.
     """
     symbol = (symbol or "").upper()
     if not symbol:
         return None
 
-    # 1. Проверяем режим торговли и наличие активной кампании
+    # 1) Только SIM‑режим
     if not is_sim_mode():
         return None
 
+    # 2) Должна быть активная кампания
     if not _has_active_campaign(symbol):
         return None
 
+    ohlc = _extract_bar_ohlc(bar)
+    if ohlc is None:
+        return None
+
     gpath = _grid_path(symbol)
-    if not gpath.exists():
-        return None
-
-    # 2. Нормализуем бар
-    norm_bar = _extract_bar_ohlc(bar)
-    if norm_bar is None:
-        return None
-
-    bar_ts = norm_bar["ts"]
-    bar_low = norm_bar["low"]
-    bar_high = norm_bar["high"]
-
-    # 3. Загружаем текущую сетку
     try:
-        raw = gpath.read_text(encoding="utf-8")
-        grid = json.loads(raw)
+        raw_grid = gpath.read_text(encoding="utf-8")
+        grid: Dict[str, Any] = json.loads(raw_grid)
     except Exception as e:
         logger.warning("simulate_bar_for_symbol: failed to read grid for %s: %s", symbol, e)
         return None
 
-    # Дополнительная защита: если кампания уже завершена — ничего не делаем
-    if grid.get("campaign_end_ts") not in (None, 0):
+    # Убедимся, что бар не старше старта кампании (защита от мусора)
+    try:
+        start_ts = int(grid.get("campaign_start_ts") or 0)
+    except Exception:
+        start_ts = 0
+    if start_ts and int(ohlc["ts"]) < start_ts:
         return None
 
-    levels = grid.get("current_levels") or []
-    if not levels:
-        # Нечего симулировать
+    levels: List[Dict[str, Any]] = grid.get("current_levels") or grid.get("levels") or []
+    if not isinstance(levels, list) or not levels:
         return grid
 
-    total_levels = grid.get("total_levels") or len(levels)
-    grid["total_levels"] = total_levels
+    # Снимок уже исполненных уровней до любых изменений (для логов)
+    before_filled_indexes = {
+        lvl.get("level_index")
+        for lvl in levels
+        if lvl.get("filled")
+    }
 
-    cfg = grid.get("config") or {}
-    budget_usdc = cfg.get("budget_usdc", grid.get("budget_usdc")) or 0.0
+    # 3) Единоразовый prefill по цене открытия первой свечи
+    newly_prefilled = _apply_initial_prefill(grid, ohlc)
+
+    # Если prefill уже полностью закрыл кампанию — дальше можно не идти.
+    # Но для простоты: проверим campaign_end_ts после пересчёта агрегатов.
     try:
-        budget_usdc = float(budget_usdc)
-    except (TypeError, ValueError):
+        campaign_end_ts = grid.get("campaign_end_ts")
+    except Exception:
+        campaign_end_ts = None
+
+    # 4) Исполнение уровней по диапазону [low, high]
+    low = float(ohlc["low"])
+    high = float(ohlc["high"])
+    bar_ts = int(ohlc["ts"])
+
+    any_filled_on_bar = False
+    for lvl in levels:
+        try:
+            if lvl.get("filled"):
+                continue
+            price = float(lvl.get("price") or 0.0)
+        except Exception:
+            continue
+
+        # Стандартное условие: цена уровня попала в диапазон свечи
+        if price < low or price > high:
+            continue
+
+        lvl["filled"] = True
+        lvl["filled_ts"] = bar_ts
+        any_filled_on_bar = True
+
+    # Если не было ни новых filled (ни prefill, ни по диапазону) — просто сохраняем сетку и выходим.
+    if not newly_prefilled and not any_filled_on_bar:
+        try:
+            gpath.write_text(json.dumps(grid, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning("simulate_bar_for_symbol: failed to write grid for %s: %s", symbol, e)
+        return grid
+
+    # 5) Пересчитать агрегаты после всех изменений
+    _recalc_aggregates(grid)
+    grid["updated_ts"] = int(time.time())
+
+    levels_after: List[Dict[str, Any]] = grid.get("current_levels") or grid.get("levels") or []
+    filled_levels = int(grid.get("filled_levels") or 0)
+    total_levels = int(grid.get("total_levels") or len(levels_after) or 0)
+    spent_usdc = float(grid.get("spent_usdc") or 0.0)
+
+    # 6) Логирование level_filled только для реально новых исполнений
+    after_filled_indexes = {
+        lvl.get("level_index")
+        for lvl in levels_after
+        if lvl.get("filled")
+    }
+    new_indexes = [idx for idx in after_filled_indexes if idx not in before_filled_indexes]
+
+    if new_indexes:
+        for lvl in levels_after:
+            idx = lvl.get("level_index")
+            if idx not in new_indexes:
+                continue
+            try:
+                event = {
+                    "event": "level_filled",
+                    "symbol": symbol,
+                    "ts": int(time.time()),
+                    "grid_id": grid.get("grid_id"),
+                    "level_index": idx,
+                    "price": lvl.get("price"),
+                    "qty": lvl.get("qty"),
+                    "notional": lvl.get("notional"),
+                    "filled_levels": filled_levels,
+                    "total_levels": total_levels,
+                    "spent_usdc": spent_usdc,
+                    "source": "sim_bar",
+                    "bar_ts": bar_ts,
+                }
+                _append_grid_event(event)
+            except Exception as e:  # pragma: no cover
+                logger.warning("simulate_bar_for_symbol: failed to log level_filled: %s", e)
+
+    # 7) Проверка на автозакрытие по бюджету/уровням
+    cfg = grid.get("config") or {}
+    try:
+        budget_usdc = float(cfg.get("budget_usdc") or 0.0)
+    except Exception:
         budget_usdc = 0.0
 
-    # 4. Отмечаем FILLED‑уровни (идемпотентно)
-    newly_filled = []
-    for level in levels:
-        if level.get("filled") is True:
-            continue
+    closed_now = False
+    if not grid.get("campaign_end_ts"):
+        closed_by_levels = total_levels > 0 and filled_levels >= total_levels
+        closed_by_budget = budget_usdc > 0 and spent_usdc >= budget_usdc
 
-        try:
-            price = float(level.get("price"))
-        except (TypeError, ValueError):
-            continue
+        if closed_by_levels or closed_by_budget:
+            now_ts = int(time.time())
+            grid["campaign_end_ts"] = now_ts
+            # Сохраняем текстовую причину для логов/отладки
+            if closed_by_levels and closed_by_budget:
+                grid["closed_reason"] = "budget_and_levels"
+            elif closed_by_budget:
+                grid["closed_reason"] = "budget"
+            elif closed_by_levels:
+                grid["closed_reason"] = "levels"
+            else:
+                grid["closed_reason"] = grid.get("closed_reason") or "auto"
+            closed_now = True
 
-        # Условие исполнения: минимум свечи коснулся цены уровня
-        if bar_low <= price <= bar_high:
-            level["filled"] = True
-            level["filled_ts"] = bar_ts
-            newly_filled.append(level)
+            try:
+                event = {
+                    "event": "grid_budget_closed",
+                    "symbol": symbol,
+                    "ts": now_ts,
+                    "grid_id": grid.get("grid_id"),
+                    "campaign_start_ts": grid.get("campaign_start_ts"),
+                    "campaign_end_ts": grid.get("campaign_end_ts"),
+                    "filled_levels": filled_levels,
+                    "total_levels": total_levels,
+                    "spent_usdc": spent_usdc,
+                    "avg_price": grid.get("avg_price"),
+                    "reason": grid.get("closed_reason") or "auto",
+                }
+                _append_grid_event(event)
+            except Exception as e:  # pragma: no cover
+                logger.warning("simulate_bar_for_symbol: failed to log grid_budget_closed: %s", e)
 
-    if not newly_filled:
-        # Для этой свечи ничего нового не заполнилось
-        return grid
-
-    # 5. Пересчёт агрегатов после всех FILLED по этой свече
-    filled_levels = sum(1 for lvl in levels if lvl.get("filled"))
-    grid["filled_levels"] = filled_levels
-
-    remaining_levels = total_levels - filled_levels
-    if remaining_levels < 0:
-        remaining_levels = 0
-    grid["remaining_levels"] = remaining_levels
-
-    spent_usdc = 0.0
-    total_qty = 0.0
-    weighted_sum = 0.0
-    for lvl in levels:
-        if not lvl.get("filled"):
-            continue
-        try:
-            notional = float(lvl.get("notional", 0.0))
-            qty = float(lvl.get("qty", 0.0))
-            price = float(lvl.get("price", 0.0))
-        except (TypeError, ValueError):
-            continue
-
-        spent_usdc += notional
-        total_qty += qty
-        weighted_sum += price * qty
-
-    grid["spent_usdc"] = spent_usdc
-    if total_qty > 0:
-        grid["avg_price"] = weighted_sum / total_qty
-    else:
-        grid["avg_price"] = None
-
-    now_ts = int(time.time())
-    grid["updated_ts"] = now_ts
-
-    # 6. Проверяем автозакрытие кампании по бюджету/уровням
-    closed_by_budget = False
-    close_reason = None
-
-    # Приоритет: если выполнены все уровни — считаем, что кампания закрыта по уровням.
-    # Если уровни ещё остаются, но бюджет исчерпан — закрытие по бюджету.
-    if filled_levels >= total_levels:
-        close_reason = "levels"
-    elif budget_usdc > 0 and spent_usdc >= budget_usdc:
-        close_reason = "budget"
-
-    if close_reason and grid.get("campaign_end_ts") in (None, 0):
-        grid["campaign_end_ts"] = now_ts
-        grid["closed_reason"] = close_reason
-        closed_by_budget = True
-
-    # Сохраняем обновлённую сетку на диск
+    # 8) Сохраняем обновлённый grid
     try:
         gpath.write_text(json.dumps(grid, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         logger.warning("simulate_bar_for_symbol: failed to write grid for %s: %s", symbol, e)
-        # Даже если не смогли записать, возвращаем обновлённый grid в память
-        return grid
 
-    # 7. Логируем события level_filled
-    grid_id = grid.get("current_grid_id", 1)
-    for lvl in newly_filled:
-        try:
-            event = {
-                "event": "level_filled",
-                "symbol": symbol,
-                "ts": now_ts,
-                "grid_id": grid_id,
-                "level_index": lvl.get("level_index"),
-                "price": lvl.get("price"),
-                "qty": lvl.get("qty"),
-                "notional": lvl.get("notional"),
-                "filled_levels": filled_levels,
-                "total_levels": total_levels,
-                "spent_usdc": spent_usdc,
-                "source": "dca_simulate",
-                "bar_ts": bar_ts,
-            }
-            _append_grid_event(event)
-        except Exception as e:  # pragma: no cover - не ломаем симуляцию из‑за логов
-            logger.warning("simulate_bar_for_symbol: failed to log level_filled: %s", e)
-
-    # 8. Логируем grid_budget_closed (если закрыли кампанию)
-    if closed_by_budget:
-        try:
-            event = {
-                "event": "grid_budget_closed",
-                "symbol": symbol,
-                "ts": now_ts,
-                "grid_id": grid_id,
-                "campaign_start_ts": grid.get("campaign_start_ts"),
-                "campaign_end_ts": grid.get("campaign_end_ts"),
-                "filled_levels": filled_levels,
-                "total_levels": total_levels,
-                "spent_usdc": spent_usdc,
-                "avg_price": grid.get("avg_price"),
-                "reason": grid.get("closed_reason") or "auto",
-            }
-            _append_grid_event(event)
-        except Exception as e:  # pragma: no cover
-            logger.warning("simulate_bar_for_symbol: failed to log grid_budget_closed: %s", e)
-
-        # Уведомляем админа о завершении кампании
+    # 9) Если только что закрыли кампанию — уведомляем админа
+    if closed_now:
         _schedule_notify_closed(symbol)
 
     return grid
