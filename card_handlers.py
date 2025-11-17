@@ -7,9 +7,15 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 
 from card_format import build_symbol_card_text, build_symbol_card_keyboard
-from dca_handlers import get_symbol_min_notional
+from dca_handlers import (
+    get_symbol_min_notional,
+    _load_state_for_symbol,
+    _build_grid_for_symbol,
+    _format_money,
+)
 from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config, validate_budget_vs_min_notional
 from dca_models import DCAConfigPerSymbol
+from grid_log import log_grid_created
 
 
 router = Router()
@@ -401,10 +407,104 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # ---------- Подменю RUN ----------
     if action == "dca_run_start":
+        # Нажатие кнопки START в подменю RUN.
+        # Логика аналогична /dca start <symbol>, но:
+        # - ошибки показываем через alert с кнопкой OK
+        # - при успехе даём короткий toast и перевыдаём карточку в том же меню.
+        if not symbol:
+            await callback.answer("DCA: символ не определён.", show_alert=True)
+            return
+
+        cfg = get_symbol_config(symbol)
+        if cfg is None:
+            await callback.answer(
+                f"DCA: конфиг для {symbol} не найден. Сначала задайте его через /dca set.",
+                show_alert=True,
+            )
+            return
+
+        state = _load_state_for_symbol(symbol)
+        if not state:
+            await callback.answer(
+                f"DCA: state для {symbol} не найден. Сначала выполните /now и /market для этой пары.",
+                show_alert=True,
+            )
+            return
+
+        min_notional = get_symbol_min_notional(symbol)
+        if min_notional <= 0:
+            await callback.answer(
+                "DCA: minNotional для пары не удалось определить. "
+                "Сначала выполните /now для этой пары, чтобы Binance-лимиты были загружены.",
+                show_alert=True,
+            )
+            return
+
+        ok, err = validate_budget_vs_min_notional(cfg, min_notional)
+        if not ok:
+            details = [
+                f"DCA: бюджет для {symbol} слишком мал относительно minNotional.",
+                f"budget={cfg.budget_usdc}$, levels={cfg.levels_count}, minNotional={min_notional}",
+            ]
+            if err:
+                details.append(f"details: {err}")
+            await callback.answer("\n".join(details), show_alert=True)
+            return
+
+        # Фактическая генерация сетки
+        try:
+            grid = _build_grid_for_symbol(symbol, cfg, state)
+        except ValueError as e:
+            await callback.answer(
+                f"DCA: не удалось построить сетку для {symbol}: {e}",
+                show_alert=True,
+            )
+            return
+
+        gpath = _grid_path(symbol)
+        try:
+            gpath.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            with gpath.open("w", encoding="utf-8") as f:
+                json.dump(grid, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            await callback.answer(
+                f"DCA: не удалось сохранить файл сетки для {symbol}: {e}",
+                show_alert=True,
+            )
+            return
+
+        # Логируем создание сетки
+        try:
+            log_grid_created(grid)
+        except Exception:
+            pass
+
+        # Короткое уведомление (toast) об успешном старте
         await callback.answer(
-            f"RUN/START для {symbol} будет добавлен позже.",
+            f"DCA start: сетка для {symbol} создана.",
             show_alert=False,
         )
+
+        # Перевыдаём карточку и остаёмся в подменю RUN
+        if callback.message:
+            text_block = build_symbol_card_text(symbol, storage_dir=STORAGE_DIR)
+            keyboard = build_symbol_card_keyboard(symbol, menu="dca_run")
+            try:
+                await callback.message.edit_text(
+                    f"<pre>{text_block}</pre>",
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                # Fallback: отправим новую карточку, если не удалось отредактировать старую.
+                await callback.message.answer(
+                    f"<pre>{text_block}</pre>",
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
         return
 
     if action == "dca_run_stop":
