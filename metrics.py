@@ -497,17 +497,30 @@ async def handle_symbols_reply_from_menu(message: types.Message):
     (кнопка MENU → PAIR → COINS).
     Ожидаем, что пользователь ответит на специальное сообщение-приглашение.
     """
+    # Обрабатываем только ответы на наш специальный промпт от бота.
     if not message.reply_to_message:
         return
 
-    reply_text = message.reply_to_message.text or ""
-    # Узкий маркер, чтобы не ловить лишние ответы
+    reply_msg = message.reply_to_message
+    reply_text = reply_msg.text or ""
+
+    # Должен быть ответ именно боту (а не другому пользователю).
+    if not getattr(reply_msg.from_user, "is_bot", False):
+        return
+
+    # Узкий маркер, чтобы не ловить лишние реплаи.
     if "Текущий список будет полностью заменён." not in reply_text:
         return
 
+    # Если пользователь всё-таки прислал команду (начинается с "/"),
+    # отдаём её обычным командным хэндлерам и не трогаем здесь.
     args = (message.text or "").strip()
     if not args:
         await message.answer("Не удалось распознать ни одной торговой пары.")
+        return
+
+    if args.startswith("/"):
+        # Пусть это обработают другие хэндлеры Command(...)
         return
 
     # Повторяем ту же защиту, что и в /symbols:
@@ -536,8 +549,6 @@ async def handle_symbols_reply_from_menu(message: types.Message):
     save_symbols(symbols)
     body = "\n".join(symbols)
     await message.answer(f"Список торговых пар обновлён:\n{body}")
-
-
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
     try:
