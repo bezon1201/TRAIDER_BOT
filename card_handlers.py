@@ -7,6 +7,7 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 
 from card_format import build_symbol_card_text, build_symbol_card_keyboard
+from dca_status import build_dca_status_text
 from dca_handlers import (
     get_symbol_min_notional,
     _load_state_for_symbol,
@@ -583,17 +584,61 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # ---------- Подменю STATUS ----------
     if action == "dca_status_all":
-        await callback.answer(
-            f"STATUS/ALL для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
+        # Аналог /dca status all — все кампании, для которых есть сетка.
+        storage = STORAGE_PATH
+        count = 0
+        for path in sorted(storage.glob("*_grid.json")):
+            try:
+                raw = path.read_text(encoding="utf-8")
+                grid = json.loads(raw)
+            except Exception:
+                continue
+
+            symbol_from_file = str(grid.get("symbol") or path.name.replace("_grid.json", "")).upper()
+            text_block = build_dca_status_text(symbol_from_file, storage_dir=STORAGE_DIR)
+            # Статусы могут быть длинными, поэтому выводим отдельными сообщениями, а не через alert.
+            if callback.message:
+                await callback.message.answer(
+                    f"<pre>{text_block}</pre>",
+                    parse_mode="HTML",
+                )
+            count += 1
+
+        if count == 0 and callback.message:
+            await callback.message.answer("DCA: кампаний (сеток) не найдено.")
+
+        # Короткий toast, чтобы закрыть спиннер.
+        await callback.answer("STATUS: ALL", show_alert=False)
         return
 
     if action == "dca_status_active":
-        await callback.answer(
-            f"STATUS/ACTIVE для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
+        # Аналог /dca status active — только активные кампании (без campaign_end_ts).
+        storage = STORAGE_PATH
+        count = 0
+        for path in sorted(storage.glob("*_grid.json")):
+            try:
+                raw = path.read_text(encoding="utf-8")
+                grid = json.loads(raw)
+            except Exception:
+                continue
+
+            if grid.get("campaign_end_ts"):
+                # Уже завершена — пропускаем.
+                continue
+
+            symbol_from_file = str(grid.get("symbol") or path.name.replace("_grid.json", "")).upper()
+            text_block = build_dca_status_text(symbol_from_file, storage_dir=STORAGE_DIR)
+            if callback.message:
+                await callback.message.answer(
+                    f"<pre>{text_block}</pre>",
+                    parse_mode="HTML",
+                )
+            count += 1
+
+        if count == 0 and callback.message:
+            await callback.message.answer("DCA: активных кампаний не найдено.")
+
+        await callback.answer("STATUS: ACTIVE", show_alert=False)
         return
 
     # ---------- Возврат в DCA-меню из подменю ----------
