@@ -442,13 +442,15 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
         ok, err = validate_budget_vs_min_notional(cfg, min_notional)
         if not ok:
-            details = [
-                f"DCA: бюджет для {symbol} слишком мал относительно minNotional.",
-                f"budget={cfg.budget_usdc}$, levels={cfg.levels_count}, minNotional={min_notional}",
-            ]
-            if err:
-                details.append(f"details: {err}")
-            await callback.answer("\n".join(details), show_alert=True)
+            # Сообщение для alert должно быть коротким, иначе Telegram вернёт MESSAGE_TOO_LONG.
+            msg = (
+                f"DCA: бюджет для {symbol} слишком мал относительно minNotional.\n"
+                f"budget={cfg.budget_usdc}$, levels={cfg.levels_count}, minNotional={min_notional}"
+            )
+            # На всякий случай отрежем слишком длинный текст.
+            if len(msg) > 180:
+                msg = msg[:177] + "..."
+            await callback.answer(msg, show_alert=True)
             return
 
         # Фактическая генерация сетки
