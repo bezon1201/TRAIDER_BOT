@@ -700,15 +700,20 @@ async def cmd_dca(message: types.Message) -> None:
         except Exception:
             pass
 
+        anchor_price = _format_money(grid.get("current_anchor_price"), digits=2)
+        atr_tf1 = _format_money(grid.get("current_atr_tf1"), digits=2)
+        depth_cycle = _format_money(grid.get("current_depth_cycle"), digits=2)
+        budget_usdc = _format_money(grid.get("config", {}).get("budget_usdc"), digits=0)
+
         await message.answer(
             "DCA start выполнен. Сетка создана.\n"
             f"symbol: {grid.get('symbol')}\n"
             f"market_mode: {grid.get('current_market_mode')}\n"
-            f"anchor_price: {grid.get('current_anchor_price')}\n"
-            f"ATR(TF1): {grid.get('current_atr_tf1')}\n"
-            f"depth: {grid.get('current_depth_cycle')}\n"
+            f"anchor_price: {anchor_price}\n"
+            f"ATR(TF1): {atr_tf1}\n"
+            f"depth: {depth_cycle}\n"
             f"levels: {grid.get('total_levels')}\n"
-            f"budget_usdc: {grid.get('config', {}).get('budget_usdc')}"
+            f"budget_usdc: {budget_usdc}"
         )
         return
 
