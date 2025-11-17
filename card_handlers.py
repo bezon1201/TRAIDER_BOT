@@ -50,6 +50,25 @@ STICKER_ID_TO_SYMBOL: dict[str, str] = {
     "AQADJogAAtfnYUhy": "BTCUSDC",
 }
 
+class _CardFakeMessage:
+    """Простой адаптер поверх Message для вызова cmd_trade из callback.
+
+    Aiogram v3 делает Message "frozen", поэтому напрямую менять message.text
+    нельзя. Вместо этого создаём лёгкий объект с нужными полями и
+    проксируем .answer(...) в оригинальное сообщение.
+    """
+    def __init__(self, original: types.Message, text: str) -> None:
+        self._original = original
+        self.text = text
+        self.chat = original.chat
+        self.from_user = original.from_user
+
+    async def answer(self, *args, **kwargs):
+        return await self._original.answer(*args, **kwargs)
+
+
+
+
 
 # Простое состояние ожидания ввода бюджета по чату.
 # Ключ: chat_id, значение: словарь с symbol.
@@ -634,14 +653,9 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             await callback.answer("Не удалось обработать запрос MENU/MODE LIVE.", show_alert=True)
             return
 
-        # Эмулируем команду /trade mode live на том же сообщении.
-        msg = callback.message
-        old_text = msg.text
-        try:
-            msg.text = "/trade mode live"
-            await cmd_trade(msg)
-        finally:
-            msg.text = old_text
+        # Эмулируем команду /trade mode live через адаптер _CardFakeMessage.
+        fake_message = _CardFakeMessage(callback.message, "/trade mode live")
+        await cmd_trade(fake_message)
 
         # Короткое уведомление (toast), что запрос принят.
         await callback.answer(
@@ -657,13 +671,8 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
             await callback.answer("Не удалось обработать запрос MENU/MODE SIM.", show_alert=True)
             return
 
-        msg = callback.message
-        old_text = msg.text
-        try:
-            msg.text = "/trade mode sim"
-            await cmd_trade(msg)
-        finally:
-            msg.text = old_text
+        fake_message = _CardFakeMessage(callback.message, "/trade mode sim")
+        await cmd_trade(fake_message)
 
         await callback.answer(
             "Запрос смены режима на SIM отправлен.\nВведите PIN одним сообщением.",
