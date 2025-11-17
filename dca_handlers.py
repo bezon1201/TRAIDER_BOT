@@ -682,6 +682,35 @@ async def cmd_dca(message: types.Message) -> None:
             await message.answer(f"DCA: не удалось построить сетку для {symbol}: {e}")
             return
 
+        # Для SIM-режима сразу пометим уровни с ценой >= текущей,
+        # чтобы агрегаторы filled/spent были корректны ещё до первой свечи TF1.
+        if is_sim_mode():
+            try:
+                current_price = _get_last_price_from_raw(symbol)
+            except Exception:
+                current_price = 0.0
+
+            if current_price and current_price > 0:
+                try:
+                    # Локальный импорт, чтобы избежать циклических зависимостей при загрузке модулей.
+                    from grid_sim import _apply_initial_prefill  # type: ignore
+                except Exception:
+                    _apply_initial_prefill = None  # type: ignore[assignment]
+
+                if _apply_initial_prefill is not None:  # type: ignore[truthy-bool]
+                    prefill_bar = {
+                        "ts": int(time.time()),
+                        "open": float(current_price),
+                        "high": float(current_price),
+                        "low": float(current_price),
+                        "close": float(current_price),
+                    }
+                    try:
+                        _apply_initial_prefill(grid, prefill_bar)  # type: ignore[arg-type]
+                    except Exception:
+                        # Ошибку prefill не считаем критической: кампания останется с нулевым filled.
+                        pass
+
         gpath = _grid_path(symbol)
         try:
             gpath.parent.mkdir(parents=True, exist_ok=True)
