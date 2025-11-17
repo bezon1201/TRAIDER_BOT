@@ -371,7 +371,7 @@ async def cmd_dca(message: types.Message) -> None:
     parts = text.split()
 
     # Просто /dca — краткий статус
-    if len(parts) == 1:
+    if len(parts) <= 1:
         cfgs = load_dca_config()
         total = len(cfgs)
         enabled = sum(1 for c in cfgs.values() if c.enabled)
