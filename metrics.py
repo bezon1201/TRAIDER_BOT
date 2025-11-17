@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import aiohttp
-from aiogram import Router, types
+from aiogram import Router, types, F
 from aiogram.filters import Command
 from coin_state import (
     MARKET_PUBLISH,
@@ -490,7 +490,12 @@ async def cmd_symbols(message: types.Message):
 
 
 
-@router.message()
+@router.message(
+    F.reply_to_message,
+    F.reply_to_message.from_user.is_bot,
+    F.reply_to_message.text.contains("Текущий список будет полностью заменён."),
+    F.text.regexp(r"^(?!/)")
+)
 async def handle_symbols_reply_from_menu(message: types.Message):
     """
     Обработка ответа на запрос списка торговых пар из меню
