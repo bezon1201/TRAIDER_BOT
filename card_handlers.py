@@ -247,9 +247,9 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
       - "card:back_dca:<symbol>"        → ↩️ назад в DCA-меню
 
     Подменю MENU:
-      - "card:menu_mode:<symbol>"      → MODE (заглушка)
-      - "card:menu_pair:<symbol>"      → PAIR (заглушка)
-      - "card:menu_scheduler:<symbol>" → SCHEDULER (заглушка)
+      - "card:menu_mode:<symbol>"      → открыть подменю MODE (LIVE / SIM / ↩️)
+      - "card:menu_pair:<symbol>"      → открыть подменю PAIR (COINS / REFRESH / ↩️)
+      - "card:menu_scheduler:<symbol>" → открыть подменю SCHEDULER (PERIOD / PUBLISH / SWITCH / CONFIG / ↩️)
       - "card:back_dca:<symbol>"       → ↩️ назад в DCA-меню
     """
     data = callback.data or ""
@@ -587,24 +587,102 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
 
     # ---------- Подменю MENU ----------
     if action == "menu_mode":
-        await callback.answer(
-            f"MENU/MODE для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
+        # Открыть подменю MODE (LIVE / SIM / ↩️)
+        kb = build_symbol_card_keyboard(symbol, menu="menu_mode")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
         return
 
     if action == "menu_pair":
+        # Открыть подменю PAIR (COINS / REFRESH / ↩️)
+        kb = build_symbol_card_keyboard(symbol, menu="menu_pair")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action == "menu_scheduler":
+        # Открыть подменю SCHEDULER (PERIOD / PUBLISH / SWITCH / CONFIG / ↩️)
+        kb = build_symbol_card_keyboard(symbol, menu="menu_scheduler")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    # ---------- Подменю MENU/MODE ----------
+    if action == "menu_mode_live":
         await callback.answer(
-            f"MENU/PAIR для {symbol} будет добавлен позже.",
+            f"MENU/MODE LIVE для {symbol} будет добавлен позже.",
             show_alert=False,
         )
         return
 
-    if action == "menu_scheduler":
+    if action == "menu_mode_sim":
         await callback.answer(
-            f"MENU/SCHEDULER для {symbol} будет добавлен позже.",
+            f"MENU/MODE SIM для {symbol} будет добавлен позже.",
             show_alert=False,
         )
+        return
+
+    # ---------- Подменю MENU/PAIR ----------
+    if action == "menu_pair_coins":
+        await callback.answer(
+            f"MENU/PAIR COINS для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "menu_pair_refresh":
+        await callback.answer(
+            f"MENU/PAIR REFRESH для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    # ---------- Подменю MENU/SCHEDULER ----------
+    if action == "menu_scheduler_period":
+        await callback.answer(
+            f"MENU/SCHEDULER PERIOD для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "menu_scheduler_publish":
+        await callback.answer(
+            f"MENU/SCHEDULER PUBLISH для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "menu_scheduler_switch":
+        await callback.answer(
+            f"MENU/SCHEDULER SWITCH для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    if action == "menu_scheduler_config":
+        await callback.answer(
+            f"MENU/SCHEDULER CONFIG для {symbol} будет добавлен позже.",
+            show_alert=False,
+        )
+        return
+
+    # ---------- Возврат в MENU из подменю MENU/* ----------
+    if action == "back_menu":
+        kb = build_symbol_card_keyboard(symbol, menu="menu")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer()
         return
 
     # ---------- Возврат в DCA-меню из подменю ----------
