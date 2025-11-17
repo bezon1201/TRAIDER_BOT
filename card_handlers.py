@@ -16,7 +16,7 @@ from dca_handlers import (
 from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config, validate_budget_vs_min_notional, zero_symbol_budget
 from dca_models import DCAConfigPerSymbol
 from grid_log import log_grid_created, log_grid_manualy_closed
-from metrics import _has_any_active_campaign
+from metrics import _has_any_active_campaign, load_symbols, now_for_symbols
 
 
 router = Router()
@@ -661,10 +661,20 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         return
 
     if action == "menu_pair_refresh":
-        await callback.answer(
-            f"MENU/PAIR REFRESH для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
+        # Аналог /now: обновляем данные по всем текущим парам из symbols_list,
+        # но ответ возвращаем коротким toast (без нового сообщения в чат).
+        symbols = load_symbols()
+        if not symbols:
+            await callback.answer("В symbols_list нет ни одной пары.", show_alert=True)
+            return
+
+        try:
+            msg = await now_for_symbols(symbols)
+        except Exception:
+            await callback.answer("Ошибка обновления котировок, см. логи.", show_alert=True)
+            return
+
+        await callback.answer(msg, show_alert=False)
         return
 
     # ---------- Подменю MENU/SCHEDULER ----------

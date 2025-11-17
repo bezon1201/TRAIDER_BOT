@@ -653,30 +653,14 @@ async def cmd_market(message: types.Message):
     )
 
 
-@router.message(Command("now"))
-async def cmd_now(message: types.Message):
-    text = message.text or ""
-    parts = text.split(maxsplit=1)
-
-    if len(parts) == 1:
-        symbols = load_symbols()
-        if not symbols:
-            await message.answer("В symbols_list нет ни одной пары.")
-            return
-    else:
-        args = parts[1]
-        raw_items = args.split(",")
-        symbols: List[str] = []
-        for item in raw_items:
-            s = item.strip()
-            if not s:
-                continue
-            s_up = s.upper()
-            if s_up not in symbols:
-                symbols.append(s_up)
-        if not symbols:
-            await message.answer("Не удалось распознать ни одной торговой пары.")
-            return
+async def now_for_symbols(symbols: List[str]) -> str:
+    """
+    Вспомогательная функция для /now и кнопки REFRESH:
+    обновляет raw-данные и запускает онлайн-симуляцию для списка пар.
+    Возвращает короткое текстовое описание результата.
+    """
+    if not symbols:
+        return "В symbols_list нет ни одной пары."
 
     async with aiohttp.ClientSession() as session:
         updated = 0
@@ -691,11 +675,39 @@ async def cmd_now(message: types.Message):
                 if bar is not None:
                     simulate_bar_for_symbol(sym, bar)
             except Exception:
-                # Не блокируем /now из-за ошибок симуляции
+                # Не блокируем обновление из-за ошибок симуляции
                 pass
 
     if len(symbols) == 1:
-        await message.answer(f"Обновили {symbols[0]}.")
+        return f"Обновили {symbols[0]}."
     else:
-        await message.answer(f"Обновили {len(symbols)} пар.")
+        return f"Обновили {len(symbols)} пар."
 
+
+@router.message(Command("now"))
+async def cmd_now(message: types.Message):
+    text = message.text or ""
+    parts = text.split(maxsplit=1)
+
+    if len(parts) == 1:
+        # Без аргументов используем текущий список symbols из конфигурации.
+        symbols = load_symbols()
+    else:
+        # Есть аргументы: парсим пары через запятую.
+        args = parts[1]
+        raw_items = args.split(",")
+        symbols: List[str] = []
+        for item in raw_items:
+            s = item.strip()
+            if not s:
+                continue
+            s_up = s.upper()
+            if s_up not in symbols:
+                symbols.append(s_up)
+
+        if not symbols:
+            await message.answer("Не удалось распознать ни одной торговой пары.")
+            return
+
+    msg = await now_for_symbols(symbols)
+    await message.answer(msg)
