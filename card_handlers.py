@@ -7,6 +7,7 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 
 from card_format import build_symbol_card_text, build_symbol_card_keyboard
+from dca_handlers import get_symbol_min_notional
 from dca_config import get_symbol_config, upsert_symbol_config, save_dca_config, load_dca_config
 from dca_models import DCAConfigPerSymbol
 
@@ -369,10 +370,33 @@ async def on_card_callback(callback: types.CallbackQuery) -> None:
         return
 
     if action == "dca_cfg_list":
-        await callback.answer(
-            f"CONFIG/LIST для {symbol} будет добавлен позже.",
-            show_alert=False,
-        )
+        # Аналог /dca list, но показываем в alert
+        cfg_map = load_dca_config()
+        if not cfg_map:
+            await callback.answer(
+                "DCA-конфиги пока не заданы. Добавьте символы через /dca config.",
+                show_alert=True,
+            )
+            return
+
+        lines: list[str] = ["Список DCA-конфигов:"]
+        for sym, cfg in sorted(cfg_map.items()):
+            min_notional = get_symbol_min_notional(sym)
+            note = ""
+            if min_notional > 0:
+                ok, err = validate_budget_vs_min_notional(cfg, min_notional)
+                if ok:
+                    note = "OK"
+                else:
+                    note = f"ERR: {err}"
+            lines.append(
+                f"{sym}: budget={cfg.budget_usdc}$, "
+                f"levels={cfg.levels_count}, "
+                f"check={note or '-'}",
+            )
+
+        text = "\n".join(lines)
+        await callback.answer(text, show_alert=True)
         return
 
     # ---------- Подменю RUN ----------
