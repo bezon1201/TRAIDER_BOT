@@ -1,0 +1,59 @@
+# === 1. Импортируем карточку в handlers.py ===
+from card_text import build_symbol_card_text
+
+# === 2. Обновляем build_main_menu_text ===
+# Было:
+# def build_main_menu_text() -> str:
+#     coins = load_coins()
+#     if not coins:
+#         return "Создайте список пар"
+#     active = get_active_symbol()
+#     if active and active in coins:
+#         return active
+#     return coins[0]
+
+def build_main_menu_text() -> str:
+    """Текст главного меню: карточка по активному символу."""
+    coins = load_coins()
+    if not coins:
+        return "Создайте список пар"
+
+    active = get_active_symbol()
+    if not active or active not in coins:
+        active = coins[0]
+
+    return build_symbol_card_text(active)
+
+# === 3. Хелпер для перерисовки главного сообщения из callback ===
+
+async def redraw_main_menu_from_query(query: CallbackQuery) -> None:
+    """Перерисовать главное сообщение (карточку) под теми же кнопками."""
+    text = build_main_menu_text()
+    keyboard = build_main_menu_keyboard()
+    await safe_edit_message_text(query, text, keyboard)
+
+# 3.1. Использование в выборе монеты (если ещё не используется build_main_menu_text)
+# В обработке callback data "menu:coin:<SYMBOL>" оставляем/делаем так:
+#
+# if data.startswith("menu:coin:"):
+#     symbol = data.split(":", 2)[2]
+#     set_active_symbol(symbol)
+#     await safe_answer_callback(query)
+#     await redraw_main_menu_from_query(query)
+#     return
+#
+# 3.2. Использование после DCA/RUN START:
+#
+# после успешного build_and_save_dca_grid(symbol) добавляем:
+#     await redraw_main_menu_from_query(query)
+#
+# 3.3. Использование после METRICS-кнопки:
+#
+# в обработчике callback для METRICS (где обновляются <SYMBOL>.json и state)
+# после успешного завершения пересчётов:
+#     await redraw_main_menu_from_query(query)
+#
+# Для текстовых команд /metrics и /dca start SYMBOL можно при желании
+# отдельно редактировать главное сообщение по сохранённым chat_id/msg_id,
+# если у тебя уже есть такая логика. В базовом варианте достаточно обновления
+# по кнопкам.
