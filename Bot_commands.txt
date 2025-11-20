@@ -20,3 +20,14 @@
 1.51 ON/OFF: блокировка переключения DCA при активной кампании (alert, без открытия диалога подтверждения).
 1.52 CONFIG: блокировка входа в подменю CONFIG при активной DCA-кампании.
 1.53 DCA_CONFIG: расширен формат dca_config.json (anchor_mode/offset) с обратной совместимостью.
+1.54 DCA_ANCHOR: добавлен расчёт итогового anchor по режиму (FIX/MA30/PRICE) и offset.
+1.55 MARKET_STATE: добавлен helper coin_state.get_last_price_from_state для чтения last price из <SYMBOL>state.json.
+1.56 DCA_GRID: при построении DCA-сетки используется anchor_mode/offset и PRICE/MA30.
+1.57 DCA_ANCHOR_UI: мини-подменю ANCHOR (FIX/MA30/PRICE) в DCA/CONFIG.
+1.58 DCA_ANCHOR_UI: обработчики FIX/MA30/PRICE без изменения конфига (шаг 5.2).
+1.59 DCA_ANCHOR_FIX: полный сценарий ввода FIX через подменю ANCHOR (шаг 5.3).
+1.60 DCA_ANCHOR_MA30: выбор режима MA30 через подменю ANCHOR без ввода числа (шаг 5.4).
+1.61 DCA_ANCHOR_PRICE: выбор режима PRICE через подменю ANCHOR без ввода числа (шаг 5.5).
+1.62 DCA_ANCHOR_MA30_OFFSET: режим MA30 с вводом offset через служебное сообщение.
+1.63 DCA_ANCHOR_MA30_OFFSET_UI: MA30+offset сохраняет активным меню CONFIG.
+1.64 DCA_ANCHOR_PRICE_OFFSET: кнопка PRICE запрашивает offset и сохраняет режим PRICE+offset.

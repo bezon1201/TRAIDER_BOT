@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Текущая версия бота — будем обновлять при новых релизах
-APP_VERSION = "1.53"
+APP_VERSION = "1.64"
 
 # Основные настройки из .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -14,8 +14,7 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
 ADMIN_KEY = os.getenv("ADMIN_KEY")
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-
+...
 HTTP_PROXY = os.getenv("HTTP_PROXY")
 HTTPS_PROXY = os.getenv("HTTPS_PROXY")
 

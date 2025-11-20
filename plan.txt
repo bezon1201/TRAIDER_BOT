@@ -1,0 +1,269 @@
+
+Шаг 5. UI: мини-подменю ANCHOR (FIX / MA30 / PRICE)
+
+Цель: реализовать описанный тобой UX в DCA/CONFIG.
+
+В build_dca_config_submenu_keyboard():
+
+оставить базовую клавиатуру как сейчас.
+
+добавить режим: если в user_data стоит флаг типа anchor_submenu_open = True, то вместо одной кнопки ANCHOR рисуем три:
+
+FIX, MA30, PRICE с разными callback data.
+
+В menu_callback:
+
+При нажатии menu:dca:config:anchor:
+
+проверяем, что есть символ (как уже есть в других местах),
+
+ставим user_data["anchor_submenu_open"] = True,
+
+перерисовываем DCA/CONFIG (теперь там три кнопки),
+
+ничего не отправляем в чат (никаких сообщений).
+
+При нажатии любой другой кнопки DCA/CONFIG (BUDGET/LEVELS/ON/OFF/←):
+
+перед обработкой:
+
+anchor_submenu_open = False, чтобы вернуть обычную кнопку ANCHOR.
+
+✅ Результат:
+Кнопка ANCHOR превращается в FIX/MA30/PRICE при нажатии, как ты описал.
+
+Шаг 6. Обработчики FIX / MA30 / PRICE + ожидание ввода
+
+Цель: реализовать три сценария:
+
+FIX → ввод числа.
+
+MA30 → ввод offset.
+
+PRICE → ввод offset.
+
+6.1. Общий протокол ожидания
+
+В user_data договоримся так:
+
+await_state:
+
+"dca_anchor_fix_input"
+
+"dca_anchor_ma30_input"
+
+"dca_anchor_price_input"
+
+await_message_id — id служебного сообщения-запроса.
+
+anchor_symbol — для какой пары ждём.
+
+В общем обработчике всех callback’ов (в начале menu_callback):
+
+Если есть await_state, и прилетел любой callback (любая кнопка, включая другие меню):
+
+удалить сообщение-запрос по await_message_id (если ещё существует),
+
+сбросить:
+
+await_state,
+
+await_message_id,
+
+anchor_symbol,
+
+потом уже обрабатывать этот callback как обычно.
+
+(Это реализует твоё правило: «если вместо ввода нажали другую кнопку — запрос удаляется, ожидание снимается».)
+
+6.2. FIX
+
+Колбэк, например: menu:dca:config:anchor:fix.
+
+Действия:
+
+остаёмся в DCA/CONFIG,
+
+отправляем сообщение:
+
+«Введите фиксированный ANCHOR в USDC\nНапример: 900»
+
+сохраняем в user_data:
+
+await_state = "dca_anchor_fix_input"
+
+await_message_id = <id>
+
+anchor_symbol = symbol
+
+В обработчике текстовых сообщений:
+
+если await_state == "dca_anchor_fix_input":
+
+парсим число:
+
+заменяем , на . → float.
+
+> 0?
+
+если успех:
+
+читаем конфиг для символа,
+
+anchor_mode = "FIX",
+
+anchor_price = value,
+
+anchor_offset_type = "ABS",
+
+anchor_offset_value = 0.0,
+
+сохраняем конфиг,
+
+удаляем:
+
+сообщение пользователя,
+
+сообщение-запрос,
+
+сбрасываем await_state/anchor_symbol/await_message_id,
+
+тихо перерисовываем DCA/CONFIG (к клавиатуре возвращается обычная кнопка ANCHOR, не FIX/MA30/PRICE).
+
+если ошибка:
+
+удаляем только сообщение пользователя,
+
+запрос остаётся, await_state остаётся.
+
+6.3. MA30 + offset
+
+Колбэк: menu:dca:config:anchor:ma30.
+
+При нажатии:
+
+сообщение:
+
+«Введите offset слежения за MA30\nПримеры: 100, -10, 2%, -3%»
+
+await_state = "dca_anchor_ma30_input"
+
+anchor_symbol = symbol
+
+await_message_id = <id>
+
+В обработчике текста:
+
+если await_state == "dca_anchor_ma30_input":
+
+разбираем offset:
+
+raw = text.strip()
+
+заменяем , на .
+
+если оканчивается на %:
+
+anchor_offset_type = "PCT"
+
+обрезаем %
+
+иначе:
+
+anchor_offset_type = "ABS"
+
+оставшуюся строку → float (разрешаем +/- в начале).
+
+если успешный парсинг:
+
+anchor_offset_value = value
+
+в конфиге:
+
+anchor_mode = "MA30"
+
+anchor_offset_type, anchor_offset_value
+
+(при желании можно тут же попробовать взять MA30 и записать превью в anchor_price, но это опционально.)
+
+сохраняем конфиг,
+
+удаляем ввод и запрос,
+
+чистим ожидание,
+
+тихо перерисовываем карточку.
+
+если ошибка:
+
+удаляем только сообщение пользователя,
+
+запрос и await_state остаются.
+
+6.4. PRICE + offset
+
+Полная копия шага MA30, только текст запроса и anchor_mode = "PRICE".
+
+✅ Результат:
+UI ведёт себя ровно так, как ты расписал.
+
+Шаг 7. Использование новых настроек при старте DCA-компании
+
+Цель: чтобы новые режимы реально работали, а не только в конфиге висели.
+
+В месте, где сейчас при старте кампании берётся anchor_price (из конфига):
+
+заменить на вызов compute_anchor_from_config():
+
+передать туда:
+
+symbol,
+
+cfg,
+
+market_state (из <symbol>state.json),
+
+ma30_value (из helper’a).
+
+Если:
+
+anchor_mode = FIX — всё как раньше.
+
+PRICE / MA30:
+
+если не удалось получить базу (нет PRICE или MA30) → выдаём alert, компанию не запускаем.
+
+если смогли — получаем final_anchor, сохраняем:
+
+в state кампании,
+
+(опционально) обновляем cfg.anchor_price = final_anchor как «последний рассчитанный anchor».
+
+✅ Результат:
+Сетка реально строится по новым правилам, а не только на уровне UI.
+
+Шаг 8. Обновление отображения в карточке + версии/файлы
+
+Цель: привести в порядок фасад.
+
+В card_text / где формируется текст DCA для символа:
+
+добавить отображение anchor в удобном виде, например:
+
+Anchor: 950 (FIX)
+
+Anchor: 3456 (MA30 -10)
+
+Anchor: 3500 (PRICE +2%).
+
+Обновить:
+
+APP_VERSION = "1.53" в config.py.
+
+readmee.md — строка 1.53 ... с кратким описанием.
+
+Bot_commands.txt, если нужно упомянуть новые возможности / формулировку ANCHOR.
+
+Собрать архив 1.53 только с изменёнными файлами:
+
+минимум: handlers.py, модуль конфига (dca_config.py или аналог), модуль с card_text, возможно helper’ы для state/MA30, config.py, readmee.md, Bot_commands.txt.

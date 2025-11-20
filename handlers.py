@@ -15,10 +15,10 @@ from telegram.error import TimedOut, NetworkError
 
 from config import STORAGE_DIR
 from metrics import update_metrics_for_coins
-from coin_state import recalc_state_for_coins
+from coin_state import recalc_state_for_coins, get_last_price_from_state
 from dca_config import get_symbol_config, upsert_symbol_config, validate_budget_vs_min_notional
 from dca_min_notional import get_symbol_min_notional
-from dca_models import DCAConfigPerSymbol
+from dca_models import DCAConfigPerSymbol, apply_anchor_offset
 from dca_storage import load_grid_state
 
 from dca_grid import build_and_save_dca_grid
@@ -557,7 +557,7 @@ def _get_keyboard_for_current_menu(user_data) -> InlineKeyboardMarkup:
     if current_menu == "dca":
         return build_dca_submenu_keyboard()
     if current_menu == "dca_config":
-        return build_dca_config_submenu_keyboard()
+        return build_dca_config_submenu_keyboard(user_data)
     if current_menu == "dca_run":
         return build_dca_run_submenu_keyboard()
     if current_menu == "menu":
@@ -687,8 +687,8 @@ def build_dca_submenu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-def build_dca_config_submenu_keyboard() -> InlineKeyboardMarkup:
-    """Подменю DCA/CONFIG: BUDGET, LEVELS, ANCHOR, ON/OFF + назад."""
+def build_dca_config_submenu_keyboard(user_data: dict | None = None) -> InlineKeyboardMarkup:
+    """Подменю DCA/CONFIG: BUDGET, LEVELS, ANCHOR, ON/OFF + мини-подменю ANCHOR."""
     symbol = get_active_symbol()
     enabled_label = "OFF"
     if symbol:
@@ -696,27 +696,53 @@ def build_dca_config_submenu_keyboard() -> InlineKeyboardMarkup:
         if cfg and getattr(cfg, "enabled", False):
             enabled_label = "ON"
 
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text="BUDGET",
-                callback_data="menu:dca:config:budget",
-            ),
-            InlineKeyboardButton(
-                text="LEVELS",
-                callback_data="menu:dca:config:levels",
-            ),
-            InlineKeyboardButton(
-                text="ANCHOR",
-                callback_data="menu:dca:config:anchor",
-            ),
-            InlineKeyboardButton(
-                text=enabled_label,
-                callback_data="menu:dca:config:list",
-            ),
-        ],
-        [InlineKeyboardButton(text="↩️", callback_data="menu:back:dca")],
-    ]
+    anchor_submenu_open = False
+    if isinstance(user_data, dict):
+        anchor_submenu_open = bool(user_data.get("anchor_submenu_open"))
+
+    budget_btn = InlineKeyboardButton(
+        text="BUDGET",
+        callback_data="menu:dca:config:budget",
+    )
+    levels_btn = InlineKeyboardButton(
+        text="LEVELS",
+        callback_data="menu:dca:config:levels",
+    )
+    anchor_btn = InlineKeyboardButton(
+        text="ANCHOR",
+        callback_data="menu:dca:config:anchor",
+    )
+    onoff_btn = InlineKeyboardButton(
+        text=enabled_label,
+        callback_data="menu:dca:config:list",
+    )
+    back_btn = InlineKeyboardButton(text="↩️", callback_data="menu:back:dca")
+
+    if not anchor_submenu_open:
+        buttons = [
+            [budget_btn, levels_btn, anchor_btn, onoff_btn],
+            [back_btn],
+        ]
+    else:
+        buttons = [
+            [budget_btn, levels_btn, anchor_btn, onoff_btn],
+            [
+                InlineKeyboardButton(
+                    text="FIX",
+                    callback_data="menu:dca:config:anchor_fix",
+                ),
+                InlineKeyboardButton(
+                    text="MA30",
+                    callback_data="menu:dca:config:anchor_ma30",
+                ),
+                InlineKeyboardButton(
+                    text="PRICE",
+                    callback_data="menu:dca:config:anchor_price",
+                ),
+            ],
+            [back_btn],
+        ]
+
     return InlineKeyboardMarkup(buttons)
 
 
@@ -850,9 +876,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         await safe_answer_callback(query)
         user_data["current_menu"] = "dca_config"
+        user_data["anchor_submenu_open"] = False
         await safe_edit_reply_markup(
             query,
-            reply_markup=build_dca_config_submenu_keyboard(),
+            reply_markup=build_dca_config_submenu_keyboard(user_data),
         )
         return
 
@@ -1137,6 +1164,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
+        user_data["anchor_submenu_open"] = False
         await safe_answer_callback(query)
         chat_id = query.message.chat_id
         text = (
@@ -1170,6 +1198,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
+        user_data["anchor_submenu_open"] = False
         await safe_answer_callback(query)
         chat_id = query.message.chat_id
         text = (
@@ -1183,7 +1212,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if data == "menu:dca:config:anchor":
-        # Ввод цены ANCHOR для активного тикера через DCA/CONFIG → ANCHOR
+        # Переключение мини-подменю ANCHOR для активного тикера через DCA/CONFIG → ANCHOR
         symbol = get_active_symbol()
         if not symbol:
             await safe_answer_callback(
@@ -1204,16 +1233,112 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         await safe_answer_callback(query)
-        chat_id = query.message.chat_id
-        text = (
-            f"Введите цену ANCHOR для {symbol}.\n"
-            "Введите число больше нуля, например: 250.5"
+        current = bool(user_data.get("anchor_submenu_open"))
+        user_data["anchor_submenu_open"] = not current
+        await safe_edit_reply_markup(
+            query,
+            reply_markup=build_dca_config_submenu_keyboard(user_data),
         )
-        waiting = await context.bot.send_message(chat_id=chat_id, text=text)
-        context.user_data["await_state"] = "dca_anchor_input"
-        context.user_data["await_message_id"] = waiting.message_id
-        context.user_data["anchor_symbol"] = symbol
         return
+
+    if data in (
+        "menu:dca:config:anchor_fix",
+        "menu:dca:config:anchor_ma30",
+        "menu:dca:config:anchor_price",
+    ):
+        # Обработчики мини-подменю ANCHOR (FIX / MA30 / PRICE) — без изменения конфига.
+        symbol = get_active_symbol()
+        if not symbol:
+            await safe_answer_callback(
+                query,
+                text="Нет выбранной пары для ANCHOR.",
+                show_alert=True,
+            )
+            return
+
+        # Проверяем, нет ли активной кампании (campaign_start_ts есть, а campaign_end_ts нет)
+        state = load_grid_state(symbol)
+        if state and state.campaign_start_ts and not state.campaign_end_ts:
+            await safe_answer_callback(
+                query,
+                text="Для изменения конфига остановите текущую компанию",
+                show_alert=True,
+            )
+            return
+
+        if data == "menu:dca:config:anchor_fix":
+            # Шаг 5.3 — полноценный сценарий ввода фиксированного anchor (режим FIX).
+            await safe_answer_callback(query)
+            chat_id = query.message.chat_id
+            text = (
+                f"Введите фиксированный anchor для {symbol}.\n"
+                "Например: 1.2345"
+            )
+            waiting = await context.bot.send_message(chat_id=chat_id, text=text)
+            context.user_data["await_state"] = "dca_anchor_input"
+            context.user_data["await_message_id"] = waiting.message_id
+            context.user_data["anchor_symbol"] = symbol
+            return
+
+
+        if data == "menu:dca:config:anchor_ma30":
+            # Режим MA30 + offset: при нажатии показываем запрос на ввод offset.
+            await safe_answer_callback(query)
+            chat_id = query.message.chat_id
+            text = (
+                "Введите offset слежения за MA30\n"
+                "Примеры: 100, -10, 2%, -3%"
+            )
+            waiting = await context.bot.send_message(chat_id=chat_id, text=text)
+            context.user_data["await_state"] = "dca_anchor_ma30_input"
+            context.user_data["await_message_id"] = waiting.message_id
+            context.user_data["anchor_symbol"] = symbol
+            return
+
+            upsert_symbol_config(cfg)
+
+            # Короткий toast без alert-окна
+            await safe_answer_callback(
+                query,
+                text="Режим ANCHOR: MA30",
+                show_alert=False,
+            )
+
+            # После изменения конфига перерисовываем MAIN MENU с учётом текущего подменю
+            await redraw_main_menu_from_user_data(context)
+            return
+
+            return
+
+        if data == "menu:dca:config:anchor_price":
+            # Режим PRICE + offset: при нажатии показываем запрос на ввод offset.
+            await safe_answer_callback(query)
+            chat_id = query.message.chat_id
+            text = (
+                "Введите offset слежения за PRICE\n"
+                "Примеры: 100, -10, 2%, -3%"
+            )
+            waiting = await context.bot.send_message(chat_id=chat_id, text=text)
+            context.user_data["await_state"] = "dca_anchor_price_input"
+            context.user_data["await_message_id"] = waiting.message_id
+            context.user_data["anchor_symbol"] = symbol
+            return
+
+            upsert_symbol_config(cfg)
+
+            # Короткий toast без alert-окна
+            await safe_answer_callback(
+                query,
+                text="Режим ANCHOR: PRICE",
+                show_alert=False,
+            )
+
+            # После изменения конфига перерисовываем MAIN MENU с учётом текущего подменю
+            await redraw_main_menu_from_user_data(context)
+            return
+
+            return
+
     if data == "menu:dca:config:list":
         # Кнопка ON/OFF в подменю DCA/CONFIG — включение/выключение DCA для активного тикера
         symbol = get_active_symbol()
@@ -1239,6 +1364,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not cfg:
             cfg = DCAConfigPerSymbol(symbol=symbol)
 
+        user_data["anchor_submenu_open"] = False
         # Сохраняем информацию о сообщении меню, чтобы потом обновить подпись кнопки
         context.user_data["dca_config_menu_chat_id"] = query.message.chat_id
         context.user_data["dca_config_menu_msg_id"] = query.message.message_id
@@ -1310,7 +1436,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     context,
                     menu_chat_id,
                     menu_message_id,
-                    build_dca_config_submenu_keyboard(),
+                    build_dca_config_submenu_keyboard(user_data),
                 )
             # Очищаем сохранённые идентификаторы меню
             user_data.pop("dca_config_menu_chat_id", None)
@@ -1330,7 +1456,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     context,
                     menu_chat_id,
                     menu_message_id,
-                    build_dca_config_submenu_keyboard(),
+                    build_dca_config_submenu_keyboard(user_data),
                 )
             user_data.pop("dca_config_menu_chat_id", None)
             user_data.pop("dca_config_menu_msg_id", None)
@@ -1356,7 +1482,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     context,
                     menu_chat_id,
                     menu_message_id,
-                    build_dca_config_submenu_keyboard(),
+                    build_dca_config_submenu_keyboard(user_data),
                 )
 
             user_data.pop("dca_config_menu_chat_id", None)
@@ -1384,7 +1510,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         context,
                         menu_chat_id,
                         menu_message_id,
-                        build_dca_config_submenu_keyboard(),
+                        build_dca_config_submenu_keyboard(user_data),
                     )
                 user_data.pop("dca_config_menu_chat_id", None)
                 user_data.pop("dca_config_menu_msg_id", None)
@@ -1403,7 +1529,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         context,
                         menu_chat_id,
                         menu_message_id,
-                        build_dca_config_submenu_keyboard(),
+                        build_dca_config_submenu_keyboard(user_data),
                     )
                 user_data.pop("dca_config_menu_chat_id", None)
                 user_data.pop("dca_config_menu_msg_id", None)
@@ -1423,7 +1549,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     context,
                     menu_chat_id,
                     menu_message_id,
-                    build_dca_config_submenu_keyboard(),
+                    build_dca_config_submenu_keyboard(user_data),
                 )
 
             user_data.pop("dca_config_menu_chat_id", None)
@@ -1679,10 +1805,13 @@ async def handle_dca_anchor_input(
     cfg = get_symbol_config(symbol)
     if not cfg:
         cfg = DCAConfigPerSymbol(symbol=symbol)
+    # Для режима FIX сохраняем цену и явно проставляем режим
     cfg.anchor_price = anchor_price
+    cfg.anchor_mode = "FIX"
 
     # Сохраняем конфиг
     upsert_symbol_config(cfg)
+
 
     # Удаляем сообщения ожидания и ввода
     await safe_delete_message(context, chat_id, user_msg_id)
@@ -1699,6 +1828,198 @@ async def handle_dca_anchor_input(
     await redraw_main_menu_from_user_data(context)
 
 
+
+
+async def handle_dca_anchor_ma30_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Обработка текста, когда ждём ввод offset для режима MA30."""
+    message = update.message
+    if not message:
+        return
+
+    chat_id = message.chat_id
+    user_msg_id = message.message_id
+    user_data = context.user_data
+
+    raw = (message.text or "").strip()
+    awaiting_symbol = user_data.get("anchor_symbol")
+    waiting_message_id = user_data.get("await_message_id")
+
+    # Проверяем, что у нас есть символ, для которого ждём offset
+    if not awaiting_symbol:
+        # Неизвестное состояние — просто чистим сообщение пользователя и выходим
+        await safe_delete_message(context, chat_id, user_msg_id)
+        if waiting_message_id:
+            await safe_delete_message(context, chat_id, waiting_message_id)
+        user_data.pop("await_state", None)
+        user_data.pop("await_message_id", None)
+        user_data.pop("anchor_symbol", None)
+        return
+
+    symbol = str(awaiting_symbol).upper()
+
+    # Парсим offset: ABS или PCT
+    txt = raw.strip().replace(",", ".")
+    txt = txt.replace(" ", "")
+    if not txt:
+        await safe_delete_message(context, chat_id, user_msg_id)
+        return
+
+    is_pct = txt.endswith("%")
+    if is_pct:
+        num_part = txt[:-1]
+        offset_type = "PCT"
+    else:
+        num_part = txt
+        offset_type = "ABS"
+
+    try:
+        offset_value = float(num_part)
+    except ValueError:
+        # Некорректный ввод offset — удаляем сообщение пользователя, но ждём дальше
+        await safe_delete_message(context, chat_id, user_msg_id)
+        return
+
+    # Загружаем или создаём конфиг
+    cfg = get_symbol_config(symbol)
+    if not cfg:
+        cfg = DCAConfigPerSymbol(symbol=symbol)
+
+    cfg.anchor_mode = "MA30"
+    cfg.anchor_offset_type = offset_type
+    cfg.anchor_offset_value = offset_value
+
+    # Опциональный превью-anchor: берём MA30 из state и применяем offset
+    preview_anchor = None
+    try:
+        state_path = Path(STORAGE_DIR) / f"{symbol}state.json"
+        if state_path.exists():
+            with state_path.open("r", encoding="utf-8") as f:
+                state = json.load(f)
+            ma30_val = state.get("MA30")
+            if ma30_val is not None:
+                base = float(ma30_val)
+                if base > 0:
+                    preview_anchor = apply_anchor_offset(base, offset_value, offset_type)
+    except Exception:  # noqa: BLE001
+        preview_anchor = None
+
+    if preview_anchor is not None and preview_anchor > 0:
+        cfg.anchor_price = preview_anchor
+
+    upsert_symbol_config(cfg)
+
+    # Удаляем сообщения ожидания и ввода
+    await safe_delete_message(context, chat_id, user_msg_id)
+    if waiting_message_id:
+        await safe_delete_message(context, chat_id, waiting_message_id)
+
+    # Сбрасываем состояние ожидания
+    user_data.pop("await_state", None)
+    user_data.pop("await_message_id", None)
+    user_data.pop("anchor_symbol", None)
+
+    # Остаёмся в подменю DCA/CONFIG, чтобы можно было сразу нажать ON
+    user_data["current_menu"] = "dca_config"
+
+    # Тихо перерисовываем MAIN MENU
+    await redraw_main_menu_from_user_data(context)
+    return
+
+
+async def handle_dca_anchor_price_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Обработка текста, когда ждём ввод offset для режима PRICE."""
+    message = update.message
+    if not message:
+        return
+
+    chat_id = message.chat_id
+    user_msg_id = message.message_id
+    user_data = context.user_data
+
+    raw = (message.text or "").strip()
+    awaiting_symbol = user_data.get("anchor_symbol")
+    waiting_message_id = user_data.get("await_message_id")
+
+    # Проверяем, что у нас есть символ, для которого ждём offset
+    if not awaiting_symbol:
+        # Неизвестное состояние — просто чистим сообщение пользователя и выходим
+        await safe_delete_message(context, chat_id, user_msg_id)
+        if waiting_message_id:
+            await safe_delete_message(context, chat_id, waiting_message_id)
+        user_data.pop("await_state", None)
+        user_data.pop("await_message_id", None)
+        user_data.pop("anchor_symbol", None)
+        return
+
+    symbol = str(awaiting_symbol).upper()
+
+    # Парсим offset: ABS или PCT
+    txt = raw.strip().replace(",", ".")
+    txt = txt.replace(" ", "")
+    if not txt:
+        await safe_delete_message(context, chat_id, user_msg_id)
+        return
+
+    is_pct = txt.endswith("%")
+    if is_pct:
+        num_part = txt[:-1]
+        offset_type = "PCT"
+    else:
+        num_part = txt
+        offset_type = "ABS"
+
+    try:
+        offset_value = float(num_part)
+    except ValueError:
+        # Некорректный ввод offset — удаляем сообщение пользователя, но ждём дальше
+        await safe_delete_message(context, chat_id, user_msg_id)
+        return
+
+    # Загружаем или создаём конфиг
+    cfg = get_symbol_config(symbol)
+    if not cfg:
+        cfg = DCAConfigPerSymbol(symbol=symbol)
+
+    cfg.anchor_mode = "PRICE"
+    cfg.anchor_offset_type = offset_type
+    cfg.anchor_offset_value = offset_value
+
+    # Опциональный превью-anchor: берём last price из state и применяем offset
+    preview_anchor = None
+    try:
+        base = get_last_price_from_state(symbol)
+        if base is not None and base > 0:
+            preview_anchor = apply_anchor_offset(base, offset_value, offset_type)
+    except Exception:  # noqa: BLE001
+        preview_anchor = None
+
+    if preview_anchor is not None and preview_anchor > 0:
+        cfg.anchor_price = preview_anchor
+
+    upsert_symbol_config(cfg)
+
+    # Удаляем сообщения ожидания и ввода
+    await safe_delete_message(context, chat_id, user_msg_id)
+    if waiting_message_id:
+        await safe_delete_message(context, chat_id, waiting_message_id)
+
+    # Сбрасываем состояние ожидания
+    user_data.pop("await_state", None)
+    user_data.pop("await_message_id", None)
+    user_data.pop("anchor_symbol", None)
+
+    # Остаёмся в подменю DCA/CONFIG, чтобы можно было сразу нажать ON
+    user_data["current_menu"] = "dca_config"
+
+    # Тихо перерисовываем MAIN MENU
+    await redraw_main_menu_from_user_data(context)
+    return
 async def handle_coins_input(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1771,6 +2092,12 @@ async def text_message_handler(
 
     if await_state == "dca_anchor_input":
         await handle_dca_anchor_input(update, context)
+        return
+    if await_state == "dca_anchor_ma30_input":
+        await handle_dca_anchor_ma30_input(update, context)
+        return
+    if await_state == "dca_anchor_price_input":
+        await handle_dca_anchor_price_input(update, context)
         return
 
     chat_id = message.chat_id

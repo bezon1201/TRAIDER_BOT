@@ -231,3 +231,84 @@ def recalc_state_for_coins(coins: List[str], now_ts: Optional[int] = None) -> Di
             log.exception("Ошибка при пересчёте state для %s: %s", symbol, e)
 
     return result
+
+
+# ======== Хелперы для чтения <SYMBOL>state.json и last price ========
+
+
+def load_state_for_symbol(symbol: str) -> Optional[Any]:
+    """Читает <SYMBOL>state.json как есть.
+
+    Возвращает Python-объект, полученный из JSON:
+      - dict, если state в формате словаря,
+      - list, если state в формате [last, bid, ask],
+      - None при ошибке/отсутствии файла.
+    """
+    symbol_u = (symbol or "").upper()
+    if not symbol_u:
+        return None
+
+    spath = _state_path(symbol_u)
+    if not spath.exists():
+        return None
+
+    try:
+        with spath.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось прочитать state для %s из %s: %s", symbol_u, spath, e)
+        return None
+
+
+def get_last_price_from_state(symbol: str) -> Optional[float]:
+    """Возвращает last price из <SYMBOL>state.json.
+
+    Поддерживаем несколько форматов state:
+
+    1) Массив [last, bid, ask] — как ты описал:
+       - берём state[0] как last.
+
+    2) Словарь с ключом "ticker": [last, bid, ask]:
+       - state["ticker"][0]
+
+    3) Словарь с ключом "last":
+       - state["last"]
+
+    Если не нашли подходящее поле или значение некорректно/<= 0 — возвращаем None.
+    """
+    state = load_state_for_symbol(symbol)
+    if state is None:
+        return None
+
+    # Вариант 1: state — список [last, bid, ask]
+    if isinstance(state, list) and state:
+        try:
+            value = float(state[0])
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and value > 0:
+            return value
+        return None
+
+    # Вариант 2: словарь с "ticker": [last, bid, ask]
+    if isinstance(state, dict):
+        ticker = state.get("ticker")
+        if isinstance(ticker, list) and ticker:
+            try:
+                value = float(ticker[0])
+            except (TypeError, ValueError):
+                value = None
+            if value is not None and value > 0:
+                return value
+
+        # Вариант 3: словарь с "last"
+        last_val = state.get("last")
+        if last_val is not None:
+            try:
+                value = float(last_val)
+            except (TypeError, ValueError):
+                value = None
+            if value is not None and value > 0:
+                return value
+
+    return None

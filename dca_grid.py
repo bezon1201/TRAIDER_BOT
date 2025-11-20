@@ -8,7 +8,8 @@ from typing import Any, Dict
 
 from config import STORAGE_DIR, TF1, TF2
 from dca_config import get_symbol_config
-from dca_models import DCAConfigPerSymbol, DCAStatePerSymbol
+from dca_models import DCAConfigPerSymbol, DCAStatePerSymbol, compute_anchor_from_config
+from coin_state import get_last_price_from_state
 
 log = logging.getLogger(__name__)
 
@@ -78,11 +79,21 @@ def _build_grid_for_symbol(
     except Exception:  # noqa: BLE001
         atr = 0.0
 
-    # Якорная цена сетки — теперь исключительно из конфига
+    # MA30(TF1), если есть в state
     try:
-        anchor_price = float(getattr(cfg, "anchor_price", 0.0) or 0.0)
+        ma30_value = float(state.get("MA30") or 0.0)
     except Exception:  # noqa: BLE001
-        anchor_price = 0.0
+        ma30_value = 0.0
+
+    # Last price для режима PRICE читаем из <SYMBOL>state.json через coin_state
+    last_price = get_last_price_from_state(symbol)
+
+    # Якорная цена сетки — вычисляем по режиму anchor_mode и offset
+    anchor_price = compute_anchor_from_config(
+        cfg,
+        last_price=last_price,
+        ma30_value=ma30_value,
+    ) or 0.0
 
     if atr <= 0 or anchor_price <= 0:
         raise ValueError("ATR или anchor_price не заданы или некорректны.")
@@ -150,6 +161,7 @@ def _build_grid_for_symbol(
         "current_grid_id": 1,
         "current_market_mode": market_mode,
         "current_anchor_price": anchor_price,
+        "campaign_anchor": anchor_price,
         "current_atr_tf1": atr,
         "current_depth_cycle": depth,
         "current_levels": current_levels,
