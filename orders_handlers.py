@@ -9,6 +9,8 @@ import logging
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
+from metrics import get_symbol_last_price_light
+
 from dca_orders import load_orders, execute_virtual_market_buy, activate_virtual_limit_buy
 
 log = logging.getLogger(__name__)
