@@ -1385,7 +1385,7 @@ if data.startswith("order:cancel_confirm:"):
     await redraw_main_menu_from_user_data(context)
     return
 
-if data.startswith("order:cancel:"):
+    if data.startswith("order:cancel:"):
         parts = data.split(":")
         if len(parts) != 5:
             log.info("ORDERS CANCEL: некорректный формат callback %s", data)
