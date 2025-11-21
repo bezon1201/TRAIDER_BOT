@@ -28,7 +28,7 @@ from dca_min_notional import get_symbol_min_notional
 from dca_models import DCAConfigPerSymbol, apply_anchor_offset
 from dca_storage import load_grid_state
 
-from dca_orders import load_orders, refresh_order_types_from_price, execute_virtual_market_buy, activate_virtual_limit_buy
+from dca_orders import load_orders, refresh_order_types_from_price, execute_virtual_market_buy, activate_virtual_limit_buy, cancel_virtual_order
 
 from dca_grid import build_and_save_dca_grid
 from card_text import build_symbol_card_text
@@ -1282,7 +1282,110 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
 # Отмена диалога по ордеру (кнопка ❌)
-    if data.startswith("order:cancel:"):
+    
+if data.startswith("order:cancel_confirm:"):
+    parts = data.split(":")
+    if len(parts) != 5:
+        log.info("ORDERS CANCEL CONFIRM: некорректный формат callback %s", data)
+        await safe_answer_callback(
+            query,
+            text="Действие отменено.",
+            show_alert=False,
+        )
+        return
+
+    _, _, symbol, grid_id_str, level_index_str = parts
+    try:
+        grid_id = int(grid_id_str)
+        level_index = int(level_index_str)
+    except ValueError:
+        log.warning(
+            "ORDERS CANCEL CONFIRM: не удалось распарсить grid_id/level_index из %s",
+            data,
+        )
+        await safe_answer_callback(
+            query,
+            text="Действие отменено.",
+            show_alert=False,
+        )
+        return
+
+    symbol_u = (symbol or "").upper()
+    orders = load_orders(symbol_u)
+    target = None
+    for o in orders:
+        if getattr(o, "grid_id", None) == grid_id and getattr(o, "level_index", None) == level_index:
+            target = o
+            break
+
+    if not target:
+        log.info(
+            "ORDERS CANCEL CONFIRM: ордер не найден для %s (grid_id=%s, level_index=%s)",
+            symbol_u,
+            grid_id,
+            level_index,
+        )
+        await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+        await safe_answer_callback(
+            query,
+            text="Ордер не найден (возможно, уже обновлён).",
+            show_alert=False,
+        )
+        return
+
+    status = getattr(target, "status", "NEW") or "NEW"
+    if status == "FILLED":
+        await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+        await safe_answer_callback(
+            query,
+            text="Ордер уже исполнен, отмена невозможна.",
+            show_alert=False,
+        )
+        return
+
+    if status == "CANCELED":
+        await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+        await safe_answer_callback(
+            query,
+            text="Ордер уже отменён.",
+            show_alert=False,
+        )
+        return
+
+    if status != "ACTIVE":
+        await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+        await safe_answer_callback(
+            query,
+            text="Ордер недоступен для отмены.",
+            show_alert=False,
+        )
+        return
+
+    vorder_canceled = cancel_virtual_order(
+        symbol_u,
+        grid_id,
+        level_index,
+        reason="manual_cancel",
+    )
+    if not vorder_canceled:
+        await safe_answer_callback(
+            query,
+            text="Не удалось отменить ордер (подробнее см. в логе).",
+            show_alert=False,
+        )
+        # Сообщение-подтверждение оставляем, чтобы пользователь мог повторить попытку или отменить.
+        return
+
+    await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+    await safe_answer_callback(
+        query,
+        text="Ордер отменён.",
+        show_alert=False,
+    )
+    await redraw_main_menu_from_user_data(context)
+    return
+
+if data.startswith("order:cancel:"):
         parts = data.split(":")
         if len(parts) != 5:
             log.info("ORDERS CANCEL: некорректный формат callback %s", data)
@@ -1359,13 +1462,42 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 show_alert=False,
             )
             return
-        if status == "ACTIVE":
-            await safe_answer_callback(
-                query,
-                text="Ордер уже активен.",
-                show_alert=False,
-            )
-            return
+
+if status == "ACTIVE":
+    # Для активного ордера показываем диалог подтверждения отмены.
+    quote_val = float(getattr(target, "quote_qty", 0.0) or 0.0)
+    price_val = float(getattr(target, "price", 0.0) or 0.0)
+
+    quote_str = f"{quote_val:.2f} USDC" if quote_val > 0 else "—"
+    price_int = int(price_val) if price_val > 0 else 0
+    price_str = f"{price_int:,}".replace(",", " ") + "$" if price_int > 0 else "—"
+
+    text = (
+        "Подтвердите отмену ордера\n"
+        f"Символ: {symbol}\n"
+        f"Тип: LIMIT BUY\n"
+        f"Сумма: {quote_str}\n"
+        f"Цена: {price_str}"
+    )
+
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"order:cancel_confirm:{symbol}:{grid_id}:{level_index}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"order:cancel:{symbol}:{grid_id}:{level_index}",
+                ),
+            ]
+        ]
+    )
+    chat_id = query.message.chat_id
+    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+    await safe_answer_callback(query)
+    return
 
         order_type = getattr(target, "order_type", "LIMIT_BUY") or "LIMIT_BUY"
         try:
@@ -2817,4 +2949,4 @@ def register_handlers(app: Application) -> None:
     )
 
     # Глобальный обработчик ошибок
-    app.add_error_handler(error_handler)
+    app.add_error_handler(error_handler
