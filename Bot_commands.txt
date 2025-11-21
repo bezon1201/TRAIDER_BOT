@@ -31,3 +31,13 @@
 1.62 DCA_ANCHOR_MA30_OFFSET: режим MA30 с вводом offset через служебное сообщение.
 1.63 DCA_ANCHOR_MA30_OFFSET_UI: MA30+offset сохраняет активным меню CONFIG.
 1.64 DCA_ANCHOR_PRICE_OFFSET: кнопка PRICE запрашивает offset и сохраняет режим PRICE+offset.
+1.67 PRICE_TRACK_LAST_FIX: слежение за PRICE использует last из state["trading_params"]["price"]["last"].
+1.68 CARD_MAIN_MENU: обновлён текст главной карточки по новому формату.
+1.69 CARD1_MAIN_MENU: обновлён текст главной карточки по новому формату.
+
+2.70 ORDERS_REFRESH: кнопка REFRESH в блоке ORDERS обновляет типы всех NEW-ордеров (MARKET/LIMIT) по текущей цене с Binance и тихо перерисовывает список ордеров.
+3.70 CARD_PRICE_ROUND: главный экран показывает Price/MA30 без копеек.
+3.71 CARD_ALIGN_TABS: выравнивание блоков Grid/Price/Anchor/Average/Budget.
+3.72 CARD_MONOSPACE: карточка MAIN MENU отображается в машинописном блоке.
+3.73 CARD_PRE_MENU: /menu использует машинописный блок для главной карточки.
+3.74 CARD_ALIGN_SPACE: улучшено выравнивание колонок в главной карточке.

@@ -10,6 +10,8 @@ from config import STORAGE_DIR, TF1, TF2
 from dca_config import get_symbol_config
 from dca_models import DCAConfigPerSymbol, DCAStatePerSymbol, compute_anchor_from_config
 from coin_state import get_last_price_from_state
+from dca_orders import create_virtual_orders_for_grid
+from dca_log import log_dca_event
 
 log = logging.getLogger(__name__)
 
@@ -178,7 +180,9 @@ def build_and_save_dca_grid(symbol: str) -> DCAStatePerSymbol:
     2. Читает state из <SYMBOL>state.json.
     3. Строит структуру сетки (как в OLD BOT, но с anchor из конфига).
     4. Сохраняет <SYMBOL>_grid.json.
-    5. Возвращает DCAStatePerSymbol для удобного дальнейшего использования.
+    5. Создаёт виртуальные ордера по уровням сетки.
+    6. Логирует создание сетки и старт кампании.
+    7. Возвращает DCAStatePerSymbol для удобного дальнейшего использования.
 
     При проблемах выбрасывает ValueError с текстом ошибки.
     """
@@ -196,8 +200,28 @@ def build_and_save_dca_grid(symbol: str) -> DCAStatePerSymbol:
             f"DCA: state для {symbol_u} не найден. Сначала выполните METRICS/ROLLOVER."
         )
 
+    # Строим структуру сетки
     grid_dict = _build_grid_for_symbol(symbol_u, cfg, state)
 
+    # Пытаемся получить last_price для классификации ордеров.
+    try:
+        last_price_for_orders = get_last_price_from_state(symbol_u)
+    except Exception:  # noqa: BLE001
+        last_price_for_orders = 0.0
+
+    # Создаём виртуальные ордера по уровням сетки.
+    if last_price_for_orders > 0:
+        try:
+            create_virtual_orders_for_grid(
+                symbol_u,
+                grid_dict,
+                last_price_for_orders,
+                reason="manual",
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("Не удалось создать виртуальные ордера для %s: %s", symbol_u, e)
+
+    # Сохраняем файл сетки.
     gpath = _grid_path(symbol_u)
     try:
         gpath.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +236,34 @@ def build_and_save_dca_grid(symbol: str) -> DCAStatePerSymbol:
         log.exception("Не удалось сохранить файл сетки для %s: %s", symbol_u, e)
         raise ValueError(f"DCA: не удалось сохранить файл сетки для {symbol_u}: {e}") from e
 
-    # Пока логирование в jsonl (grid_log) не переносим — сделаем отдельным шагом.
-    # Возвращаем нормализованное состояние сетки.
-    return DCAStatePerSymbol.from_dict(grid_dict)
+    # Нормализуем состояние сетки и логируем ключевые события кампании.
+    grid_state = DCAStatePerSymbol.from_dict(grid_dict)
+
+    try:
+        grid_id = getattr(grid_state, "current_grid_id", None) or grid_dict.get("current_grid_id")
+        levels = getattr(grid_state, "current_levels", None) or grid_dict.get("current_levels", []) or []
+        levels_count = len(levels)
+
+        # Создание сетки
+        log_dca_event(
+            symbol_u,
+            "grid_created",
+            grid_id=grid_id,
+            reason="manual",
+            levels_count=levels_count,
+        )
+
+        # Старт кампании (если выставлен campaign_start_ts)
+        campaign_start_ts = getattr(grid_state, "campaign_start_ts", None) or grid_dict.get("campaign_start_ts")
+        if campaign_start_ts:
+            log_dca_event(
+                symbol_u,
+                "campaign_started",
+                grid_id=grid_id,
+                reason="manual",
+                campaign_start_ts=campaign_start_ts,
+            )
+    except Exception as e:  # noqa: BLE001
+        log.exception("Не удалось записать DCA-лог для %s: %s", symbol_u, e)
+
+    return grid_state

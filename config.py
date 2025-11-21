@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Текущая версия бота — будем обновлять при новых релизах
-APP_VERSION = "1.64"
+APP_VERSION = "3.74"
 
 # Основные настройки из .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")

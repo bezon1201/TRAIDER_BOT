@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import time
+import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from dca_models import DCAConfigPerSymbol
+from dca_models import DCAConfigPerSymbol, compute_anchor_from_config
 from config import STORAGE_DIR, TF1
+from coin_state import load_state_for_symbol, get_last_price_from_state
+
+log = logging.getLogger(__name__)
 
 STORAGE_PATH = Path(STORAGE_DIR)
 CONFIG_PATH = STORAGE_PATH / "dca_config.json"
@@ -114,3 +118,54 @@ def validate_budget_vs_min_notional(
         )
 
     return True, None
+
+def recalc_anchor_in_config_from_state(symbol: str) -> Optional[float]:
+    """Пересчитать anchor_price в dca_config.json по текущему state.
+
+    Используется при ROLLOVER:
+      - state уже пересчитан и записан в <SYMBOL>state.json;
+      - здесь мы читаем свежий MA30 и last price,
+        применяем anchor_mode/offset и сохраняем новый anchor_price в конфиге.
+
+    Возвращает новый anchor_price или None, если пересчитать не удалось.
+    """
+    symbol_u = (symbol or "").upper()
+    if not symbol_u:
+        return None
+
+    cfg = get_symbol_config(symbol_u)
+    if not cfg:
+        return None
+
+    # Пытаемся прочитать MA30 из state (если state в формате dict)
+    state_obj = load_state_for_symbol(symbol_u)
+    ma30_value: Optional[float] = None
+    if isinstance(state_obj, dict):
+        raw_ma30 = state_obj.get("MA30")
+        try:
+            if raw_ma30 is not None:
+                ma30_value = float(raw_ma30)
+        except (TypeError, ValueError):
+            ma30_value = None
+
+    # Last price для режима PRICE берём через хелпер
+    last_price = get_last_price_from_state(symbol_u)
+
+    try:
+        anchor = compute_anchor_from_config(
+            cfg,
+            last_price=last_price,
+            ma30_value=ma30_value,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("Не удалось пересчитать anchor для %s: %s", symbol_u, e)
+        return None
+
+    if anchor is None or anchor <= 0:
+        return None
+
+    cfg.anchor_price = float(anchor)
+    # upsert_symbol_config сам обновит updated_ts и сохранит файл
+    upsert_symbol_config(cfg)
+    return cfg.anchor_price
+

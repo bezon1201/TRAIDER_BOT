@@ -109,6 +109,44 @@ def _fmt_market_mode(mode: Optional[str]) -> str:
     }
     emoji = emoji_map.get(m, "")
     label = m.capitalize()
+def _fmt_anchor_descr(cfg: Optional[Dict[str, Any]]) -> str:
+    """Формирует короткое текстовое описание режима ANCHOR.
+
+    Примеры:
+    FIX -> "FIX"
+    MA30 c offset -2% -> "MA30-2%"
+    PRICE c offset +100 -> "PRICE+100"
+    """
+    if not cfg:
+        return "-"
+
+    mode = str(cfg.get("anchor_mode") or "FIX").upper()
+
+    # Для FIX offset можно не показывать
+    if mode == "FIX":
+        return "FIX"
+
+    offset_type = str(cfg.get("anchor_offset_type") or "ABS").upper()
+    try:
+        offset_value = float(cfg.get("anchor_offset_value") or 0.0)
+    except (TypeError, ValueError):
+        offset_value = 0.0
+
+    if abs(offset_value) < 1e-9:
+        # Нулевой offset: просто режим
+        return mode
+
+    sign = "+" if offset_value > 0 else "-"
+    value_abs = abs(offset_value)
+    value_str = f"{value_abs:g}"
+
+    if offset_type == "PCT":
+        return f"{mode}{sign}{value_str}%"
+
+    # ABS
+    return f"{mode}{sign}{value_str}"
+
+
     return f"{label} {emoji}".strip()
 
 
@@ -143,15 +181,18 @@ def _load_dca_config_for_symbol(symbol: str) -> Dict[str, Any]:
 def build_symbol_card_text(symbol: Optional[str]) -> str:
     """Собирает текст карточки MAIN MENU по шаблону CARD1.
 
+    Пример:
+
     BTCUSDC
-    Start	15/11/2025 10:35
-    Stop	20/11/2025 10:35
-    Market	Down ⬇️	TF 12/6
-    Anchor	3 456$	Depth 6.4%
-    Budget	1 200$	Spent 1 020$
-    Average	2 154$
-    Current	1 756$
-    MA30	100 000$
+    Start	15/11/2025 10:33
+    Updated	18/11/2025 17:33
+    Stop	20/11/2025 11:40
+
+    Grid	1		Market Down⬇️
+    Price	100 756$	MA30 100 000$
+    Anchor	100 456$	Anchor MA30-2%
+    Average 100 000$	Depth 6.4%
+    Budget	200$		Spent 122$
     """
     if not symbol:
         return "Создайте список пар"
@@ -163,9 +204,10 @@ def build_symbol_card_text(symbol: Optional[str]) -> str:
     ticker = _load_ticker(symbol_u)
     cfg = _load_dca_config_for_symbol(symbol_u)
 
-    # Start / Stop
+    # Start / Stop / Updated
     start_ts = grid.get("campaign_start_ts")
     stop_ts = grid.get("campaign_end_ts")
+    updated_ts = grid.get("updated_ts")
 
     # Market / TF / MA30 из state
     market_mode = state.get("market_mode")
@@ -174,8 +216,11 @@ def build_symbol_card_text(symbol: Optional[str]) -> str:
     ma30 = state.get("MA30")
 
     # Anchor / Budget из dca_config.json
-    anchor_price = cfg.get("anchor_price")
-    budget_usdc = cfg.get("budget_usdc")
+    anchor_price = None
+    budget_usdc = None
+    if cfg:
+        anchor_price = cfg.get("anchor_price")
+        budget_usdc = cfg.get("budget_usdc")
 
     # Depth в % от anchor: используем current_depth_cycle из grid
     depth_cycle = grid.get("current_depth_cycle")
@@ -190,7 +235,7 @@ def build_symbol_card_text(symbol: Optional[str]) -> str:
     spent_usdc = grid.get("spent_usdc")
     avg_price = grid.get("avg_price")
 
-    # Current Price — ask из trading_params.price.<ask> или плоских полей
+    # Current Price — ask/last/bid/price из ticker
     current_price = None
     if ticker:
         trading_params = ticker.get("trading_params") or {}
@@ -217,7 +262,12 @@ def build_symbol_card_text(symbol: Optional[str]) -> str:
                     except (TypeError, ValueError):
                         continue
 
+    # Grid id
+    grid_id = grid.get("current_grid_id")
+
+    # Строковые представления
     start_str = _fmt_dt_from_ts(start_ts)
+    updated_str = _fmt_dt_from_ts(updated_ts)
     stop_str = _fmt_dt_from_ts(stop_ts)
 
     market_str = _fmt_market_mode(market_mode)
@@ -229,20 +279,45 @@ def build_symbol_card_text(symbol: Optional[str]) -> str:
     budget_str = _fmt_money_usd(budget_usdc)
     spent_str = _fmt_money_usd(spent_usdc)
 
-    avg_price_str = _fmt_price_usd(avg_price)
-    current_price_str = _fmt_price_usd(current_price)
-
+    avg_price_str = _fmt_money_usd(avg_price)
+    current_price_str = _fmt_money_usd(current_price)
     ma30_str = _fmt_money_usd(ma30)
+
+    grid_id_str = "-"
+    try:
+        if grid_id is not None:
+            grid_id_str = str(int(grid_id))
+    except (TypeError, ValueError):
+        grid_id_str = "-"
+
+    anchor_descr = _fmt_anchor_descr(cfg)
+
+    left_cells = [
+        f"Grid {grid_id_str}",
+        f"Price {current_price_str}",
+        f"Anchor {anchor_str}",
+        f"Average {avg_price_str}",
+        f"Budget {budget_str}",
+    ]
+    right_cells = [
+        f"Market {market_str}",
+        f"MA30 {ma30_str}",
+        f"Anchor {anchor_descr}",
+        f"Depth {depth_str}",
+        f"Spent {spent_str}",
+    ]
+    max_left = max(len(cell) for cell in left_cells) if left_cells else 0
+    bottom_lines = [
+        f"{left.ljust(max_left)}   {right}"
+        for left, right in zip(left_cells, right_cells)
+    ]
 
     lines = [
         symbol_u,
-        f"Start\t{start_str}",
-        f"Stop\t{stop_str}",
-        f"Market\t{market_str}\tTF {tf_str}",
-        f"Anchor\t{anchor_str}\tDepth {depth_str}",
-        f"Budget\t{budget_str}\tSpent {spent_str}",
-        f"Average\t{avg_price_str}",
-        f"Current\t{current_price_str}",
-        f"MA30\t{ma30_str}",
+        f"Start {start_str}",
+        f"Updated {updated_str}",
+        f"Stop {stop_str}",
+        "",
+        *bottom_lines,
     ]
     return "\n".join(lines)

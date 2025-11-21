@@ -493,6 +493,44 @@ def update_coin_json(symbol: str) -> Dict[str, Any]:
     return data
 
 
+
+
+def get_symbol_last_price_light(symbol: str) -> Optional[float]:
+    """Лёгкий запрос к Binance для получения только last-цены по символу.
+
+    Используется для технических операций (например, REFRESH в ORDERS),
+    чтобы не запускать тяжёлый сбор всех метрик.
+    """
+    symbol_u = (symbol or "").strip().upper()
+    if not symbol_u:
+        return None
+
+    try:
+        data = _binance_get("/api/v3/ticker/price", {"symbol": symbol_u})
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось получить лёгкий ticker/price для %s: %s", symbol_u, e)
+        return None
+
+    if isinstance(data, dict):
+        price = data.get("price")
+        try:
+            return float(price)
+        except (TypeError, ValueError):
+            return None
+
+    # На всякий случай обрабатываем варианты с массивом
+    if isinstance(data, list) and data:
+        item = data[0]
+        if isinstance(item, dict):
+            price = item.get("price")
+            try:
+                return float(price)
+            except (TypeError, ValueError):
+                return None
+
+    return None
+
+
 def update_metrics_for_coins(coins: List[str]) -> None:
     """Обновляет метрики для всех монет из списка."""
     for symbol in coins:

@@ -1,8 +1,10 @@
 import logging
 import json
+from html import escape as html_escape
 from pathlib import Path
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -14,12 +16,19 @@ from telegram.ext import (
 from telegram.error import TimedOut, NetworkError
 
 from config import STORAGE_DIR
-from metrics import update_metrics_for_coins
+from metrics import update_metrics_for_coins, get_symbol_last_price_light
 from coin_state import recalc_state_for_coins, get_last_price_from_state
-from dca_config import get_symbol_config, upsert_symbol_config, validate_budget_vs_min_notional
+from dca_config import (
+    get_symbol_config,
+    upsert_symbol_config,
+    validate_budget_vs_min_notional,
+    recalc_anchor_in_config_from_state,
+)
 from dca_min_notional import get_symbol_min_notional
 from dca_models import DCAConfigPerSymbol, apply_anchor_offset
 from dca_storage import load_grid_state
+
+from dca_orders import load_orders, refresh_order_types_from_price
 
 from dca_grid import build_and_save_dca_grid
 from card_text import build_symbol_card_text
@@ -181,10 +190,15 @@ async def safe_edit_message_text(
     query,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
 ) -> None:
     """Редактирование текста и клавиатуры сообщения с защитой от сетевых таймаутов."""
     try:
-        await query.edit_message_text(text=text, reply_markup=reply_markup)
+        await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
     except TimedOut:
         log.warning(
             "Timeout при edit_message_text для data=%s",
@@ -192,7 +206,6 @@ async def safe_edit_message_text(
         )
     except NetworkError as e:
         log.warning("NetworkError при edit_message_text: %s", e)
-
 
 async def safe_edit_reply_markup(
     query,
@@ -416,7 +429,18 @@ async def rollover_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     count = len(coins)
     if coins:
         try:
+            # 1) Пересчитываем state по всем монетам
             recalc_state_for_coins(coins)
+            # 2) Обновляем anchor_price в dca_config для каждой монеты по свежему state
+            for sym in coins:
+                try:
+                    recalc_anchor_in_config_from_state(sym)
+                except Exception as inner_e:  # noqa: BLE001
+                    log.exception(
+                        "Команда /rollover: ошибка при пересчёте anchor для %s: %s",
+                        sym,
+                        inner_e,
+                    )
         except Exception as e:  # noqa: BLE001
             log.exception(
                 "Ошибка при пересчёте state для монет %s: %s",
@@ -521,7 +545,8 @@ def build_main_menu_text() -> str:
     if not active or active not in coins:
         active = coins[0]
 
-    return build_symbol_card_text(active)
+    card = build_symbol_card_text(active)
+    return f"<pre>{html_escape(card)}</pre>"
 
 
 def build_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -550,27 +575,163 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+
+def _build_orders_submenu_rows(user_data) -> list[list[InlineKeyboardButton]]:
+    """Построить строки с ORDERS-подменю (MARKET/LIMIT/CANCEL/REFRESH + список ордеров).
+
+    Отображается, только если:
+    - в user_data установлен флаг orders_submenu_open,
+    - есть активный символ,
+    - для него существуют виртуальные ордера (последняя сетка).
+    """
+    # Флаг видимости подменю ORDERS
+    if not isinstance(user_data, dict) or not user_data.get("orders_submenu_open"):
+        return []
+
+    symbol = get_active_symbol()
+    if not symbol:
+        return []
+
+    # Загружаем все ордера по символу
+    try:
+        orders = load_orders(symbol)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось загрузить ордера для %s: %s", symbol, e)
+        return []
+
+    if not orders:
+        return []
+
+    # Берём ордера только последней сетки (максимальный grid_id)
+    try:
+        max_grid_id = max(o.grid_id for o in orders)
+    except ValueError:
+        return []
+
+    level_orders = [o for o in orders if o.grid_id == max_grid_id]
+    if not level_orders:
+        return []
+
+    # Отсортируем по номеру уровня
+    level_orders.sort(key=lambda o: getattr(o, "level_index", 0))
+
+    rows: list[list[InlineKeyboardButton]] = []
+
+    # Первый ряд — массовые действия (пока заглушки по логике)
+    mass_row = [
+        InlineKeyboardButton(text="MARKET ALL", callback_data="orders:market_all"),
+        InlineKeyboardButton(text="LIMIT ALL", callback_data="orders:limit_all"),
+        InlineKeyboardButton(text="CANCEL ALL", callback_data="orders:cancel_all"),
+        InlineKeyboardButton(text="REFRESH", callback_data="orders:refresh"),
+    ]
+    rows.append(mass_row)
+
+    # Далее — по одному ордеру в строке
+    for o in level_orders:
+        status = getattr(o, "status", "NEW") or "NEW"
+        order_type = getattr(o, "order_type", "LIMIT_BUY") or "LIMIT_BUY"
+        price = float(getattr(o, "price", 0.0) or 0.0)
+        quote_qty = float(getattr(o, "quote_qty", 0.0) or 0.0)
+
+        # Иконка статуса:
+        # ⚫ — NEW
+        # 🟡 — ACTIVE (на будущее, если появится такой статус)
+        # 🟢 — FILLED
+        # 🔴 — CANCELED
+        if status == "NEW":
+            icon = "⚫"
+        elif status == "FILLED":
+            icon = "🟢"
+        elif status == "CANCELED":
+            icon = "🔴"
+        else:
+            icon = "🟡"
+
+        # Тип ордера для подписи
+        if order_type == "MARKET_BUY":
+            kind_label = "Market"
+        else:
+            kind_label = "Limit"
+
+        # Форматирование цены: без копеек / центов, с пробелами
+        price_int = int(price) if price > 0 else 0
+        price_str = f"{price_int:,}".replace(",", " ") + "$"
+
+        # Форматирование quote_qty в USDC (без лишних нулей)
+        if quote_qty == int(quote_qty):
+            quote_str_val = str(int(quote_qty))
+        else:
+            quote_str_val = f"{quote_qty:.2f}".rstrip("0").rstrip(".")
+        quote_str = f"{quote_str_val} USDC"
+
+        text = f"{icon}{kind_label}\t{price_str} | {quote_str}"
+
+        cb_data = f"order:{symbol}:{getattr(o, 'grid_id', max_grid_id)}:{getattr(o, 'level_index', 0)}"
+        rows.append([InlineKeyboardButton(text=text, callback_data=cb_data)])
+
+    return rows
+
+
+def _attach_orders_submenu(base_keyboard: InlineKeyboardMarkup, user_data) -> InlineKeyboardMarkup:
+    """Расширить любую клавиатуру блоком ORDERS (если он включен и есть ордера).
+
+    Логика:
+    - если флаг orders_submenu_open не установлен — возвращаем клавиатуру как есть;
+    - если активной пары или ордеров нет — тоже возвращаем как есть;
+    - иначе в самый низ добавляем блок ORDERS (массовые кнопки + уровни).
+    """
+    try:
+        from telegram import InlineKeyboardMarkup  # локальный импорт для type checker
+    except Exception:
+        return base_keyboard
+
+    if not isinstance(base_keyboard, InlineKeyboardMarkup):
+        return base_keyboard
+
+    # Пока показываем ORDERS-блок для основных режимов: main + DCA-меню
+    current_menu = None
+    if isinstance(user_data, dict):
+        current_menu = user_data.get("current_menu") or "main"
+    if current_menu not in ("main", "dca", "dca_config", "dca_run"):
+        return base_keyboard
+
+    extra_rows = _build_orders_submenu_rows(user_data)
+    if not extra_rows:
+        return base_keyboard
+
+    # Копируем существующие строки и добавляем ORDERS-блок в самый низ
+    buttons = [row[:] for row in base_keyboard.inline_keyboard]
+    buttons.extend(extra_rows)
+    return InlineKeyboardMarkup(buttons)
+
+
 def _get_keyboard_for_current_menu(user_data) -> InlineKeyboardMarkup:
-    """Вернуть клавиатуру в зависимости от текущего подменю пользователя."""
-    current_menu = user_data.get("current_menu") or "main"
+    """Вернуть клавиатуру в зависимости от текущего подменю пользователя.
+
+    Базовая клавиатура выбирается по current_menu, а затем (при необходимости)
+    расширяется ORDERS-подменю в самом низу.
+    """
+    current_menu = user_data.get("current_menu") or "main" if isinstance(user_data, dict) else "main"
 
     if current_menu == "dca":
-        return build_dca_submenu_keyboard()
-    if current_menu == "dca_config":
-        return build_dca_config_submenu_keyboard(user_data)
-    if current_menu == "dca_run":
-        return build_dca_run_submenu_keyboard()
-    if current_menu == "menu":
-        return build_menu_submenu_keyboard()
-    if current_menu == "mode":
-        return build_mode_submenu_keyboard()
-    if current_menu == "pairs":
-        return build_pairs_submenu_keyboard()
-    if current_menu == "scheduler":
-        return build_scheduler_submenu_keyboard()
+        kb = build_dca_submenu_keyboard()
+    elif current_menu == "dca_config":
+        kb = build_dca_config_submenu_keyboard(user_data)
+    elif current_menu == "dca_run":
+        kb = build_dca_run_submenu_keyboard()
+    elif current_menu == "menu":
+        kb = build_menu_submenu_keyboard()
+    elif current_menu == "mode":
+        kb = build_mode_submenu_keyboard()
+    elif current_menu == "pairs":
+        kb = build_pairs_submenu_keyboard()
+    elif current_menu == "scheduler":
+        kb = build_scheduler_submenu_keyboard()
+    else:
+        # По умолчанию — главное меню
+        kb = build_main_menu_keyboard()
 
-    # По умолчанию — главное меню
-    return build_main_menu_keyboard()
+    return _attach_orders_submenu(kb, user_data)
 
 
 async def redraw_main_menu_from_query(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,7 +742,7 @@ async def redraw_main_menu_from_query(query, context: ContextTypes.DEFAULT_TYPE)
     user_data = context.user_data
     text = build_main_menu_text()
     keyboard = _get_keyboard_for_current_menu(user_data)
-    await safe_edit_message_text(query, text, keyboard)
+    await safe_edit_message_text(query, text, keyboard, parse_mode=ParseMode.HTML)
 
 
 async def redraw_main_menu_from_user_data(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -592,9 +753,6 @@ async def redraw_main_menu_from_user_data(context: ContextTypes.DEFAULT_TYPE) ->
     user_data = context.user_data
     chat_id = user_data.get("main_menu_chat_id")
     message_id = user_data.get("main_menu_message_id")
-    if not chat_id or not message_id:
-        return
-
     text = build_main_menu_text()
     keyboard = _get_keyboard_for_current_menu(user_data)
     try:
@@ -603,6 +761,7 @@ async def redraw_main_menu_from_user_data(context: ContextTypes.DEFAULT_TYPE) ->
             message_id=message_id,
             text=text,
             reply_markup=keyboard,
+            parse_mode=ParseMode.HTML,
         )
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось обновить MAIN MENU по user_data: %s", e)
@@ -780,7 +939,7 @@ async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.info("Команда /menu")
     text = build_main_menu_text()
     keyboard = build_main_menu_keyboard()
-    sent = await update.message.reply_text(text, reply_markup=keyboard)
+    sent = await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
     # Запоминаем главное сообщение MAIN MENU в user_data
     user_data = context.user_data
@@ -806,7 +965,7 @@ async def sticker_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         log.info("Стикер-меню получен, показываю MAIN MENU")
         text = build_main_menu_text()
         keyboard = build_main_menu_keyboard()
-        sent = await update.message.reply_text(text, reply_markup=keyboard)
+        sent = await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
         # Запоминаем главное сообщение MAIN MENU в user_data
         user_data = context.user_data
@@ -842,7 +1001,19 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await redraw_main_menu_from_query(query, context)
         return
 
+    
+    # Переключение подменю ORDERS (видимость списка ордеров)
+    if data == "menu:orders":
+        # Кнопка ORDERS есть только в главном меню, но флаг влияет на все основные меню.
+        current = bool(user_data.get("orders_submenu_open"))
+        user_data["orders_submenu_open"] = not current
+        await safe_answer_callback(query)
+        # Перерисовываем главное сообщение с учётом текущего подменю и ORDERS-блока
+        await redraw_main_menu_from_query(query, context)
+        return
+
     # Навигация по меню/подменю
+
     if data == "menu:dca":
         await safe_answer_callback(query)
         user_data["current_menu"] = "dca"
@@ -1010,7 +1181,18 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         count = len(coins)
         if coins:
             try:
+                # 1) Пересчитываем state по всем монетам
                 recalc_state_for_coins(coins)
+                # 2) Обновляем anchor_price в dca_config для каждой монеты по свежему state
+                for sym in coins:
+                    try:
+                        recalc_anchor_in_config_from_state(sym)
+                    except Exception as inner_e:  # noqa: BLE001
+                        log.exception(
+                            "Кнопка ROLLOVER: ошибка при пересчёте anchor для %s: %s",
+                            sym,
+                            inner_e,
+                        )
             except Exception as e:  # noqa: BLE001
                 log.exception(
                     "Ошибка при пересчёте state (ROLLOVER) для %s: %s",
@@ -1053,7 +1235,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await safe_answer_callback(
                 query,
                 text=f"DCA: конфигурация для {symbol} не активна.",
-                show_alert=False,
+                show_alert=True,
             )
             return
 
@@ -1099,7 +1281,17 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         try:
+            # 1) Пересчитываем state только для активного тикера
             recalc_state_for_coins([symbol])
+            # 2) Обновляем anchor_price в dca_config по свежему state
+            try:
+                recalc_anchor_in_config_from_state(symbol)
+            except Exception as inner_e:  # noqa: BLE001
+                log.exception(
+                    "Ошибка при пересчёте anchor (DCA RUN ROLLOVER) для %s: %s",
+                    symbol,
+                    inner_e,
+                )
         except Exception as e:  # noqa: BLE001
             log.exception(
                 "Ошибка при пересчёте state (DCA RUN ROLLOVER) для %s: %s",
@@ -1561,6 +1753,57 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 
+
+    # Обработка кнопок ORDERS
+
+    # REFRESH: обновляем типы всех NEW-ордеров (MARKET/LIMIT) по текущей цене с Binance
+    if data == "orders:refresh":
+        symbol = get_active_symbol()
+        if not symbol:
+            await safe_answer_callback(
+                query,
+                text="Нет активного символа",
+                show_alert=False,
+            )
+            return
+
+        last_price = get_symbol_last_price_light(symbol)
+        if not last_price or last_price <= 0:
+            await safe_answer_callback(
+                query,
+                text="Не удалось получить цену с Binance",
+                show_alert=False,
+            )
+            return
+
+        try:
+            refresh_order_types_from_price(symbol, last_price, reason="manual")
+        except Exception as e:  # noqa: BLE001
+            log.exception("Ошибка при обновлении типов ордеров для %s: %s", symbol, e)
+            await safe_answer_callback(
+                query,
+                text="Ошибка при обновлении списка ордеров",
+                show_alert=False,
+            )
+            return
+
+        await safe_answer_callback(
+            query,
+            text="Список ордеров обновлен",
+            show_alert=False,
+        )
+        await redraw_main_menu_from_query(query, context)
+        return
+
+    # Остальные кнопки ORDERS (массовые действия и отдельные уровни) — пока заглушки
+    if data.startswith("orders:") or data.startswith("order:"):
+        await safe_answer_callback(
+            query,
+            text="ORDERS: действие пока не реализовано.",
+            show_alert=False,
+        )
+        return
+
     # Остальные кнопки пока дают только toast-заглушку
     label_map = {
         "menu:orders": "ORDERS раздел пока не реализован.",
@@ -1823,6 +2066,10 @@ async def handle_dca_anchor_input(
     user_data.pop("await_message_id", None)
     user_data.pop("anchor_symbol", None)
 
+    # После установки якоря закрываем мини-подменю ANCHOR (FIX/MA30/PRICE),
+    # чтобы в карточке остались только кнопки BUDGET / LEVELS / ANCHOR / OFF.
+    user_data["anchor_submenu_open"] = False
+
     # Тихое поведение: без сообщений "ANCHOR сохранен"
     # Просто перерисовываем MAIN MENU с учётом актуального подменю
     await redraw_main_menu_from_user_data(context)
@@ -1920,6 +2167,10 @@ async def handle_dca_anchor_ma30_input(
     user_data.pop("await_state", None)
     user_data.pop("await_message_id", None)
     user_data.pop("anchor_symbol", None)
+
+    # После установки якоря закрываем мини-подменю ANCHOR (FIX/MA30/PRICE),
+    # чтобы в карточке остались только кнопки BUDGET / LEVELS / ANCHOR / OFF.
+    user_data["anchor_submenu_open"] = False
 
     # Остаёмся в подменю DCA/CONFIG, чтобы можно было сразу нажать ON
     user_data["current_menu"] = "dca_config"

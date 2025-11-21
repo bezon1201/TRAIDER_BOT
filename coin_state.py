@@ -311,4 +311,18 @@ def get_last_price_from_state(symbol: str) -> Optional[float]:
             if value is not None and value > 0:
                 return value
 
+        # Вариант 4: state["trading_params"]["price"]["last"]
+        trading_params = state.get("trading_params")
+        if isinstance(trading_params, dict):
+            price_info = trading_params.get("price")
+            if isinstance(price_info, dict):
+                last_nested = price_info.get("last")
+                if last_nested is not None:
+                    try:
+                        value = float(last_nested)
+                    except (TypeError, ValueError):
+                        value = None
+                    if value is not None and value > 0:
+                        return value
+
     return None
