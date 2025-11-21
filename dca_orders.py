@@ -14,7 +14,7 @@ from dca_log import log_dca_event, ReasonType
 
 OrderSide = Literal["BUY", "SELL"]
 OrderType = Literal["MARKET_BUY", "LIMIT_BUY"]
-OrderStatus = Literal["NEW", "FILLED", "CANCELED"]
+OrderStatus = Literal["NEW", "FILLED", "CANCELED", "ACTIVE"]
 
 log = logging.getLogger(__name__)
 
@@ -311,16 +311,16 @@ def refresh_order_types_from_price(
     except Exception as e:  # noqa: BLE001
         log.exception("Не удалось записать DCA-лог (orders_refreshed) для %s: %s", symbol_u, e)
 
-
+# ---- Engine helpers for virtual execution of individual orders ----
 
 def _grid_file_path(symbol: str) -> str:
-    """Путь к файлу <SYMBOL>_grid.json.
+    """Путь к файлу <SYMBOL>_grid.json для прямой работы с сеткой.
 
-    Отдельный хелпер, чтобы dca_orders мог аккуратно обновлять флаги filled
-    для уровней без жёсткой зависимости от dca_grid/dca_storage.
+    Используем STORAGE_DIR, чтобы не тянуть dca_grid и не создавать циклический импорт.
     """
     symbol_u = (symbol or "").upper()
-    return os.path.join(STORAGE_DIR, f"{symbol_u}_grid.json")
+    filename = f"{symbol_u}_grid.json"
+    return os.path.join(STORAGE_DIR, filename)
 
 
 def _mark_level_filled_in_grid(
@@ -329,91 +329,72 @@ def _mark_level_filled_in_grid(
     level_index: int,
     *,
     filled: bool,
-    filled_ts: Optional[int] = None,
+    filled_ts: Optional[float] = None,
 ) -> None:
-    """Обновить флаги filled/filled_ts для уровня в <SYMBOL>_grid.json.
+    """Отметить уровень сетки как filled/unfilled в <SYMBOL>_grid.json.
 
-    Функция старается быть максимально аккуратной:
-    - если файл сетки отсутствует или повреждён — просто логирует предупреждение;
-    - если нужный уровень не найден — тоже только лог.
-    Ошибки не пробрасываются наружу, чтобы не ломать основную логику исполнения
-    ордеров.
+    Мы обновляем только поля filled/filled_ts для нужного уровня в current_levels.
+    Агрегаторы (filled_levels, remaining_levels, spent_usdc, avg_price и т.п.)
+    на этом этапе не пересчитываем — это будет сделано отдельным шагом.
     """
     path = _grid_file_path(symbol)
     if not os.path.exists(path):
-        log.warning(
-            "grid.json для %s не найден при попытке обновить filled для grid_id=%s, level_index=%s",
+        log.info(
+            "mark_level_filled_in_grid: файл сетки %s не найден для %s",
+            path,
             symbol,
-            grid_id,
-            level_index,
         )
         return
 
     try:
         with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        log.warning(
-            "Не удалось прочитать grid.json для %s при обновлении filled (grid_id=%s, level_index=%s)",
-            symbol,
-            grid_id,
-            level_index,
+            data = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        log.exception(
+            "mark_level_filled_in_grid: не удалось прочитать %s: %s",
+            path,
+            e,
         )
         return
 
-    if not isinstance(raw, dict):
+    levels = data.get("current_levels")
+    if not isinstance(levels, list):
         log.warning(
-            "Некорректная структура grid.json для %s при обновлении filled (ожидался dict)",
-            symbol,
+            "mark_level_filled_in_grid: в %s нет корректного current_levels",
+            path,
         )
         return
 
-    def _update_levels(levels_obj: Any) -> bool:
-        updated_local = False
-        if not isinstance(levels_obj, list):
-            return False
-        for lvl in levels_obj:
-            if not isinstance(lvl, dict):
-                continue
-            try:
-                gid = int(lvl.get("grid_id") or 1)
-                idx = int(lvl.get("level_index") or 0)
-            except Exception:
-                continue
-            if gid == grid_id and idx == level_index:
-                lvl["filled"] = bool(filled)
-                lvl["filled_ts"] = filled_ts
-                updated_local = True
-        return updated_local
+    changed = False
+    for lvl in levels:
+        try:
+            lvl_grid_id = int(lvl.get("grid_id") or 0)
+            lvl_index = int(lvl.get("level_index") or 0)
+        except Exception:
+            continue
 
-    updated = False
-    # Основной список уровней
-    if "levels" in raw:
-        if _update_levels(raw.get("levels")):
-            updated = True
-    # Текущая сетка (current_levels)
-    if "current_levels" in raw:
-        if _update_levels(raw.get("current_levels")):
-            updated = True
+        if lvl_grid_id == int(grid_id) and lvl_index == int(level_index):
+            lvl["filled"] = bool(filled)
+            lvl["filled_ts"] = int(filled_ts) if filled_ts is not None else None
+            changed = True
+            break
 
-    if not updated:
+    if not changed:
         log.warning(
-            "Не найден уровень в grid.json для %s (grid_id=%s, level_index=%s) при обновлении filled",
-            symbol,
+            "mark_level_filled_in_grid: уровень grid_id=%s, level_index=%s не найден в %s",
             grid_id,
             level_index,
+            path,
         )
         return
 
     try:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(raw, f, ensure_ascii=False, indent=2)
-    except OSError as e:  # noqa: BLE001
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:  # noqa: BLE001
         log.exception(
-            "Не удалось сохранить grid.json для %s после обновления filled (grid_id=%s, level_index=%s): %s",
-            symbol,
-            grid_id,
-            level_index,
+            "mark_level_filled_in_grid: не удалось сохранить %s: %s",
+            path,
             e,
         )
 
@@ -428,20 +409,19 @@ def execute_virtual_market_buy(
     commission_asset: Optional[str] = None,
     reason: ReasonType = "manual",
 ) -> Optional[VirtualOrder]:
-    """Виртуально исполнить BUY-ордер по рыночной цене.
+    """Полностью исполнить BUY-ордер по рыночной цене (виртуально).
 
-    Функция:
-    - ищет ордер по (symbol, grid_id, level_index) в <SYMBOL>_orders.json;
-    - допускает запуск только для статусов NEW и CANCELED;
-    - считает полное исполнение (partial fill не поддерживается);
-    - обновляет поля filled_*, avg_fill_price, status, filled_ts/updated_ts;
-    - по возможности записывает commission/commission_asset;
-    - помечает соответствующий уровень в <SYMBOL>_grid.json как filled=True;
-    - пишет событие в DCA-лог (event="order_filled").
+    Меняет только:
+    - статус ордера (NEW/CANCELED -> FILLED),
+    - поля исполнения (avg_fill_price, filled_qty, filled_quote_qty, commission),
+    - помечает уровень в сетке как filled,
+    - пишет запись order_filled в DCA-лог.
+
+    Частичных исполнений не делаем — ордер либо полностью исполнен, либо нет.
     """
     symbol_u = (symbol or "").upper()
     try:
-        px = float(execution_price)
+        price = float(execution_price)
     except (TypeError, ValueError):
         log.warning(
             "execute_virtual_market_buy: некорректная цена исполнения %r для %s",
@@ -450,87 +430,100 @@ def execute_virtual_market_buy(
         )
         return None
 
-    if px <= 0:
+    if price <= 0:
         log.warning(
             "execute_virtual_market_buy: неположительная цена исполнения %f для %s",
-            px,
+            price,
             symbol_u,
         )
         return None
 
     orders = load_orders(symbol_u)
     if not orders:
-        log.warning(
-            "execute_virtual_market_buy: нет ордеров для %s при попытке исполнить grid_id=%s, level_index=%s",
-            symbol_u,
-            grid_id,
-            level_index,
-        )
+        log.info("execute_virtual_market_buy: нет ордеров для %s", symbol_u)
         return None
 
     target: Optional[VirtualOrder] = None
     for o in orders:
-        if o.grid_id == grid_id and o.level_index == level_index:
+        if getattr(o, "grid_id", None) == grid_id and getattr(o, "level_index", None) == level_index:
             target = o
             break
 
-    if target is None:
+    if not target:
         log.warning(
-            "execute_virtual_market_buy: ордер не найден для %s (grid_id=%s, level_index=%s)",
+            "execute_virtual_market_buy: ордер grid_id=%s level_index=%s для %s не найден",
+            grid_id,
+            level_index,
+            symbol_u,
+        )
+        return None
+
+    status = getattr(target, "status", "NEW") or "NEW"
+    if status in ("FILLED", "ACTIVE"):
+        log.info(
+            "execute_virtual_market_buy: ордер уже в статусе %s для %s (grid_id=%s, level_index=%s)",
+            status,
             symbol_u,
             grid_id,
             level_index,
         )
         return None
 
-    status = getattr(target, "status", "NEW") or "NEW"
     if status not in ("NEW", "CANCELED"):
-        log.info(
-            "execute_virtual_market_buy: ордер %s для %s уже в статусе %s, исполнение пропущено",
-            target.order_id,
-            symbol_u,
-            status,
-        )
-        return None
-
-    if target.side != "BUY":
         log.warning(
-            "execute_virtual_market_buy: попытка исполнить не-BUY ордер %s для %s",
-            target.order_id,
+            "execute_virtual_market_buy: неподдерживаемый статус %s для %s (grid_id=%s, level_index=%s)",
+            status,
             symbol_u,
+            grid_id,
+            level_index,
         )
         return None
 
-    # Плановый notional и количество.
+    side = getattr(target, "side", "BUY")
+    if side != "BUY":
+        log.warning(
+            "execute_virtual_market_buy: ордер не BUY (%s) для %s (grid_id=%s, level_index=%s)",
+            side,
+            symbol_u,
+            grid_id,
+            level_index,
+        )
+        return None
+
+    # Плановый объём
     try:
-        planned_quote = float(target.quote_qty or 0.0)
+        planned_quote = float(getattr(target, "quote_qty", 0.0) or 0.0)
     except (TypeError, ValueError):
         planned_quote = 0.0
 
     try:
-        planned_qty = float(target.qty or 0.0)
+        planned_qty = float(getattr(target, "qty", 0.0) or 0.0)
     except (TypeError, ValueError):
         planned_qty = 0.0
 
-    if planned_quote <= 0 and planned_qty > 0:
-        planned_quote = planned_qty * px
+    if planned_quote <= 0 and planned_qty > 0 and price > 0:
+        planned_quote = planned_qty * price
+    elif planned_qty <= 0 and planned_quote > 0 and price > 0:
+        planned_qty = planned_quote / price
 
-    if planned_quote <= 0 and planned_qty <= 0:
+    if planned_quote <= 0 or planned_qty <= 0:
         log.warning(
-            "execute_virtual_market_buy: у ордера %s для %s нет валидного объёма (qty/quote_qty)",
-            target.order_id,
+            "execute_virtual_market_buy: некорректный объём ордера (qty=%s, quote=%s) для %s",
+            planned_qty,
+            planned_quote,
             symbol_u,
         )
         return None
 
-    filled_quote_qty = planned_quote
-    filled_qty = filled_quote_qty / px if px > 0 else 0.0
+    filled_quote = planned_quote
+    filled_qty = filled_quote / price if price > 0 else planned_qty
 
     now_ts = time.time()
+
     target.status = "FILLED"
-    target.avg_fill_price = px
+    target.avg_fill_price = price
     target.filled_qty = filled_qty
-    target.filled_quote_qty = filled_quote_qty
+    target.filled_quote_qty = filled_quote
     target.filled_ts = now_ts
     target.updated_ts = now_ts
 
@@ -540,168 +533,46 @@ def execute_virtual_market_buy(
         except (TypeError, ValueError):
             target.commission = 0.0
         target.commission_asset = commission_asset
-    else:
-        # Комиссию явно не задали — оставляем поля по умолчанию.
-        pass
 
-    # Сохраняем обновлённый список ордеров.
-    try:
-        # Перезаписываем объект в списке (target уже является элементом списка).
-        save_orders(symbol_u, orders)
-    except Exception as e:  # noqa: BLE001
-        log.exception(
-            "execute_virtual_market_buy: не удалось сохранить ордера для %s: %s",
-            symbol_u,
-            e,
-        )
-        return None
+    save_orders(symbol_u, orders)
 
-    # Помечаем уровень в grid.json как filled.
+    # Помечаем уровень в сетке как filled (агрегаторы пока не трогаем).
     try:
         _mark_level_filled_in_grid(
             symbol_u,
             grid_id,
             level_index,
             filled=True,
-            filled_ts=int(now_ts),
+            filled_ts=now_ts,
         )
     except Exception as e:  # noqa: BLE001
-        # Не считаем это фатальной ошибкой для исполнения ордера.
         log.exception(
-            "execute_virtual_market_buy: ошибка при обновлении grid.json для %s: %s",
+            "execute_virtual_market_buy: не удалось обновить сетку для %s (grid_id=%s, level_index=%s): %s",
             symbol_u,
+            grid_id,
+            level_index,
             e,
         )
 
-    # Пишем событие в DCA-лог.
     try:
         log_dca_event(
             symbol_u,
             "order_filled",
             grid_id=grid_id,
             reason=reason,
-            order_id=target.order_id,
-            level_index=target.level_index,
-            order_type=target.order_type,
-            price=px,
+            order_id=getattr(target, "order_id", None),
+            level_index=getattr(target, "level_index", None),
+            order_type=getattr(target, "order_type", None),
+            level_price=getattr(target, "price", None),
+            execution_price=price,
             qty=filled_qty,
-            quote_qty=filled_quote_qty,
-            commission=target.commission,
-            commission_asset=target.commission_asset,
+            quote_qty=filled_quote,
+            commission=getattr(target, "commission", 0.0),
+            commission_asset=getattr(target, "commission_asset", None),
         )
     except Exception as e:  # noqa: BLE001
         log.exception(
             "execute_virtual_market_buy: не удалось записать DCA-лог для %s: %s",
-            symbol_u,
-            e,
-        )
-
-    return target
-
-
-def activate_virtual_limit_buy(
-    symbol: str,
-    grid_id: int,
-    level_index: int,
-    *,
-    reason: ReasonType = "manual",
-) -> Optional[VirtualOrder]:
-    """Перевести LIMIT BUY ордер в статус ACTIVE без исполнения.
-
-    Функция:
-    - ищет ордер по (symbol, grid_id, level_index) в <SYMBOL>_orders.json;
-    - допускает запуск только для статусов NEW и CANCELED;
-    - проверяет, что order_type == "LIMIT_BUY";
-    - выставляет status="ACTIVE" и updated_ts/created_ts при необходимости;
-    - НЕ трогает <SYMBOL>_grid.json (filled остаётся False);
-    - пишет событие в DCA-лог (event="order_placed").
-    """
-    symbol_u = (symbol or "").upper()
-    orders = load_orders(symbol_u)
-    if not orders:
-        log.warning(
-            "activate_virtual_limit_buy: нет ордеров для %s при попытке активировать grid_id=%s, level_index=%s",
-            symbol_u,
-            grid_id,
-            level_index,
-        )
-        return None
-
-    target: Optional[VirtualOrder] = None
-    for o in orders:
-        if o.grid_id == grid_id and o.level_index == level_index:
-            target = o
-            break
-
-    if target is None:
-        log.warning(
-            "activate_virtual_limit_buy: ордер не найден для %s (grid_id=%s, level_index=%s)",
-            symbol_u,
-            grid_id,
-            level_index,
-        )
-        return None
-
-    status = getattr(target, "status", "NEW") or "NEW"
-    if status not in ("NEW", "CANCELED"):
-        log.info(
-            "activate_virtual_limit_buy: ордер %s для %s уже в статусе %s, активировать нельзя",
-            target.order_id,
-            symbol_u,
-            status,
-        )
-        return None
-
-    if target.side != "BUY":
-        log.warning(
-            "activate_virtual_limit_buy: попытка активировать не-BUY ордер %s для %s",
-            target.order_id,
-            symbol_u,
-        )
-        return None
-
-    if target.order_type != "LIMIT_BUY":
-        log.warning(
-            "activate_virtual_limit_buy: попытка активировать не-LIMIT ордер %s для %s (order_type=%s)",
-            target.order_id,
-            symbol_u,
-            target.order_type,
-        )
-        return None
-
-    now_ts = time.time()
-    target.status = "ACTIVE"
-    if not getattr(target, "created_ts", None):
-        target.created_ts = now_ts
-    target.updated_ts = now_ts
-
-    try:
-        save_orders(symbol_u, orders)
-    except Exception as e:  # noqa: BLE001
-        log.exception(
-            "activate_virtual_limit_buy: не удалось сохранить ордера для %s: %s",
-            symbol_u,
-            e,
-        )
-        return None
-
-    # Записываем событие в DCA-лог.
-    try:
-        log_dca_event(
-            symbol_u,
-            "order_placed",
-            grid_id=grid_id,
-            reason=reason,
-            order_id=target.order_id,
-            level_index=target.level_index,
-            order_type=target.order_type,
-            price=target.price,
-            qty=target.qty,
-            quote_qty=target.quote_qty,
-        )
-    except Exception as e:  # noqa: BLE001
-        log.exception(
-            "activate_virtual_limit_buy: не удалось записать DCA-лог для %s: %s",
             symbol_u,
             e,
         )

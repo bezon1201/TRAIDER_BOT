@@ -28,7 +28,7 @@ from dca_min_notional import get_symbol_min_notional
 from dca_models import DCAConfigPerSymbol, apply_anchor_offset
 from dca_storage import load_grid_state
 
-from dca_orders import load_orders, refresh_order_types_from_price
+from dca_orders import load_orders, refresh_order_types_from_price, execute_virtual_market_buy
 
 from dca_grid import build_and_save_dca_grid
 from card_text import build_symbol_card_text
@@ -985,13 +985,24 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     data = query.data or ""
     log.info("Callback из меню: %s", data)
 
-    # Запоминаем главное сообщение для последующей перерисовки из текстовых хэндлеров
+    # Запоминаем главное сообщение для последующей перерисовки из текстовых хэндлеров.
+    # Не переопределяем main_menu_* при callback'ах с временных сообщений (подтверждения и т.п.).
     user_data = context.user_data
     try:
-        user_data["main_menu_chat_id"] = query.message.chat_id
-        user_data["main_menu_message_id"] = query.message.message_id
+        chat_id = query.message.chat_id
+        message_id = query.message.message_id
     except Exception:  # noqa: BLE001
         pass
+    else:
+        stored_chat_id = user_data.get("main_menu_chat_id")
+        stored_message_id = user_data.get("main_menu_message_id")
+        if stored_chat_id is None or stored_message_id is None:
+            # Первое сохранение MAIN MENU.
+            user_data["main_menu_chat_id"] = chat_id
+            user_data["main_menu_message_id"] = message_id
+        elif stored_message_id == message_id:
+            # Обновляем только если работаем с тем же самым сообщением MAIN MENU.
+            user_data["main_menu_chat_id"] = chat_id
 
     # Выбор активной монеты через динамические кнопки
     if data.startswith("menu:coin:"):
@@ -1002,6 +1013,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     
+    
     # Переключение подменю ORDERS (видимость списка ордеров)
     if data == "menu:orders":
         # Кнопка ORDERS есть только в главном меню, но флаг влияет на все основные меню.
@@ -1011,7 +1023,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Перерисовываем главное сообщение с учётом текущего подменю и ORDERS-блока
         await redraw_main_menu_from_query(query, context)
         return
-
 
     # Кнопки ORDERS (технические действия с виртуальными ордерами)
     if data == "orders:refresh":
@@ -1068,8 +1079,333 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await redraw_main_menu_from_query(query, context)
         return
 
-    # Пока остальные действия ORDERS/ORDER — заглушки, чтобы callback не зависал
-    if data.startswith("orders:") or data.startswith("order:"):
+    # Подтверждение индивидуального ордера (MARKET/LIMIT)
+    if data.startswith("order:confirm:"):
+        parts = data.split(":")
+        if len(parts) != 5:
+            log.info("ORDERS CONFIRM: некорректный формат callback %s", data)
+            await safe_answer_callback(
+                query,
+                text="ORDERS: действие пока не реализовано.",
+                show_alert=False,
+            )
+            return
+
+        _, _, symbol, grid_id_str, level_index_str = parts
+        try:
+            grid_id = int(grid_id_str)
+            level_index = int(level_index_str)
+        except ValueError:
+            log.warning(
+                "ORDERS CONFIRM: не удалось распарсить grid_id/level_index из %s",
+                data,
+            )
+            await safe_answer_callback(
+                query,
+                text="ORDERS: действие пока не реализовано.",
+                show_alert=False,
+            )
+            return
+
+        orders = load_orders(symbol)
+        target = None
+        for o in orders:
+            if getattr(o, "grid_id", None) == grid_id and getattr(o, "level_index", None) == level_index:
+                target = o
+                break
+
+        if not target:
+            log.info(
+                "ORDERS CONFIRM: ордер не найден для %s (grid_id=%s, level_index=%s)",
+                symbol,
+                grid_id,
+                level_index,
+            )
+            await safe_answer_callback(
+                query,
+                text="Ордер не найден (возможно, сетка обновлена).",
+                show_alert=False,
+            )
+            # Удаляем сообщение-подтверждение
+            await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+            return
+
+        status = getattr(target, "status", "NEW") or "NEW"
+        if status == "FILLED":
+            await safe_answer_callback(
+                query,
+                text="Ордер уже исполнен.",
+                show_alert=False,
+            )
+            await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+            return
+        if status == "ACTIVE":
+            await safe_answer_callback(
+                query,
+                text="Ордер уже активен.",
+                show_alert=False,
+            )
+            await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+            return
+
+        order_type = getattr(target, "order_type", "LIMIT_BUY") or "LIMIT_BUY"
+        symbol_u = symbol.upper()
+
+        # Для MARKET: повторно берём цену с Binance и виртуально исполняем ордер.
+        if order_type == "MARKET_BUY":
+            log.info(
+                "ORDERS CONFIRM: MARKET BUY для %s (grid_id=%s, level_index=%s)",
+                symbol_u,
+                grid_id,
+                level_index,
+            )
+            last_price = get_symbol_last_price_light(symbol_u)
+            if not last_price or last_price <= 0:
+                log.warning(
+                    "ORDERS CONFIRM: не удалось получить цену с Binance для %s при подтверждении MARKET",
+                    symbol_u,
+                )
+                await safe_answer_callback(
+                    query,
+                    text="Не удалось получить цену с Binance",
+                    show_alert=False,
+                )
+                return
+
+            # Пока комиссию не считаем, просто передаём 0.0 — добавим позже отдельным шагом.
+            vorder = execute_virtual_market_buy(
+                symbol_u,
+                grid_id,
+                level_index,
+                execution_price=last_price,
+                commission=0.0,
+                commission_asset=None,
+                reason="manual",
+            )
+            if not vorder:
+                await safe_answer_callback(
+                    query,
+                    text="Не удалось исполнить ордер (подробнее см. в логе).",
+                    show_alert=False,
+                )
+                return
+
+            # Удаляем сообщение-подтверждение и тихо обновляем MAIN MENU
+            await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+            await safe_answer_callback(
+                query,
+                text="Маркет-ордер исполнен.",
+                show_alert=False,
+            )
+            await redraw_main_menu_from_user_data(context)
+            return
+
+        # Для LIMIT: на этом этапе только логируем факт ручного подтверждения без изменения статуса.
+        log.info(
+            "ORDERS CONFIRM: LIMIT BUY для %s (grid_id=%s, level_index=%s)",
+            symbol_u,
+            grid_id,
+            level_index,
+        )
+        last_price = get_symbol_last_price_light(symbol_u)
+        if not last_price or last_price <= 0:
+            log.warning(
+                "ORDERS CONFIRM: не удалось получить цену с Binance для %s при подтверждении LIMIT",
+                symbol_u,
+            )
+            await safe_answer_callback(
+                query,
+                text="Не удалось получить цену с Binance",
+                show_alert=False,
+            )
+            return
+
+        try:
+            log_dca_event(
+                symbol_u,
+                "order_limit_checked",
+                grid_id=grid_id,
+                reason="manual",
+                order_id=getattr(target, "order_id", None),
+                level_index=getattr(target, "level_index", None),
+                order_type=order_type,
+                limit_price=getattr(target, "price", None),
+                market_price=last_price,
+                qty=getattr(target, "qty", None),
+                quote_qty=getattr(target, "quote_qty", None),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception(
+                "ORDERS CONFIRM: не удалось записать DCA-лог для LIMIT %s: %s",
+                symbol_u,
+                e,
+            )
+
+        await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+        await safe_answer_callback(
+            query,
+            text="Лимитный ордер отмечен в логе.",
+            show_alert=False,
+        )
+        return
+
+    # Отмена диалога по ордеру (кнопка ❌)
+    if data.startswith("order:cancel:"):
+        parts = data.split(":")
+        if len(parts) != 5:
+            log.info("ORDERS CANCEL: некорректный формат callback %s", data)
+            await safe_answer_callback(
+                query,
+                text="Действие отменено.",
+                show_alert=False,
+            )
+            return
+
+        # Просто удаляем сообщение-подтверждение, состояние ордеров не меняем.
+        await safe_delete_message(context, query.message.chat_id, query.message.message_id)
+        await safe_answer_callback(
+            query,
+            text="Действие отменено.",
+            show_alert=False,
+        )
+        return
+
+    # Клик по строке ордера — открываем диалог подтверждения
+    if data.startswith("order:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            log.info("ORDERS: неизвестный формат callback %s", data)
+            await safe_answer_callback(
+                query,
+                text="ORDERS: действие пока не реализовано.",
+                show_alert=False,
+            )
+            return
+
+        _, symbol, grid_id_str, level_index_str = parts
+        try:
+            grid_id = int(grid_id_str)
+            level_index = int(level_index_str)
+        except ValueError:
+            log.warning(
+                "ORDERS: не удалось распарсить grid_id/level_index из %s",
+                data,
+            )
+            await safe_answer_callback(
+                query,
+                text="ORDERS: действие пока не реализовано.",
+                show_alert=False,
+            )
+            return
+
+        orders = load_orders(symbol)
+        target = None
+        for o in orders:
+            if getattr(o, "grid_id", None) == grid_id and getattr(o, "level_index", None) == level_index:
+                target = o
+                break
+
+        if not target:
+            log.info(
+                "ORDERS: ордер не найден для %s (grid_id=%s, level_index=%s)",
+                symbol,
+                grid_id,
+                level_index,
+            )
+            await safe_answer_callback(
+                query,
+                text="Ордер не найден (возможно, сетка обновлена).",
+                show_alert=False,
+            )
+            return
+
+        status = getattr(target, "status", "NEW") or "NEW"
+        if status == "FILLED":
+            await safe_answer_callback(
+                query,
+                text="Ордер уже исполнен.",
+                show_alert=False,
+            )
+            return
+        if status == "ACTIVE":
+            await safe_answer_callback(
+                query,
+                text="Ордер уже активен.",
+                show_alert=False,
+            )
+            return
+
+        order_type = getattr(target, "order_type", "LIMIT_BUY") or "LIMIT_BUY"
+        try:
+            preview_price = get_symbol_last_price_light(symbol)
+        except Exception as e:  # noqa: BLE001
+            log.exception(
+                "ORDERS: ошибка при получении preview-цены для %s: %s",
+                symbol,
+                e,
+            )
+            preview_price = None
+
+        if not preview_price or preview_price <= 0:
+            await safe_answer_callback(
+                query,
+                text="Не удалось получить цену с Binance",
+                show_alert=False,
+            )
+            return
+
+        # Форматируем числа для сообщения
+        try:
+            quote_qty = float(getattr(target, "quote_qty", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            quote_qty = 0.0
+
+        if quote_qty == int(quote_qty):
+            quote_str_val = str(int(quote_qty))
+        else:
+            quote_str_val = f"{quote_qty:.2f}".rstrip("0").rstrip(".")
+        quote_str = f"{quote_str_val} USDC"
+
+        price_int = int(preview_price) if preview_price > 0 else 0
+        price_str = f"{price_int:,}".replace(",", " ") + "$"
+
+        if order_type == "MARKET_BUY":
+            text = (
+                f"Отправить Market Buy order на сумму {quote_str} "
+                f"по цене {price_str} для {symbol}?"
+            )
+        else:
+            # Для лимитного ордера показываем лимитную цену и текущую рыночную
+            level_price = float(getattr(target, "price", 0.0) or 0.0)
+            level_price_int = int(level_price) if level_price > 0 else 0
+            level_price_str = f"{level_price_int:,}".replace(",", " ") + "$"
+            text = (
+                f"Отправить Limit Buy order на сумму {quote_str} "
+                f"по цене {level_price_str} для {symbol}?\n"
+                f"(текущая цена {price_str})"
+            )
+
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="✅ Подтвердить",
+                        callback_data=f"order:confirm:{symbol}:{grid_id}:{level_index}",
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data=f"order:cancel:{symbol}:{grid_id}:{level_index}",
+                    ),
+                ]
+            ]
+        )
+        chat_id = query.message.chat_id
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+        await safe_answer_callback(query)
+        return
+
+    # Пока остальные действия ORDERS (массовые) — заглушки, чтобы callback не зависал
+    if data.startswith("orders:"):
         log.info("ORDERS: нажата ещё не реализованная кнопка %s", data)
         await safe_answer_callback(
             query,
@@ -1078,7 +1414,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    # Навигация по меню/подменю
+# Навигация по меню/подменю
 
     if data == "menu:dca":
         await safe_answer_callback(query)
