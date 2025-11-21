@@ -1012,6 +1012,72 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await redraw_main_menu_from_query(query, context)
         return
 
+
+    # Кнопки ORDERS (технические действия с виртуальными ордерами)
+    if data == "orders:refresh":
+        symbol = get_active_symbol()
+        if not symbol:
+            log.info("ORDERS REFRESH: нет активного символа")
+            await safe_answer_callback(
+                query,
+                text="Нет активного символа",
+                show_alert=False,
+            )
+            return
+
+        log.info("ORDERS REFRESH: старт для %s", symbol)
+        last_price = get_symbol_last_price_light(symbol)
+        if not last_price or last_price <= 0:
+            log.warning(
+                "ORDERS REFRESH: не удалось получить цену с Binance для %s (result=%r)",
+                symbol,
+                last_price,
+            )
+            await safe_answer_callback(
+                query,
+                text="Не удалось получить цену с Binance",
+                show_alert=False,
+            )
+            return
+
+        try:
+            refresh_order_types_from_price(symbol, last_price, reason="manual")
+        except Exception as e:  # noqa: BLE001
+            log.exception(
+                "ORDERS REFRESH: ошибка при обновлении типов ордеров для %s: %s",
+                symbol,
+                e,
+            )
+            await safe_answer_callback(
+                query,
+                text="Ошибка при обновлении списка ордеров",
+                show_alert=False,
+            )
+            return
+
+        log.info(
+            "ORDERS REFRESH: успешно для %s, last_price=%.8f",
+            symbol,
+            last_price,
+        )
+        await safe_answer_callback(
+            query,
+            text="Список ордеров обновлен",
+            show_alert=False,
+        )
+        await redraw_main_menu_from_query(query, context)
+        return
+
+    # Пока остальные действия ORDERS/ORDER — заглушки, чтобы callback не зависал
+    if data.startswith("orders:") or data.startswith("order:"):
+        log.info("ORDERS: нажата ещё не реализованная кнопка %s", data)
+        await safe_answer_callback(
+            query,
+            text="ORDERS: действие пока не реализовано.",
+            show_alert=False,
+        )
+        return
+
     # Навигация по меню/подменю
 
     if data == "menu:dca":
@@ -1754,48 +1820,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 
-    # Обработка кнопок ORDERS
-
-    # REFRESH: обновляем типы всех NEW-ордеров (MARKET/LIMIT) по текущей цене с Binance
-    if data == "orders:refresh":
-        symbol = get_active_symbol()
-        if not symbol:
-            await safe_answer_callback(
-                query,
-                text="Нет активного символа",
-                show_alert=False,
-            )
-            return
-
-        last_price = get_symbol_last_price_light(symbol)
-        if not last_price or last_price <= 0:
-            await safe_answer_callback(
-                query,
-                text="Не удалось получить цену с Binance",
-                show_alert=False,
-            )
-            return
-
-        try:
-            refresh_order_types_from_price(symbol, last_price, reason="manual")
-        except Exception as e:  # noqa: BLE001
-            log.exception("Ошибка при обновлении типов ордеров для %s: %s", symbol, e)
-            await safe_answer_callback(
-                query,
-                text="Ошибка при обновлении списка ордеров",
-                show_alert=False,
-            )
-            return
-
-        await safe_answer_callback(
-            query,
-            text="Список ордеров обновлен",
-            show_alert=False,
-        )
-        await redraw_main_menu_from_query(query, context)
-        return
-
-    # Остальные кнопки ORDERS (массовые действия и отдельные уровни) — пока заглушки
+    # Обработка кнопок ORDERS (массовые действия и отдельные уровни) — пока заглушки
     if data.startswith("orders:") or data.startswith("order:"):
         await safe_answer_callback(
             query,
@@ -2410,7 +2435,7 @@ def register_handlers(app: Application) -> None:
     )
 
     # Callback-кнопки главного меню и подменю
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(menu:|orders:|order:)"))
 
     # Кнопка OK для alert-сообщений
     app.add_handler(CallbackQueryHandler(alert_ok_callback, pattern=r"^alert:ok$"))

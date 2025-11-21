@@ -249,15 +249,13 @@ def refresh_order_types_from_price(
     *,
     reason: ReasonType = "manual",
 ) -> None:
-    """Обновить типы всех NEW-ордеров (MARKET_BUY/LIMIT_BUY) для символа по актуальной цене.
+    """Обновить типы всех NEW-ордеров (MARKET_BUY/LIMIT_BUY) по актуальной цене.
 
-    Сетки (уровни) не пересчитываются, изменяется только поле order_type у ордеров
-    со статусом "NEW". Цена должна приходить снаружи (обычно — с Binance).
+    Сетки (grid/state) не трогаются. Меняется только поле order_type у ордеров
+    со статусом "NEW" в файле <SYMBOL>_orders.json.
+    last_price должен быть актуальной рыночной ценой (обычно с Binance).
     """
-    symbol_u = (symbol or "").upper().strip()
-    if not symbol_u:
-        return
-
+    symbol_u = symbol.upper()
     try:
         lp = float(last_price)
     except (TypeError, ValueError):
@@ -265,64 +263,51 @@ def refresh_order_types_from_price(
         return
 
     if lp <= 0:
-        log.warning("refresh_order_types_from_price: неположительная цена %s для %s", lp, symbol_u)
+        log.warning("refresh_order_types_from_price: неположительная цена %f для %s", lp, symbol_u)
         return
 
-    try:
-        orders = load_orders(symbol_u)
-    except Exception as e:  # noqa: BLE001
-        log.warning("refresh_order_types_from_price: не удалось загрузить ордера для %s: %s", symbol_u, e)
-        return
-
+    orders = load_orders(symbol_u)
     if not orders:
-        # Нечего обновлять
+        log.info("refresh_order_types_from_price: нет ордеров для %s", symbol_u)
+        # Всё равно логируем факт ручного REFRESH в DCA-лог
         try:
-            log_dca_event(
-                symbol_u,
-                "orders_refreshed",
-                reason=reason,
-            )
+            log_dca_event(symbol_u, "orders_refreshed", reason=reason)
         except Exception as e:  # noqa: BLE001
-            log.exception("Не удалось записать DCA-лог (orders_refreshed, empty) для %s: %s", symbol_u, e)
+            log.exception("Не удалось записать DCA-лог (orders_refreshed) для %s: %s", symbol_u, e)
         return
 
-    now_ts = time.time()
+    now_ts = int(time.time())
     changed = False
 
     for o in orders:
-        # Меняем только ордера в статусе NEW
-        if getattr(o, "status", None) != "NEW":
+        status = getattr(o, "status", "NEW") or "NEW"
+        if status != "NEW":
             continue
 
         try:
-            price = float(getattr(o, "price", 0.0))
+            price = float(getattr(o, "price", 0.0) or 0.0)
         except (TypeError, ValueError):
-            price = 0.0
+            log.warning("refresh_order_types_from_price: некорректная цена ордера %r для %s", o, symbol_u)
+            continue
 
-        if lp > 0 and price >= lp:
+        # last_price > 0 и price >= last_price → MARKET_BUY, иначе LIMIT_BUY
+        if price >= lp:
             new_type: OrderType = "MARKET_BUY"
         else:
             new_type = "LIMIT_BUY"
 
         if getattr(o, "order_type", None) != new_type:
-            o.order_type = new_type  # type: ignore[assignment]
+            o.order_type = new_type
             o.updated_ts = now_ts
             changed = True
 
     if changed:
-        try:
-            save_orders(symbol_u, orders)
-        except Exception as e:  # noqa: BLE001
-            log.exception("Не удалось сохранить обновлённые ордера для %s: %s", symbol_u, e)
-            return
+        save_orders(symbol_u, orders)
+        log.info("refresh_order_types_from_price: обновлены типы ордеров для %s", symbol_u)
 
-    # В любом случае фиксируем факт ручного REFRESH в DCA-логе
+    # Фиксируем факт ручного REFRESH в общем DCA-логе (без статистики).
     try:
-        log_dca_event(
-            symbol_u,
-            "orders_refreshed",
-            reason=reason,
-        )
+        log_dca_event(symbol_u, "orders_refreshed", reason=reason)
     except Exception as e:  # noqa: BLE001
         log.exception("Не удалось записать DCA-лог (orders_refreshed) для %s: %s", symbol_u, e)
 

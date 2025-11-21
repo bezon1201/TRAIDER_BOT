@@ -35,9 +35,9 @@
 1.68 CARD_MAIN_MENU: обновлён текст главной карточки по новому формату.
 1.69 CARD1_MAIN_MENU: обновлён текст главной карточки по новому формату.
 
-2.70 ORDERS_REFRESH: кнопка REFRESH в блоке ORDERS обновляет типы всех NEW-ордеров (MARKET/LIMIT) по текущей цене с Binance и тихо перерисовывает список ордеров.
 3.70 CARD_PRICE_ROUND: главный экран показывает Price/MA30 без копеек.
 3.71 CARD_ALIGN_TABS: выравнивание блоков Grid/Price/Anchor/Average/Budget.
 3.72 CARD_MONOSPACE: карточка MAIN MENU отображается в машинописном блоке.
 3.73 CARD_PRE_MENU: /menu использует машинописный блок для главной карточки.
 3.74 CARD_ALIGN_SPACE: улучшено выравнивание колонок в главной карточке.
+2.80 ORDERS_REFRESH: кнопка REFRESH в блоке ORDERS обновляет типы всех NEW-ордеров (MARKET/LIMIT) по текущей цене с Binance и логирует результат.

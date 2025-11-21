@@ -67,6 +67,44 @@ def _binance_get(path: str, params: Dict[str, Any]) -> Any:
         raise
 
 
+
+
+def get_symbol_last_price_light(symbol: str) -> Optional[float]:
+    """Лёгкий запрос к Binance для получения только last-цены по символу.
+
+    Использует тот же _binance_get, но не запускает тяжёлую логику метрик.
+    Возвращает цену как float или None при ошибке.
+    """
+    symbol_u = symbol.upper()
+    params = {"symbol": symbol_u}
+    try:
+        data = _binance_get("/api/v3/ticker/price", params)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось получить цену с Binance для %s: %s", symbol_u, e)
+        return None
+
+    # Ожидаемый ответ: {"symbol": "...", "price": "..."}
+    if not isinstance(data, dict):
+        log.warning("Некорректный ответ Binance при запросе цены для %s: %r", symbol_u, data)
+        return None
+
+    price_str = data.get("price")
+    if price_str is None:
+        log.warning("В ответе Binance для %s нет поля price: %r", symbol_u, data)
+        return None
+
+    try:
+        price = float(price_str)
+    except (TypeError, ValueError):
+        log.warning("Не удалось преобразовать цену Binance для %s: %r", symbol_u, price_str)
+        return None
+
+    if price <= 0:
+        log.warning("Binance вернул неположительную цену для %s: %f", symbol_u, price)
+        return None
+
+    return price
+
 def fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[List[Any]]:
     """Забирает сырые свечи с Binance для symbol/interval."""
     if limit <= 0:
@@ -491,44 +529,6 @@ def update_coin_json(symbol: str) -> Dict[str, Any]:
 
     log.info("Обновлён файл метрик для %s: %s", symbol_u, path)
     return data
-
-
-
-
-def get_symbol_last_price_light(symbol: str) -> Optional[float]:
-    """Лёгкий запрос к Binance для получения только last-цены по символу.
-
-    Используется для технических операций (например, REFRESH в ORDERS),
-    чтобы не запускать тяжёлый сбор всех метрик.
-    """
-    symbol_u = (symbol or "").strip().upper()
-    if not symbol_u:
-        return None
-
-    try:
-        data = _binance_get("/api/v3/ticker/price", {"symbol": symbol_u})
-    except Exception as e:  # noqa: BLE001
-        log.warning("Не удалось получить лёгкий ticker/price для %s: %s", symbol_u, e)
-        return None
-
-    if isinstance(data, dict):
-        price = data.get("price")
-        try:
-            return float(price)
-        except (TypeError, ValueError):
-            return None
-
-    # На всякий случай обрабатываем варианты с массивом
-    if isinstance(data, list) and data:
-        item = data[0]
-        if isinstance(item, dict):
-            price = item.get("price")
-            try:
-                return float(price)
-            except (TypeError, ValueError):
-                return None
-
-    return None
 
 
 def update_metrics_for_coins(coins: List[str]) -> None:
