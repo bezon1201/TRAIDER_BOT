@@ -702,3 +702,108 @@ def activate_virtual_limit_buy(
 
     return target
 
+
+def cancel_virtual_order(
+    symbol: str,
+    grid_id: int,
+    level_index: int,
+    *,
+    reason: ReasonType = "manual_cancel",
+) -> Optional[VirtualOrder]:
+    """Отменить виртуальный ордер (обычно ACTIVE LIMIT).
+
+    Основной сценарий:
+    - ACTIVE -> CANCELED
+
+    FILLED отменять нельзя (будет просто лог и None).
+    Для NEW/CANCELED сейчас отмена не делается (NEW ещё не активирован, CANCELED уже отменён).
+    Сетка (grid.json) при отмене не изменяется, так как уровень не был исполнен.
+    """
+    symbol_u = (symbol or "").upper()
+    orders = load_orders(symbol_u)
+    if not orders:
+        log.info("cancel_virtual_order: нет ордеров для %s", symbol_u)
+        return None
+
+    target: Optional[VirtualOrder] = None
+    for o in orders:
+        if getattr(o, "grid_id", None) == grid_id and getattr(o, "level_index", None) == level_index:
+            target = o
+            break
+
+    if not target:
+        log.warning(
+            "cancel_virtual_order: ордер grid_id=%s level_index=%s для %s не найден",
+            grid_id,
+            level_index,
+            symbol_u,
+        )
+        return None
+
+    status = getattr(target, "status", "NEW") or "NEW"
+    if status == "FILLED":
+        log.info(
+            "cancel_virtual_order: ордер уже исполнен и не может быть отменён для %s (grid_id=%s, level_index=%s)",
+            symbol_u,
+            grid_id,
+            level_index,
+        )
+        return None
+
+    if status == "CANCELED":
+        log.info(
+            "cancel_virtual_order: ордер уже отменён для %s (grid_id=%s, level_index=%s)",
+            symbol_u,
+            grid_id,
+            level_index,
+        )
+        return None
+
+    if status != "ACTIVE":
+        log.warning(
+            "cancel_virtual_order: неподдерживаемый статус %s для отмены %s (grid_id=%s, level_index=%s)",
+            status,
+            symbol_u,
+            grid_id,
+            level_index,
+        )
+        return None
+
+    now_ts = time.time()
+    target.status = "CANCELED"
+    target.canceled_ts = now_ts
+    target.updated_ts = now_ts
+
+    try:
+        save_orders(symbol_u, orders)
+    except Exception as e:  # noqa: BLE001
+        log.exception(
+            "cancel_virtual_order: не удалось сохранить ордера для %s: %s",
+            symbol_u,
+            e,
+        )
+        return None
+
+    # Пишем событие в DCA-лог
+    try:
+        log_dca_event(
+            symbol_u,
+            "order_canceled",
+            reason=reason,
+            grid_id=grid_id,
+            order_id=getattr(target, "order_id", None),
+            level_index=getattr(target, "level_index", None),
+            order_type=getattr(target, "order_type", None),
+            price=getattr(target, "price", None),
+            qty=getattr(target, "qty", None),
+            quote_qty=getattr(target, "quote_qty", None),
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception(
+            "cancel_virtual_order: не удалось записать DCA-лог для %s: %s",
+            symbol_u,
+            e,
+        )
+
+    return target
+
